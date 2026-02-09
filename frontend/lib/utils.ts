@@ -94,3 +94,32 @@ export function getModelColor(model: string): string {
 export function cn(...classes: (string | undefined | null | false)[]): string {
   return classes.filter(Boolean).join(' ');
 }
+
+/**
+ * Get color class based on budget progress percentage
+ */
+export function getProgressColor(percentage: number): string {
+  if (percentage >= 100) return 'bg-red-500';
+  if (percentage >= 80) return 'bg-yellow-500';
+  return 'bg-green-500';
+}
+
+/**
+ * Get initials from a name (max 2 characters)
+ */
+export function getInitials(name: string): string {
+  if (!name) return '?';
+  return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+}
+
+/**
+ * Copy text to clipboard
+ */
+export async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}

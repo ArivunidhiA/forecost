@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 import requests
 
-from llmlab.sdk.config import get_api_key, get_backend_url
+from .config import get_api_key, get_backend_url
 
 
 class APIClient:

@@ -1,147 +1,129 @@
 -- LLMLab Database Schema (PostgreSQL)
 -- Use with Supabase PostgreSQL
+--
+-- Aligned with SQLAlchemy ORM models in backend/models.py
+-- Tables: users, api_keys, usage_logs, budgets, webhooks, tags, usage_log_tags
 
 -- ============================================================================
 -- USERS TABLE
 -- ============================================================================
 
 CREATE TABLE users (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    email VARCHAR(255) UNIQUE NOT NULL,
-    password_hash VARCHAR(255) NOT NULL,
-    api_key VARCHAR(255) UNIQUE NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    is_active BOOLEAN DEFAULT true
+    id VARCHAR(36) PRIMARY KEY,
+    github_id INTEGER UNIQUE NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    username VARCHAR(255),
+    avatar_url VARCHAR(500),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_active BOOLEAN NOT NULL DEFAULT true
 );
 
+CREATE INDEX idx_users_github_id ON users(github_id);
 CREATE INDEX idx_users_email ON users(email);
-CREATE INDEX idx_users_api_key ON users(api_key);
 
 -- ============================================================================
--- PROJECTS TABLE
+-- API KEYS TABLE
 -- ============================================================================
 
-CREATE TABLE projects (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    name VARCHAR(255) NOT NULL,
-    description TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX idx_projects_user_id ON projects(user_id);
-
--- ============================================================================
--- COST EVENTS TABLE
--- ============================================================================
-
-CREATE TABLE cost_events (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
-    model VARCHAR(100) NOT NULL,
+CREATE TABLE api_keys (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     provider VARCHAR(50) NOT NULL,
-    tokens_input INT DEFAULT 0,
-    tokens_output INT DEFAULT 0,
-    cost_usd DECIMAL(10, 6) NOT NULL,
-    timestamp TIMESTAMP NOT NULL,
-    metadata JSONB DEFAULT '{}',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    encrypted_key TEXT NOT NULL,
+    proxy_key VARCHAR(50) UNIQUE NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TIMESTAMP,
+    is_active BOOLEAN NOT NULL DEFAULT true
 );
 
--- Critical indexes for fast queries
-CREATE INDEX idx_cost_events_user_id ON cost_events(user_id);
-CREATE INDEX idx_cost_events_timestamp ON cost_events(timestamp);
-CREATE INDEX idx_cost_events_user_timestamp ON cost_events(user_id, timestamp DESC);
-CREATE INDEX idx_cost_events_user_model ON cost_events(user_id, model);
-CREATE INDEX idx_cost_events_user_provider ON cost_events(user_id, provider);
+CREATE INDEX idx_api_keys_user_id ON api_keys(user_id);
+CREATE INDEX idx_api_keys_provider ON api_keys(provider);
+CREATE INDEX idx_api_keys_proxy_key ON api_keys(proxy_key);
+
+-- ============================================================================
+-- USAGE LOGS TABLE
+-- ============================================================================
+
+CREATE TABLE usage_logs (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider VARCHAR(50) NOT NULL,
+    model VARCHAR(100) NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd FLOAT NOT NULL DEFAULT 0.0,
+    latency_ms FLOAT,
+    cache_hit BOOLEAN NOT NULL DEFAULT false,
+    request_id VARCHAR(100),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_usage_logs_user_id ON usage_logs(user_id);
+CREATE INDEX idx_usage_logs_provider ON usage_logs(provider);
+CREATE INDEX idx_usage_logs_model ON usage_logs(model);
+CREATE INDEX idx_usage_logs_cost_usd ON usage_logs(cost_usd);
+CREATE INDEX idx_usage_logs_created_at ON usage_logs(created_at);
+
+-- Composite indexes for common query patterns (stats, logs, forecast)
+CREATE INDEX idx_usage_logs_user_created ON usage_logs(user_id, created_at DESC);
+CREATE INDEX idx_usage_logs_user_provider_created ON usage_logs(user_id, provider, created_at DESC);
 
 -- ============================================================================
 -- BUDGETS TABLE
 -- ============================================================================
 
 CREATE TABLE budgets (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
-    amount_usd DECIMAL(10, 2) NOT NULL,
-    period VARCHAR(20) DEFAULT 'monthly',
-    start_date DATE NOT NULL,
-    end_date DATE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    amount_usd FLOAT NOT NULL,
+    period VARCHAR(20) NOT NULL DEFAULT 'monthly',
+    alert_threshold FLOAT NOT NULL DEFAULT 80.0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_budgets_user_id ON budgets(user_id);
 
 -- ============================================================================
--- RECOMMENDATIONS TABLE (Cached)
+-- WEBHOOKS TABLE
 -- ============================================================================
 
-CREATE TABLE recommendations (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    recommendation_type VARCHAR(50) NOT NULL,
-    title VARCHAR(255) NOT NULL,
-    description TEXT NOT NULL,
-    current_model VARCHAR(100),
-    suggested_model VARCHAR(100),
-    savings_usd DECIMAL(10, 2),
-    savings_percent DECIMAL(5, 2),
-    confidence DECIMAL(3, 2),
-    effort VARCHAR(20),
-    metadata JSONB DEFAULT '{}',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP
+CREATE TABLE webhooks (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    url VARCHAR(500) NOT NULL,
+    event_type VARCHAR(50) NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_recommendations_user_id ON recommendations(user_id);
-CREATE INDEX idx_recommendations_expires_at ON recommendations(expires_at);
+CREATE INDEX idx_webhooks_user_id ON webhooks(user_id);
 
 -- ============================================================================
--- SAMPLE DATA (for testing/demo)
+-- TAGS TABLE
 -- ============================================================================
 
--- Sample user (password: 'demo123' hashed with bcrypt)
-INSERT INTO users (email, api_key, password_hash, is_active)
-VALUES (
-    'demo@llmlab.dev',
-    'llmlab_sk_demo_' || encode(random()::text::bytea, 'hex'),
-    '$2b$12$Yd.kzCxqU8gFDT9b8V0WyO1tGRCfgXJb3cHpXLkY6VF1fqON1nOJm',
-    true
+CREATE TABLE tags (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name VARCHAR(100) NOT NULL,
+    color VARCHAR(7) NOT NULL DEFAULT '#6366f1',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Sample project
-INSERT INTO projects (user_id, name, description)
-SELECT id, 'Demo Project', 'Example project for testing'
-FROM users WHERE email = 'demo@llmlab.dev';
+CREATE INDEX idx_tags_user_id ON tags(user_id);
 
--- Sample cost events (last 30 days)
-INSERT INTO cost_events (user_id, model, provider, tokens_input, tokens_output, cost_usd, timestamp)
-SELECT 
-    u.id,
-    models.model,
-    models.provider,
-    (RANDOM() * 1000)::INT,
-    (RANDOM() * 500)::INT,
-    models.cost,
-    CURRENT_TIMESTAMP - (RANDOM() * 30)::INT * INTERVAL '1 day'
-FROM users u, (
-    VALUES
-        ('gpt-4', 'openai', 0.05),
-        ('gpt-3.5-turbo', 'openai', 0.005),
-        ('claude-3-opus', 'anthropic', 0.03),
-        ('claude-3-sonnet', 'anthropic', 0.003),
-        ('gemini-pro', 'google', 0.0005)
-) AS models(model, provider, cost)
-WHERE u.email = 'demo@llmlab.dev'
-LIMIT 50;
+-- ============================================================================
+-- USAGE LOG TAGS (junction table)
+-- ============================================================================
 
--- Sample budget
-INSERT INTO budgets (user_id, amount_usd, period, start_date)
-SELECT id, 1000.00, 'monthly', CURRENT_DATE
-FROM users WHERE email = 'demo@llmlab.dev';
+CREATE TABLE usage_log_tags (
+    usage_log_id VARCHAR(36) NOT NULL REFERENCES usage_logs(id) ON DELETE CASCADE,
+    tag_id VARCHAR(36) NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (usage_log_id, tag_id)
+);
+
+CREATE INDEX idx_usage_log_tags_tag_id ON usage_log_tags(tag_id);
 
 -- ============================================================================
 -- VIEWS (for analytics)
@@ -153,9 +135,9 @@ SELECT
     user_id,
     SUM(cost_usd) as total_usd,
     COUNT(*) as call_count,
-    AVG(cost_usd) as avg_cost_usd,
-    MAX(timestamp) as last_call
-FROM cost_events
+    SUM(input_tokens + output_tokens) as total_tokens,
+    MAX(created_at) as last_call
+FROM usage_logs
 GROUP BY user_id;
 
 -- Spend by model
@@ -166,19 +148,19 @@ SELECT
     provider,
     SUM(cost_usd) as total_usd,
     COUNT(*) as call_count,
-    AVG(cost_usd) as avg_cost_usd
-FROM cost_events
+    SUM(input_tokens + output_tokens) as total_tokens
+FROM usage_logs
 GROUP BY user_id, model, provider;
 
 -- Daily spend
 CREATE VIEW user_daily_spend AS
 SELECT 
     user_id,
-    DATE(timestamp) as date,
+    DATE(created_at) as date,
     SUM(cost_usd) as daily_spend_usd,
     COUNT(*) as call_count
-FROM cost_events
-GROUP BY user_id, DATE(timestamp)
+FROM usage_logs
+GROUP BY user_id, DATE(created_at)
 ORDER BY user_id, date DESC;
 
 -- Budget status
@@ -187,58 +169,35 @@ SELECT
     b.id,
     b.user_id,
     b.amount_usd,
-    COALESCE(SUM(ce.cost_usd), 0) as spent_usd,
-    b.amount_usd - COALESCE(SUM(ce.cost_usd), 0) as remaining_usd,
-    ROUND(100.0 * COALESCE(SUM(ce.cost_usd), 0) / b.amount_usd, 2) as percentage_used
+    b.alert_threshold,
+    COALESCE(SUM(ul.cost_usd), 0) as spent_usd,
+    b.amount_usd - COALESCE(SUM(ul.cost_usd), 0) as remaining_usd,
+    ROUND(100.0 * COALESCE(SUM(ul.cost_usd), 0) / NULLIF(b.amount_usd, 0), 2) as percentage_used
 FROM budgets b
-LEFT JOIN cost_events ce ON ce.user_id = b.user_id 
-    AND DATE(ce.timestamp) >= b.start_date
-    AND (b.end_date IS NULL OR DATE(ce.timestamp) <= b.end_date)
-GROUP BY b.id, b.user_id, b.amount_usd;
+LEFT JOIN usage_logs ul ON ul.user_id = b.user_id 
+    AND ul.created_at >= CURRENT_DATE - INTERVAL '30 days'
+GROUP BY b.id, b.user_id, b.amount_usd, b.alert_threshold;
 
 -- ============================================================================
 -- SECURITY NOTES
 -- ============================================================================
 /*
-1. API Keys should be encrypted using a key management service in production
-2. Password hashes should use bcrypt with salt rounds >= 12
-3. All queries should use parameterized statements (prevent SQL injection)
-4. Row-level security (RLS) should be enabled on sensitive tables
-5. Audit logging should be enabled for cost_events table
-6. Regular backups should be configured in Supabase
+1. API keys are encrypted with Fernet before storage (encrypted_key column)
+2. Users authenticate via GitHub OAuth (no password storage)
+3. All queries use parameterized statements via SQLAlchemy ORM
+4. Proxy keys are unique random tokens (llmlab_pk_xxx format)
+5. Row-level security (RLS) should be enabled in production
 */
 
 -- ============================================================================
 -- MIGRATION NOTES
 -- ============================================================================
 /*
-To run this migration:
+The SQLAlchemy ORM in backend/models.py is the source of truth.
+This SQL file is provided for reference and manual DB setup.
 
-1. Connect to Supabase:
-   psql postgresql://[user]:[password]@[project].supabase.co:5432/postgres
+To create tables automatically:
+  python -c "from database import init_db; init_db()"
 
-2. Create extension for UUID:
-   CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
-3. Run this file:
-   psql < DATABASE_SCHEMA.sql
-
-4. Verify tables were created:
-   \dt
-
-5. Test sample queries:
-   SELECT * FROM users;
-   SELECT * FROM cost_events LIMIT 10;
-   SELECT * FROM user_total_spend;
-*/
-
--- ============================================================================
--- PERFORMANCE TIPS
--- ============================================================================
-/*
-1. Add partitioning for cost_events by user_id for large tables
-2. Use CLUSTER for frequently-accessed indexes
-3. Regularly run ANALYZE to update table statistics
-4. Create materialized views for expensive analytics queries
-5. Use connection pooling (Supabase provides this)
+Or run with Alembic for production migrations.
 */

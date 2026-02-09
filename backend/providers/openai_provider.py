@@ -5,7 +5,7 @@ Pricing updated: February 2026
 Source: https://openai.com/pricing
 """
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, Optional, Tuple
 
 import httpx
 
@@ -161,3 +161,36 @@ class OpenAIProvider:
                 content=body,
             )
             return response
+
+    @staticmethod
+    async def stream_request(
+        api_key: str,
+        path: str,
+        method: str,
+        headers: Dict[str, str],
+        body: Optional[bytes] = None,
+        timeout: float = 120.0,
+    ) -> AsyncIterator:
+        """
+        Stream a request to OpenAI API, yielding chunks.
+
+        First yield: (status_code, response_headers) tuple.
+        Subsequent yields: raw bytes chunks.
+
+        Args:
+            api_key: User's real OpenAI API key.
+            path: API path.
+            method: HTTP method.
+            headers: Request headers.
+            body: Request body.
+            timeout: Request timeout in seconds.
+        """
+        url = f"{OpenAIProvider.BASE_URL}{path}"
+        proxy_headers = {k: v for k, v in headers.items() if k.lower() not in ("host", "authorization", "content-length")}
+        proxy_headers["Authorization"] = f"Bearer {api_key}"
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream(method, url, headers=proxy_headers, content=body) as response:
+                yield response.status_code, dict(response.headers)
+                async for chunk in response.aiter_bytes():
+                    yield chunk

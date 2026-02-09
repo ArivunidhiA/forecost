@@ -32,7 +32,7 @@ export default function ModelChart({ data }: ModelChartProps) {
   }
 
   // Sort by cost descending
-  const sortedData = [...data].sort((a, b) => b.cost - a.cost);
+  const sortedData = [...data].sort((a, b) => b.cost_usd - a.cost_usd);
 
   return (
     <div className="w-full h-80">
@@ -72,8 +72,8 @@ export default function ModelChart({ data }: ModelChartProps) {
                 return (
                   <div className="bg-slate-900 dark:bg-slate-800 text-white px-3 py-2 rounded-lg shadow-lg text-sm">
                     <p className="font-medium">{item.model}</p>
-                    <p className="text-slate-300">{formatCurrency(item.cost)}</p>
-                    <p className="text-slate-400 text-xs">{item.requests.toLocaleString()} requests</p>
+                    <p className="text-slate-300">{formatCurrency(item.cost_usd)}</p>
+                    <p className="text-slate-400 text-xs">{item.call_count.toLocaleString()} calls</p>
                   </div>
                 );
               }
@@ -81,7 +81,7 @@ export default function ModelChart({ data }: ModelChartProps) {
             }}
           />
           <Bar
-            dataKey="cost"
+            dataKey="cost_usd"
             radius={[0, 4, 4, 0]}
             maxBarSize={32}
           >

@@ -34,3 +34,6 @@ requests==2.31.0
 
 # Rate Limiting
 slowapi==0.1.9
+
+# Caching (optional — falls back to in-memory if not available)
+redis[hiredis]>=5.0.0

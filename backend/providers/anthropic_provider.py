@@ -5,7 +5,7 @@ Pricing updated: February 2026
 Source: https://www.anthropic.com/pricing
 """
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, Optional, Tuple
 
 import httpx
 
@@ -145,3 +145,32 @@ class AnthropicProvider:
                 content=body,
             )
             return response
+
+    @staticmethod
+    async def stream_request(
+        api_key: str,
+        path: str,
+        method: str,
+        headers: Dict[str, str],
+        body: Optional[bytes] = None,
+        timeout: float = 120.0,
+    ) -> AsyncIterator:
+        """
+        Stream a request to Anthropic API, yielding chunks.
+
+        First yield: (status_code, response_headers) tuple.
+        Subsequent yields: raw bytes chunks.
+        """
+        url = f"{AnthropicProvider.BASE_URL}{path}"
+        proxy_headers = {
+            k: v for k, v in headers.items()
+            if k.lower() not in ("host", "x-api-key", "authorization", "content-length")
+        }
+        proxy_headers["x-api-key"] = api_key
+        proxy_headers["anthropic-version"] = headers.get("anthropic-version", "2023-06-01")
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream(method, url, headers=proxy_headers, content=body) as response:
+                yield response.status_code, dict(response.headers)
+                async for chunk in response.aiter_bytes():
+                    yield chunk

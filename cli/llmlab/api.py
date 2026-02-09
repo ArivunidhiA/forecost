@@ -158,19 +158,99 @@ def delete(endpoint: str) -> Dict[str, Any]:
 
 def exchange_code(code: str) -> Dict[str, Any]:
     """Exchange OAuth code for JWT token."""
-    return post("/auth/callback", {"code": code})
+    return post("/auth/github", {"code": code})
 
 
-def get_proxy_key() -> Dict[str, Any]:
-    """Get the user's proxy API key."""
-    return get("/keys/proxy")
+def get_proxy_keys() -> Dict[str, Any]:
+    """Get the user's API keys (proxy keys)."""
+    return get("/api/v1/keys")
 
 
 def get_stats(period: str = "month") -> Dict[str, Any]:
     """Get usage statistics."""
-    return get("/stats", params={"period": period})
+    return get("/api/v1/stats", params={"period": period})
 
 
 def store_provider_key(provider: str, key: str) -> Dict[str, Any]:
     """Store a provider API key on the backend."""
-    return post("/keys/provider", {"provider": provider, "key": key})
+    return post("/api/v1/keys", {"provider": provider, "api_key": key})
+
+
+def get_budgets() -> Dict[str, Any]:
+    """Get user's budgets."""
+    return get("/api/v1/budgets")
+
+
+def create_budget(amount_usd: float, alert_threshold: float = 80.0) -> Dict[str, Any]:
+    """Create or update a budget."""
+    return post("/api/v1/budgets", {"amount_usd": amount_usd, "alert_threshold": alert_threshold})
+
+
+def delete_budget(budget_id: str) -> Dict[str, Any]:
+    """Delete a budget."""
+    return delete(f"/api/v1/budgets/{budget_id}")
+
+
+def get_recommendations() -> Dict[str, Any]:
+    """Get cost optimization recommendations."""
+    return get("/api/v1/recommendations")
+
+
+def export_logs_csv(
+    period: Optional[str] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+) -> bytes:
+    """Export usage logs as CSV from the backend.
+
+    Returns raw CSV bytes.
+    """
+    params: Dict[str, str] = {}
+    if provider:
+        params["provider"] = provider
+    if model:
+        params["model"] = model
+
+    # Build URL
+    query = "&".join(f"{k}={v}" for k, v in params.items())
+    endpoint = f"/api/v1/export/csv{'?' + query if query else ''}"
+
+    client = httpx.Client(timeout=TIMEOUT)
+    headers = get_headers()
+    response = client.get(f"{API_BASE_URL}{endpoint}", headers=headers)
+
+    if response.status_code == 401:
+        raise AuthenticationError("Session expired. Please log in again.", 401)
+    if response.status_code != 200:
+        raise APIError(f"Export failed: HTTP {response.status_code}", response.status_code)
+
+    return response.content
+
+
+def export_logs_json(
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+) -> bytes:
+    """Export usage logs as JSON from the backend.
+
+    Returns raw JSON bytes.
+    """
+    params: Dict[str, str] = {}
+    if provider:
+        params["provider"] = provider
+    if model:
+        params["model"] = model
+
+    query = "&".join(f"{k}={v}" for k, v in params.items())
+    endpoint = f"/api/v1/export/json{'?' + query if query else ''}"
+
+    client = httpx.Client(timeout=TIMEOUT)
+    headers = get_headers()
+    response = client.get(f"{API_BASE_URL}{endpoint}", headers=headers)
+
+    if response.status_code == 401:
+        raise AuthenticationError("Session expired. Please log in again.", 401)
+    if response.status_code != 200:
+        raise APIError(f"Export failed: HTTP {response.status_code}", response.status_code)
+
+    return response.content

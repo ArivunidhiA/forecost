@@ -8,6 +8,9 @@ from .commands.logout import logout
 from .commands.configure import configure
 from .commands.proxy_key import proxy_key
 from .commands.stats import stats
+from .commands.budget import budget
+from .commands.optimize import optimize
+from .commands.export import export_cmd
 
 
 @click.group()
@@ -23,6 +26,10 @@ def cli():
       $ llmlab login          # Authenticate with GitHub
       $ llmlab configure      # Add your API keys
       $ llmlab proxy-key      # Get your proxy key
+      $ llmlab stats          # View usage statistics
+      $ llmlab budget 100     # Set monthly budget
+      $ llmlab optimize       # Get cost optimization tips
+      $ llmlab export         # Export costs to CSV
     """
     pass
 
@@ -33,6 +40,9 @@ cli.add_command(logout)
 cli.add_command(configure)
 cli.add_command(proxy_key)
 cli.add_command(stats)
+cli.add_command(budget)
+cli.add_command(optimize)
+cli.add_command(export_cmd)
 
 
 if __name__ == "__main__":
