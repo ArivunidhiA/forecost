@@ -26,7 +26,7 @@ os.environ["ENVIRONMENT"] = "test"
 
 from database import Base, get_db
 from main import app
-from models import ApiKey, UsageLog, User
+from models import ApiKey, Budget, Tag, UsageLog, User, Webhook
 from security import encrypt_api_key
 
 
@@ -167,6 +167,8 @@ def test_usage_logs(db_session: Session, test_user: User) -> list[UsageLog]:
             input_tokens=1000,
             output_tokens=500,
             cost_usd=0.0075,
+            latency_ms=450.5,
+            cache_hit=False,
             created_at=now,
         )
     )
@@ -180,6 +182,8 @@ def test_usage_logs(db_session: Session, test_user: User) -> list[UsageLog]:
             input_tokens=2000,
             output_tokens=1000,
             cost_usd=0.0009,
+            latency_ms=120.3,
+            cache_hit=False,
             created_at=now - timedelta(days=1),
         )
     )
@@ -193,6 +197,8 @@ def test_usage_logs(db_session: Session, test_user: User) -> list[UsageLog]:
             input_tokens=5000,
             output_tokens=2000,
             cost_usd=0.045,
+            latency_ms=890.1,
+            cache_hit=False,
             created_at=now - timedelta(days=5),
         )
     )
@@ -206,7 +212,24 @@ def test_usage_logs(db_session: Session, test_user: User) -> list[UsageLog]:
             input_tokens=10000,
             output_tokens=5000,
             cost_usd=0.075,
+            latency_ms=1200.0,
+            cache_hit=False,
             created_at=now - timedelta(days=20),
+        )
+    )
+
+    # Cache hit log (cost=0, latency=0)
+    logs.append(
+        UsageLog(
+            user_id=test_user.id,
+            provider="openai",
+            model="gpt-4o",
+            input_tokens=1000,
+            output_tokens=500,
+            cost_usd=0.0,
+            latency_ms=0.0,
+            cache_hit=True,
+            created_at=now - timedelta(hours=2),
         )
     )
 
@@ -215,3 +238,77 @@ def test_usage_logs(db_session: Session, test_user: User) -> list[UsageLog]:
     db_session.commit()
 
     return logs
+
+
+# =============================================================================
+# BUDGET FIXTURES
+# =============================================================================
+
+
+@pytest.fixture
+def test_budget(db_session: Session, test_user: User) -> Budget:
+    """Create a test budget."""
+    budget = Budget(
+        user_id=test_user.id,
+        amount_usd=100.0,
+        period="monthly",
+        alert_threshold=80.0,
+    )
+    db_session.add(budget)
+    db_session.commit()
+    db_session.refresh(budget)
+    return budget
+
+
+# =============================================================================
+# WEBHOOK FIXTURES
+# =============================================================================
+
+
+@pytest.fixture
+def test_webhook(db_session: Session, test_user: User) -> Webhook:
+    """Create a test webhook."""
+    webhook = Webhook(
+        user_id=test_user.id,
+        url="https://example.com/webhook",
+        event_type="budget_warning",
+    )
+    db_session.add(webhook)
+    db_session.commit()
+    db_session.refresh(webhook)
+    return webhook
+
+
+# =============================================================================
+# TAG FIXTURES
+# =============================================================================
+
+
+@pytest.fixture
+def test_tags(db_session: Session, test_user: User) -> list[Tag]:
+    """Create sample tags for testing."""
+    tags = [
+        Tag(user_id=test_user.id, name="backend", color="#3b82f6"),
+        Tag(user_id=test_user.id, name="production", color="#ef4444"),
+        Tag(user_id=test_user.id, name="feature-x", color="#10b981"),
+    ]
+    for tag in tags:
+        db_session.add(tag)
+    db_session.commit()
+    for tag in tags:
+        db_session.refresh(tag)
+    return tags
+
+
+@pytest.fixture
+def test_tagged_logs(
+    db_session: Session, test_user: User, test_usage_logs: list[UsageLog], test_tags: list[Tag]
+) -> list[UsageLog]:
+    """Attach tags to some usage logs."""
+    # Attach 'backend' tag to first log
+    test_usage_logs[0].tags.append(test_tags[0])
+    # Attach 'production' tag to first and second logs
+    test_usage_logs[0].tags.append(test_tags[1])
+    test_usage_logs[1].tags.append(test_tags[1])
+    db_session.commit()
+    return test_usage_logs

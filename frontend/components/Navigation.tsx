@@ -60,6 +60,30 @@ export default function Navigation({ showUserMenu = false }: NavigationProps) {
             <span className="font-semibold text-slate-900 dark:text-white">LLMLab</span>
           </Link>
 
+          {/* Center nav links */}
+          {showUserMenu && (
+            <div className="hidden sm:flex items-center space-x-1">
+              <Link
+                href="/dashboard"
+                className="px-3 py-2 text-sm font-medium text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                Dashboard
+              </Link>
+              <Link
+                href="/logs"
+                className="px-3 py-2 text-sm font-medium text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                Logs
+              </Link>
+              <Link
+                href="/settings"
+                className="px-3 py-2 text-sm font-medium text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                Settings
+              </Link>
+            </div>
+          )}
+
           {/* Right side */}
           <div className="flex items-center space-x-4">
             {/* Dark mode toggle */}
@@ -89,13 +113,13 @@ export default function Navigation({ showUserMenu = false }: NavigationProps) {
                   {user.avatar_url ? (
                     <img
                       src={user.avatar_url}
-                      alt={user.name}
+                      alt={user.username || user.email}
                       className="w-8 h-8 rounded-full"
                     />
                   ) : (
                     <div className="w-8 h-8 bg-slate-200 dark:bg-slate-700 rounded-full flex items-center justify-center">
                       <span className="text-sm font-medium text-slate-600 dark:text-slate-300">
-                        {user.name?.charAt(0).toUpperCase() || 'U'}
+                        {(user.username || user.email)?.charAt(0).toUpperCase() || 'U'}
                       </span>
                     </div>
                   )}
@@ -108,7 +132,7 @@ export default function Navigation({ showUserMenu = false }: NavigationProps) {
                   <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1">
                     <div className="px-4 py-2 border-b border-slate-100 dark:border-slate-800">
                       <p className="text-sm font-medium text-slate-900 dark:text-white truncate">
-                        {user.name}
+                        {user.username || user.email}
                       </p>
                       <p className="text-xs text-slate-500 truncate">
                         {user.email}

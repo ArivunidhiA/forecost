@@ -3,7 +3,7 @@
 import click
 
 from ..config import is_authenticated
-from ..api import get_proxy_key, APIError, AuthenticationError, NetworkError
+from ..api import get_proxy_keys, APIError, AuthenticationError, NetworkError
 
 
 @click.command("proxy-key")
@@ -34,12 +34,24 @@ def proxy_key(output_format: str, provider: str):
         raise click.Abort()
     
     try:
-        result = get_proxy_key()
-        proxy_key_value = result.get("key")
+        result = get_proxy_keys()
+        keys = result.get("keys", [])
+        
+        # Find key matching provider
+        matching_key = None
+        for k in keys:
+            if k.get("provider") == provider:
+                matching_key = k.get("proxy_key")
+                break
+        
+        if not matching_key and keys:
+            matching_key = keys[0].get("proxy_key")
+        
+        proxy_key_value = matching_key
         
         if not proxy_key_value:
-            click.echo(click.style("✗ No proxy key available.", fg="red"))
-            click.echo("  Configure your API keys first: llmlab configure")
+            click.echo(click.style("No proxy key available.", fg="red"))
+            click.echo("  Configure your API keys first: llmlab configure --sync")
             raise click.Abort()
         
         # Map provider to env var

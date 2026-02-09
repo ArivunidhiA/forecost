@@ -57,10 +57,10 @@ export default function DailyTable({ data }: DailyTableProps) {
                 )}
               </td>
               <td className="py-3 px-4 text-sm text-slate-600 dark:text-slate-400 text-right tabular-nums">
-                {row.requests.toLocaleString()}
+                {row.call_count.toLocaleString()}
               </td>
               <td className="py-3 px-4 text-sm font-medium text-slate-900 dark:text-white text-right tabular-nums">
-                {formatCurrency(row.cost)}
+                {formatCurrency(row.cost_usd)}
               </td>
             </tr>
           ))}

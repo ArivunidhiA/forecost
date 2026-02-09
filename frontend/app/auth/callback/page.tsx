@@ -36,9 +36,17 @@ export default function AuthCallbackPage() {
         // Exchange code for token
         const response = await api.githubCallback(code);
         
-        // Store token and user
-        setToken(response.access_token);
-        setUser(response.user);
+        // Store token
+        setToken(response.token);
+
+        // Construct and store user object from response fields
+        setUser({
+          id: response.user_id,
+          github_id: 0,
+          email: response.email,
+          username: response.username,
+          created_at: new Date().toISOString(),
+        });
 
         // Redirect to dashboard
         router.push('/dashboard');

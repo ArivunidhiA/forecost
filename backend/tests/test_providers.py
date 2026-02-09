@@ -1,115 +1,190 @@
-"""Tests for provider implementations."""
+"""
+Tests for provider implementations.
+
+Tests the static-method providers for cost calculation.
+"""
 
 import pytest
-from providers import OpenAIProvider, AnthropicProvider, GoogleProvider
+from providers.openai_provider import OpenAIProvider, OPENAI_PRICING
+from providers.anthropic_provider import AnthropicProvider, ANTHROPIC_PRICING
+from providers.google_provider import GoogleProvider, GOOGLE_PRICING
 
 
 class TestOpenAIProvider:
     """Test suite for OpenAI provider."""
-    
-    @pytest.fixture
-    def provider(self):
-        """Create OpenAI provider instance."""
-        return OpenAIProvider()
-    
-    def test_model_validation(self, provider):
-        """Test model validation."""
-        assert provider.validate_model("gpt-4") is True
-        assert provider.validate_model("gpt-3.5-turbo") is True
-        assert provider.validate_model("gpt-4o") is True
-        assert provider.validate_model("unknown-model") is True  # Starts with gpt-
-        assert provider.validate_model("claude-3") is False
-    
-    def test_pricing_retrieval(self, provider):
-        """Test getting model pricing."""
-        input_price, output_price = provider.get_model_pricing("gpt-4")
-        
-        assert input_price == 0.03
-        assert output_price == 0.06
-    
-    def test_default_pricing(self, provider):
-        """Test default pricing for unknown model."""
-        input_price, output_price = provider.get_model_pricing("gpt-unknown")
-        
-        # Should return gpt-3.5-turbo pricing as default
-        assert input_price == 0.0005
-        assert output_price == 0.0015
-    
-    def test_list_models(self, provider):
-        """Test listing available models."""
-        models = provider.list_models()
-        
-        assert "gpt-4" in models
-        assert "gpt-3.5-turbo" in models
-        assert len(models) > 0
-    
-    def test_cost_calculation(self, provider):
-        """Test cost calculation."""
-        cost = provider.calculate_cost("gpt-3.5-turbo", 1000, 500)
-        
-        # (1000/1000)*0.0005 + (500/1000)*0.0015 = 0.0005 + 0.00075 = 0.00125
-        assert cost == pytest.approx(0.00125, rel=1e-6)
+
+    def test_calculate_cost_gpt4o(self):
+        """Test GPT-4o cost calculation."""
+        # gpt-4o: $2.50/1M input, $10.00/1M output
+        cost = OpenAIProvider.calculate_cost("gpt-4o", 1000, 500)
+        expected = (1000 / 1_000_000) * 2.50 + (500 / 1_000_000) * 10.00
+        assert cost == pytest.approx(expected, rel=1e-4)
+
+    def test_calculate_cost_gpt4o_mini(self):
+        """Test GPT-4o-mini cost calculation."""
+        # gpt-4o-mini: $0.15/1M input, $0.60/1M output
+        cost = OpenAIProvider.calculate_cost("gpt-4o-mini", 2000, 1000)
+        expected = (2000 / 1_000_000) * 0.15 + (1000 / 1_000_000) * 0.60
+        assert cost == pytest.approx(expected, rel=1e-4)
+
+    def test_calculate_cost_gpt35_turbo(self):
+        """Test GPT-3.5-turbo cost calculation."""
+        # gpt-3.5-turbo: $0.50/1M input, $1.50/1M output
+        cost = OpenAIProvider.calculate_cost("gpt-3.5-turbo", 1000, 500)
+        expected = (1000 / 1_000_000) * 0.50 + (500 / 1_000_000) * 1.50
+        assert cost == pytest.approx(expected, rel=1e-4)
+
+    def test_calculate_cost_unknown_model(self):
+        """Test unknown model uses default pricing."""
+        cost = OpenAIProvider.calculate_cost("gpt-future-model", 1000, 500)
+        assert cost > 0  # Should use default pricing, not zero
+
+    def test_calculate_cost_zero_tokens(self):
+        """Test zero tokens returns zero cost."""
+        cost = OpenAIProvider.calculate_cost("gpt-4o", 0, 0)
+        assert cost == 0.0
+
+    def test_extract_usage(self):
+        """Test extracting usage from OpenAI response."""
+        response_data = {
+            "usage": {
+                "prompt_tokens": 150,
+                "completion_tokens": 200,
+            }
+        }
+        input_tokens, output_tokens = OpenAIProvider.extract_usage(response_data)
+        assert input_tokens == 150
+        assert output_tokens == 200
+
+    def test_extract_usage_empty(self):
+        """Test extracting usage from empty response."""
+        input_tokens, output_tokens = OpenAIProvider.extract_usage({})
+        assert input_tokens == 0
+        assert output_tokens == 0
+
+    def test_extract_model(self):
+        """Test extracting model from response."""
+        response_data = {"model": "gpt-4o-2024-11-20"}
+        model = OpenAIProvider.extract_model(response_data, "gpt-4o")
+        assert model == "gpt-4o-2024-11-20"
+
+    def test_extract_model_fallback(self):
+        """Test model extraction falls back to request model."""
+        model = OpenAIProvider.extract_model({}, "gpt-4o")
+        assert model == "gpt-4o"
+
+    def test_pricing_dict_has_major_models(self):
+        """Verify pricing dict contains key models."""
+        assert "gpt-4o" in OPENAI_PRICING
+        assert "gpt-4o-mini" in OPENAI_PRICING
+        assert "gpt-4" in OPENAI_PRICING
+        assert "gpt-3.5-turbo" in OPENAI_PRICING
 
 
 class TestAnthropicProvider:
     """Test suite for Anthropic provider."""
-    
-    @pytest.fixture
-    def provider(self):
-        """Create Anthropic provider instance."""
-        return AnthropicProvider()
-    
-    def test_model_validation(self, provider):
-        """Test model validation."""
-        assert provider.validate_model("claude-3-opus") is True
-        assert provider.validate_model("claude-3-sonnet") is True
-        assert provider.validate_model("claude-2") is True
-        assert provider.validate_model("claude-unknown") is True  # Starts with claude-
-        assert provider.validate_model("gpt-4") is False
-    
-    def test_pricing_retrieval(self, provider):
-        """Test getting model pricing."""
-        input_price, output_price = provider.get_model_pricing("claude-3-opus")
-        
-        assert input_price == 0.015
-        assert output_price == 0.075
-    
-    def test_cost_calculation(self, provider):
-        """Test cost calculation."""
-        cost = provider.calculate_cost("claude-3-haiku", 2000, 1000)
-        
-        # (2000/1000)*0.00025 + (1000/1000)*0.00125 = 0.0005 + 0.00125 = 0.00175
-        assert cost == pytest.approx(0.00175, rel=1e-6)
+
+    def test_calculate_cost_claude35_sonnet(self):
+        """Test Claude 3.5 Sonnet cost calculation."""
+        # claude-3-5-sonnet: $3.00/1M input, $15.00/1M output
+        cost = AnthropicProvider.calculate_cost(
+            "claude-3-5-sonnet-20241022", 1000, 500
+        )
+        expected = (1000 / 1_000_000) * 3.00 + (500 / 1_000_000) * 15.00
+        assert cost == pytest.approx(expected, rel=1e-4)
+
+    def test_calculate_cost_claude3_haiku(self):
+        """Test Claude 3 Haiku cost calculation."""
+        # claude-3-haiku: $0.25/1M input, $1.25/1M output
+        cost = AnthropicProvider.calculate_cost(
+            "claude-3-haiku-20240307", 2000, 1000
+        )
+        expected = (2000 / 1_000_000) * 0.25 + (1000 / 1_000_000) * 1.25
+        assert cost == pytest.approx(expected, rel=1e-4)
+
+    def test_calculate_cost_unknown_model(self):
+        """Test unknown model uses default pricing."""
+        cost = AnthropicProvider.calculate_cost("claude-future", 1000, 500)
+        assert cost > 0
+
+    def test_extract_usage(self):
+        """Test extracting usage from Anthropic response."""
+        response_data = {
+            "usage": {
+                "input_tokens": 300,
+                "output_tokens": 400,
+            }
+        }
+        input_tokens, output_tokens = AnthropicProvider.extract_usage(response_data)
+        assert input_tokens == 300
+        assert output_tokens == 400
+
+    def test_extract_model(self):
+        """Test extracting model from response."""
+        response_data = {"model": "claude-3-5-sonnet-20241022"}
+        model = AnthropicProvider.extract_model(response_data, "claude-3-5-sonnet-latest")
+        assert model == "claude-3-5-sonnet-20241022"
+
+    def test_pricing_dict_has_major_models(self):
+        """Verify pricing dict contains key models."""
+        assert "claude-3-5-sonnet-20241022" in ANTHROPIC_PRICING
+        assert "claude-3-opus-20240229" in ANTHROPIC_PRICING
+        assert "claude-3-haiku-20240307" in ANTHROPIC_PRICING
 
 
 class TestGoogleProvider:
-    """Test suite for Google provider."""
-    
-    @pytest.fixture
-    def provider(self):
-        """Create Google provider instance."""
-        return GoogleProvider()
-    
-    def test_model_validation(self, provider):
-        """Test model validation."""
-        assert provider.validate_model("gemini-pro") is True
-        assert provider.validate_model("gemini-1.5-pro") is True
-        assert provider.validate_model("gemini-unknown") is True  # Starts with gemini-
-        assert provider.validate_model("gpt-4") is False
-    
-    def test_pricing_retrieval(self, provider):
-        """Test getting model pricing."""
-        input_price, output_price = provider.get_model_pricing("gemini-1.5-pro")
-        
-        assert input_price == 0.0035
-        assert output_price == 0.0105
-    
-    def test_cost_calculation(self, provider):
-        """Test cost calculation."""
-        cost = provider.calculate_cost("gemini-pro", 1000, 1000)
-        
-        # (1000/1000)*0.00025 + (1000/1000)*0.0005 = 0.00025 + 0.0005 = 0.00075
-        assert cost == pytest.approx(0.00075, rel=1e-6)
+    """Test suite for Google Gemini provider."""
+
+    def test_calculate_cost_gemini15_pro(self):
+        """Test Gemini 1.5 Pro cost calculation."""
+        # gemini-1.5-pro: $1.25/1M input, $5.00/1M output
+        cost = GoogleProvider.calculate_cost("gemini-1.5-pro", 1000, 500)
+        expected = (1000 / 1_000_000) * 1.25 + (500 / 1_000_000) * 5.00
+        assert cost == pytest.approx(expected, rel=1e-4)
+
+    def test_calculate_cost_gemini15_flash(self):
+        """Test Gemini 1.5 Flash cost calculation."""
+        # gemini-1.5-flash: $0.075/1M input, $0.30/1M output
+        cost = GoogleProvider.calculate_cost("gemini-1.5-flash", 2000, 1000)
+        expected = (2000 / 1_000_000) * 0.075 + (1000 / 1_000_000) * 0.30
+        assert cost == pytest.approx(expected, rel=1e-4)
+
+    def test_calculate_cost_gemini20_flash(self):
+        """Test Gemini 2.0 Flash cost calculation."""
+        # gemini-2.0-flash: $0.10/1M input, $0.40/1M output
+        cost = GoogleProvider.calculate_cost("gemini-2.0-flash", 1000, 500)
+        expected = (1000 / 1_000_000) * 0.10 + (500 / 1_000_000) * 0.40
+        assert cost == pytest.approx(expected, rel=1e-4)
+
+    def test_calculate_cost_unknown_model(self):
+        """Test unknown model uses default pricing."""
+        cost = GoogleProvider.calculate_cost("gemini-future", 1000, 500)
+        assert cost > 0
+
+    def test_extract_usage(self):
+        """Test extracting usage from Gemini response."""
+        response_data = {
+            "usageMetadata": {
+                "promptTokenCount": 250,
+                "candidatesTokenCount": 350,
+            }
+        }
+        input_tokens, output_tokens = GoogleProvider.extract_usage(response_data)
+        assert input_tokens == 250
+        assert output_tokens == 350
+
+    def test_extract_usage_empty(self):
+        """Test extracting usage from empty response."""
+        input_tokens, output_tokens = GoogleProvider.extract_usage({})
+        assert input_tokens == 0
+        assert output_tokens == 0
+
+    def test_pricing_dict_has_major_models(self):
+        """Verify pricing dict contains key models."""
+        assert "gemini-1.5-pro" in GOOGLE_PRICING
+        assert "gemini-1.5-flash" in GOOGLE_PRICING
+        assert "gemini-2.0-flash" in GOOGLE_PRICING
+        assert "gemini-pro" in GOOGLE_PRICING
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ Loads settings from environment variables with validation.
 """
 
 from functools import lru_cache
-from typing import List
+from typing import List, Optional
 
 from pydantic_settings import BaseSettings
 
@@ -31,6 +31,9 @@ class Settings(BaseSettings):
 
     # Rate Limiting
     rate_limit_per_minute: int = 100
+
+    # Cache
+    redis_url: Optional[str] = None
 
     # Environment
     environment: str = "development"

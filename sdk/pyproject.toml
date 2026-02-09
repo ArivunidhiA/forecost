@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llmlab"
+version = "0.1.0"
+description = "LLMLab SDK — One-line LLM cost tracking and optimization"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+dependencies = [
+    "httpx>=0.24.0",
+]
+
+[project.optional-dependencies]
+openai = ["openai>=1.0.0"]
+anthropic = ["anthropic>=0.18.0"]
+google = ["google-generativeai>=0.3.0"]
+all = [
+    "openai>=1.0.0",
+    "anthropic>=0.18.0",
+    "google-generativeai>=0.3.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/ArivunidhiA/llmlab"
+Documentation = "https://github.com/ArivunidhiA/llmlab#readme"
+Repository = "https://github.com/ArivunidhiA/llmlab"
+
+[tool.setuptools]
+packages = ["llmlab"]
+
+[tool.setuptools.package-dir]
+llmlab = "."

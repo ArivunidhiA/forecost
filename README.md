@@ -49,18 +49,27 @@ Most dev teams don't know how much they're spending on Claude or GPT until the b
 ### 💰 Cost Tracking
 - Real-time API call logging
 - Automatic cost calculation
-- Multi-provider support
+- Multi-provider support (OpenAI, Anthropic, Google Gemini)
 - Daily/monthly/lifetime stats
+- **Usage Logs Explorer** — Paginated, filterable, sortable view of every API call
+- **Data Export** — Download logs as CSV or JSON with filters
 
 ### 📊 Dashboard
 - Live cost breakdown by model
 - Spending trends (30-day)
 - Budget alerts & tracking
+- **Cost Forecasting** — Linear trend projection for next month's spend
+- **Anomaly Detection** — Z-score based alerts for spend spikes and token surges
 - Beautiful UI (Apple-inspired)
 
+### 🏷️ Project Tags
+- User-defined tags for cost attribution (e.g., "backend", "prod", "feature-x")
+- Auto-tagging via `X-LLMLab-Tags` header
+- Filter stats, logs, and exports by tag
+
 ### 🔧 Developer Tools
-- **CLI**: `llmlab status`, `llmlab optimize`, `llmlab proxy-key`
-- **SDK**: `@track_cost` decorator for Python
+- **CLI**: `llmlab status`, `llmlab optimize`, `llmlab proxy-key`, `llmlab export`
+- **SDK**: `patch()` for zero-code integration, `set_tags()` for cost attribution, `@track_cost` decorator
 - **API**: REST endpoints for everything
 - **No code changes required** — Just swap env var
 
@@ -68,7 +77,15 @@ Most dev teams don't know how much they're spending on Claude or GPT until the b
 - Cost-saving recommendations
 - Model comparison tool
 - Budget enforcement
-- Anomaly detection
+- Anomaly detection with webhook notifications
+
+### 🚀 Production Ready
+- **Streaming support** — Full SSE streaming proxy with post-stream cost logging
+- **Docker deployment** — Multi-stage Dockerfile and docker-compose
+- **CI/CD** — GitHub Actions for lint, test, build, deploy
+- **Redis caching** — Semantic response cache with configurable TTL
+- **Rate limiting** — Configurable per-endpoint rate limits
+- **SQL-optimized queries** — Aggregation pushed to database for fast stats
 
 ---
 
