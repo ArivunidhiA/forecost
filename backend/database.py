@@ -1,15 +1,19 @@
 """
 Database connection and session management.
 
-Uses SQLAlchemy with Supabase PostgreSQL.
+Uses SQLAlchemy with PostgreSQL in production and SQLite for tests.
+Alembic manages schema migrations for non-test environments.
 """
 
+import logging
 from typing import Generator
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker, declarative_base
 
 from config import get_settings
+
+logger = logging.getLogger(__name__)
 
 # Create base class for models
 Base = declarative_base()
@@ -50,11 +54,35 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db() -> None:
     """
-    Initialize database tables.
+    Initialize database schema.
 
-    Creates all tables defined in models if they don't exist.
+    In test environments, uses create_all() for speed.
+    In production/development, runs Alembic migrations.
     """
-    Base.metadata.create_all(bind=engine)
+    settings = get_settings()
+
+    if settings.environment == "test":
+        # Tests use SQLite in-memory — just create tables directly
+        Base.metadata.create_all(bind=engine)
+        return
+
+    try:
+        from alembic import command
+        from alembic.config import Config
+
+        import os
+
+        alembic_cfg = Config(os.path.join(os.path.dirname(__file__), "alembic.ini"))
+        alembic_cfg.set_main_option(
+            "script_location", os.path.join(os.path.dirname(__file__), "migrations")
+        )
+        alembic_cfg.set_main_option("sqlalchemy.url", settings.database_url)
+
+        command.upgrade(alembic_cfg, "head")
+        logger.info("Database migrations applied successfully")
+    except Exception as e:
+        logger.warning(f"Alembic migration failed, falling back to create_all: {e}")
+        Base.metadata.create_all(bind=engine)
 
 
 def get_db() -> Generator[Session, None, None]:

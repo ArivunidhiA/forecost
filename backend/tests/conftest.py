@@ -5,7 +5,7 @@ Sets up test database, test client, and mock data.
 """
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Generator
 
 import pytest
@@ -160,7 +160,7 @@ def test_anthropic_key(db_session: Session, test_user: User) -> ApiKey:
 def test_usage_logs(db_session: Session, test_user: User) -> list[UsageLog]:
     """Create sample usage logs for testing stats."""
     logs = []
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     # Today's logs
     logs.append(

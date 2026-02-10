@@ -4,7 +4,8 @@ Authentication module for JWT token generation and validation.
 Handles GitHub OAuth flow and JWT-based session management.
 """
 
-from datetime import datetime, timedelta
+import logging
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
@@ -16,6 +17,8 @@ from sqlalchemy.orm import Session
 from config import get_settings
 from database import get_db
 from models import User
+
+logger = logging.getLogger(__name__)
 
 # Security scheme for JWT bearer tokens
 security = HTTPBearer()
@@ -36,12 +39,12 @@ def create_access_token(user_id: str) -> tuple[str, int]:
     """
     settings = get_settings()
     expires_delta = timedelta(hours=settings.jwt_expiry_hours)
-    expire = datetime.utcnow() + expires_delta
+    expire = datetime.now(timezone.utc) + expires_delta
 
     payload = {
         "sub": user_id,
         "exp": expire,
-        "iat": datetime.utcnow(),
+        "iat": datetime.now(timezone.utc),
         "type": "access",
     }
 
@@ -126,73 +129,95 @@ async def exchange_github_code(code: str) -> dict:
         dict: GitHub user info including id, email, username, avatar_url.
 
     Raises:
-        HTTPException: If exchange fails.
+        HTTPException: If exchange fails due to network, parsing, or key errors.
     """
     settings = get_settings()
 
-    # Exchange code for access token
-    async with httpx.AsyncClient() as client:
-        token_response = await client.post(
-            "https://github.com/login/oauth/access_token",
-            headers={"Accept": "application/json"},
-            data={
-                "client_id": settings.github_client_id,
-                "client_secret": settings.github_client_secret,
-                "code": code,
-            },
-        )
-
-        if token_response.status_code != 200:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to exchange GitHub code",
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            # Exchange code for access token
+            token_response = await client.post(
+                "https://github.com/login/oauth/access_token",
+                headers={"Accept": "application/json"},
+                data={
+                    "client_id": settings.github_client_id,
+                    "client_secret": settings.github_client_secret,
+                    "code": code,
+                },
             )
 
-        token_data = token_response.json()
-        access_token = token_data.get("access_token")
+            if token_response.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Failed to exchange GitHub code",
+                )
 
-        if not access_token:
-            error = token_data.get("error_description", "Unknown error")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"GitHub OAuth error: {error}",
-            )
+            token_data = token_response.json()
+            access_token = token_data.get("access_token")
 
-        # Get user info
-        user_response = await client.get(
-            "https://api.github.com/user",
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "Accept": "application/vnd.github.v3+json",
-            },
-        )
+            if not access_token:
+                error = token_data.get("error_description", "Unknown error")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"GitHub OAuth error: {error}",
+                )
 
-        if user_response.status_code != 200:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to get GitHub user info",
-            )
-
-        user_data = user_response.json()
-
-        # Get user email (might be private)
-        email = user_data.get("email")
-        if not email:
-            email_response = await client.get(
-                "https://api.github.com/user/emails",
+            # Get user info
+            user_response = await client.get(
+                "https://api.github.com/user",
                 headers={
                     "Authorization": f"Bearer {access_token}",
                     "Accept": "application/vnd.github.v3+json",
                 },
             )
-            if email_response.status_code == 200:
-                emails = email_response.json()
-                primary = next((e for e in emails if e.get("primary")), None)
-                email = primary["email"] if primary else emails[0]["email"] if emails else None
 
-        return {
-            "id": user_data["id"],
-            "email": email or f"{user_data['login']}@github.local",
-            "username": user_data.get("login"),
-            "avatar_url": user_data.get("avatar_url"),
-        }
+            if user_response.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Failed to get GitHub user info",
+                )
+
+            user_data = user_response.json()
+
+            # Get user email (might be private)
+            email = user_data.get("email")
+            if not email:
+                email_response = await client.get(
+                    "https://api.github.com/user/emails",
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "Accept": "application/vnd.github.v3+json",
+                    },
+                )
+                if email_response.status_code == 200:
+                    emails = email_response.json()
+                    primary = next((e for e in emails if e.get("primary")), None)
+                    email = primary["email"] if primary else emails[0]["email"] if emails else None
+
+            return {
+                "id": user_data["id"],
+                "email": email or f"{user_data['login']}@github.local",
+                "username": user_data.get("login"),
+                "avatar_url": user_data.get("avatar_url"),
+            }
+
+    except HTTPException:
+        raise  # Re-raise FastAPI HTTP exceptions as-is
+    except httpx.HTTPError as e:
+        logger.error(f"GitHub OAuth network error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to communicate with GitHub. Please try again.",
+        )
+    except (KeyError, TypeError) as e:
+        logger.error(f"GitHub OAuth response parsing error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unexpected response from GitHub. Please try again.",
+        )
+    except Exception as e:
+        logger.error(f"GitHub OAuth unexpected error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication failed due to an internal error.",
+        )

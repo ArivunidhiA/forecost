@@ -1,6 +1,6 @@
 """Tests for the cost forecasting endpoint."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -53,7 +53,7 @@ class TestForecast:
 
     def test_forecast_increasing_trend(self, client, auth_headers, db_session, test_user):
         """Forecast detects increasing trend with growing daily costs."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for i in range(30):
             log = UsageLog(
                 user_id=test_user.id,

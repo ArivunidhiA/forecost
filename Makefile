@@ -1,4 +1,4 @@
-.PHONY: dev build test clean logs backend-test frontend-lint cli-test
+.PHONY: dev build test clean logs backend-test frontend-lint cli-test db-migrate db-upgrade
 
 # ==============================================================================
 # Development
@@ -87,9 +87,25 @@ clean-images:
 # Database
 # ==============================================================================
 
-## Initialize database tables
+## Initialize database tables (runs Alembic migrations)
 db-init:
 	docker compose exec backend python -c "from database import init_db; init_db()"
+
+## Generate a new Alembic migration (usage: make db-migrate msg="add new column")
+db-migrate:
+	cd backend && alembic revision --autogenerate -m "$(msg)"
+
+## Apply pending Alembic migrations
+db-upgrade:
+	cd backend && alembic upgrade head
+
+## Downgrade one Alembic migration
+db-downgrade:
+	cd backend && alembic downgrade -1
+
+## Show current migration revision
+db-current:
+	cd backend && alembic current
 
 ## Open psql shell
 db-shell:
@@ -113,6 +129,10 @@ help:
 	@echo "  make build          Build all Docker images"
 	@echo "  make clean          Remove containers and volumes"
 	@echo "  make logs           View all logs"
-	@echo "  make db-init        Initialize database tables"
+	@echo "  make db-init        Initialize database (run migrations)"
+	@echo "  make db-migrate     Generate new migration (msg=...)"
+	@echo "  make db-upgrade     Apply pending migrations"
+	@echo "  make db-downgrade   Rollback one migration"
+	@echo "  make db-current     Show current migration revision"
 	@echo "  make db-shell       Open PostgreSQL shell"
 	@echo ""

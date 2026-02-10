@@ -12,8 +12,10 @@ services:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql://llmlab:llmlab@postgres:5432/llmlab
-      - JWT_SECRET=${JWT_SECRET:-dev-jwt-secret-change-in-production}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1ieXRlcyE=}
+      # Generate with: openssl rand -hex 32
+      - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env - generate with: openssl rand -hex 32}
+      # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?Set ENCRYPTION_KEY in .env - generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
       - GITHUB_REDIRECT_URI=${GITHUB_REDIRECT_URI:-http://localhost:8000/auth/github/callback}

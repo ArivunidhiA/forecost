@@ -41,8 +41,9 @@ Endpoints:
 
 import asyncio
 import json
+import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
@@ -99,6 +100,9 @@ from schemas import (
     AnomalyResponse,
 )
 from security import decrypt_api_key, encrypt_api_key
+from logging_config import setup_logging, request_id_var, generate_request_id
+
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # APP INITIALIZATION
@@ -109,6 +113,10 @@ SERVER_START_TIME = time.time()
 
 # Rate limiter — disabled in test environment
 settings = get_settings()
+
+# Set up structured logging (JSON in production, human-readable in dev)
+setup_logging(settings.environment)
+
 limiter = Limiter(
     key_func=get_remote_address,
     enabled=settings.environment != "test",
@@ -131,6 +139,39 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    """
+    Assign a unique request ID to every request.
+
+    Sets a context variable for logging and returns the ID in the response header.
+    """
+    rid = request.headers.get("X-Request-ID") or generate_request_id()
+    token = request_id_var.set(rid)
+    try:
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = rid
+        return response
+    finally:
+        request_id_var.reset(token)
+
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    """Log request method, path, status code, and duration."""
+    start = time.time()
+    response = await call_next(request)
+    duration_ms = (time.time() - start) * 1000
+
+    # Skip logging health checks to reduce noise
+    if request.url.path != "/health":
+        logger.info(
+            f"{request.method} {request.url.path} → {response.status_code} ({duration_ms:.0f}ms)"
+        )
+
+    return response
+
 # Add rate limit error handler
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
@@ -138,6 +179,20 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     return JSONResponse(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         content={"success": False, "error": "Rate limit exceeded. Try again later."},
+    )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """
+    Catch-all handler for unhandled exceptions.
+
+    Returns a clean JSON 500 instead of raw tracebacks in production.
+    """
+    logger.error(f"Unhandled exception on {request.method} {request.url.path}: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"success": False, "error": "Internal server error"},
     )
 
 
@@ -199,40 +254,49 @@ async def github_auth(
     Returns:
         AuthResponse: User info and JWT token.
     """
-    # Exchange code for GitHub user info
-    github_user = await exchange_github_code(request.code)
+    try:
+        # Exchange code for GitHub user info
+        github_user = await exchange_github_code(request.code)
 
-    # Find or create user
-    user = db.query(User).filter(User.github_id == github_user["id"]).first()
+        # Find or create user
+        user = db.query(User).filter(User.github_id == github_user["id"]).first()
 
-    if user is None:
-        # Create new user
-        user = User(
-            github_id=github_user["id"],
-            email=github_user["email"],
-            username=github_user["username"],
-            avatar_url=github_user["avatar_url"],
+        if user is None:
+            # Create new user
+            user = User(
+                github_id=github_user["id"],
+                email=github_user["email"],
+                username=github_user["username"],
+                avatar_url=github_user["avatar_url"],
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        else:
+            # Update existing user info
+            user.email = github_user["email"]
+            user.username = github_user["username"]
+            user.avatar_url = github_user["avatar_url"]
+            db.commit()
+
+        # Generate JWT token
+        token, expires_in = create_access_token(user.id)
+
+        return AuthResponse(
+            user_id=user.id,
+            email=user.email,
+            username=user.username,
+            token=token,
+            expires_in=expires_in,
         )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-    else:
-        # Update existing user info
-        user.email = github_user["email"]
-        user.username = github_user["username"]
-        user.avatar_url = github_user["avatar_url"]
-        db.commit()
-
-    # Generate JWT token
-    token, expires_in = create_access_token(user.id)
-
-    return AuthResponse(
-        user_id=user.id,
-        email=user.email,
-        username=user.username,
-        token=token,
-        expires_in=expires_in,
-    )
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions from exchange_github_code
+    except Exception as e:
+        logger.error(f"GitHub auth endpoint error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication failed. Please try again.",
+        )
 
 
 @app.get("/api/v1/me", response_model=UserResponse, tags=["Authentication"])
@@ -532,7 +596,7 @@ async def _stream_and_log(
             cache_hit=False,
         )
         db.add(usage_log)
-        api_key_record.last_used_at = datetime.utcnow()
+        api_key_record.last_used_at = datetime.now(timezone.utc)
         db.commit()
 
         # Auto-tag if request available
@@ -629,7 +693,7 @@ async def proxy_openai(
             cache_hit=True,
         )
         db.add(usage_log)
-        api_key_record.last_used_at = datetime.utcnow()
+        api_key_record.last_used_at = datetime.now(timezone.utc)
         db.commit()
         _auto_tag_log(request, usage_log, db)
         return Response(
@@ -699,7 +763,7 @@ async def proxy_openai(
         db.add(usage_log)
 
         # Update last used timestamp
-        api_key_record.last_used_at = datetime.utcnow()
+        api_key_record.last_used_at = datetime.now(timezone.utc)
         db.commit()
 
         # Check budget alerts and anomaly (fire-and-forget)
@@ -807,7 +871,7 @@ async def proxy_anthropic(
             cache_hit=True,
         )
         db.add(usage_log)
-        api_key_record.last_used_at = datetime.utcnow()
+        api_key_record.last_used_at = datetime.now(timezone.utc)
         db.commit()
         _auto_tag_log(request, usage_log, db)
         return Response(
@@ -877,7 +941,7 @@ async def proxy_anthropic(
         db.add(usage_log)
 
         # Update last used timestamp
-        api_key_record.last_used_at = datetime.utcnow()
+        api_key_record.last_used_at = datetime.now(timezone.utc)
         db.commit()
 
         # Check budget alerts and anomaly (fire-and-forget)
@@ -964,7 +1028,7 @@ async def proxy_google(
             cache_hit=True,
         )
         db.add(usage_log)
-        api_key_record.last_used_at = datetime.utcnow()
+        api_key_record.last_used_at = datetime.now(timezone.utc)
         db.commit()
         _auto_tag_log(request, usage_log, db)
         return Response(
@@ -1029,7 +1093,7 @@ async def proxy_google(
             cache_hit=False,
         )
         db.add(usage_log)
-        api_key_record.last_used_at = datetime.utcnow()
+        api_key_record.last_used_at = datetime.now(timezone.utc)
         db.commit()
 
         # Check budget alerts and anomaly (fire-and-forget)
@@ -1073,7 +1137,7 @@ async def get_stats(
     Returns:
         StatsResponse: Total costs, breakdown by model and by day.
     """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     # Calculate date range
     if period == "today":
@@ -1211,7 +1275,7 @@ async def get_budgets(
     """Get user's budgets with current spend status."""
     budgets = db.query(Budget).filter(Budget.user_id == current_user.id).all()
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     month_start = now - timedelta(days=30)
 
     current_spend = sum(
@@ -1258,7 +1322,7 @@ async def create_budget(
         existing.amount_usd = budget_data.amount_usd
         existing.period = budget_data.period
         existing.alert_threshold = budget_data.alert_threshold
-        existing.updated_at = datetime.utcnow()
+        existing.updated_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(existing)
         budget = existing
@@ -1273,7 +1337,7 @@ async def create_budget(
         db.commit()
         db.refresh(budget)
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     month_start = now - timedelta(days=30)
     current_spend = sum(
         log.cost_usd for log in db.query(UsageLog).filter(
@@ -1342,7 +1406,7 @@ async def get_recommendations(
     Analyzes the last 30 days of usage and suggests model switches,
     caching strategies, and other optimizations.
     """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     month_start = now - timedelta(days=30)
 
     logs = db.query(UsageLog).filter(
@@ -1383,7 +1447,7 @@ async def get_heatmap(
 
     Returns a grid of cells for visualization.
     """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     month_start = now - timedelta(days=30)
 
     logs = db.query(UsageLog).filter(
@@ -1433,7 +1497,7 @@ async def get_comparison(
     """
     from providers import OPENAI_PRICING, ANTHROPIC_PRICING, GOOGLE_PRICING
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     month_start = now - timedelta(days=30)
 
     logs = db.query(UsageLog).filter(
@@ -1968,7 +2032,7 @@ async def export_csv(
             output.seek(0)
             output.truncate(0)
 
-    now = datetime.utcnow().strftime("%Y-%m-%d")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     return StreamingResponse(
         generate(),
         media_type="text/csv",
@@ -2013,7 +2077,7 @@ async def export_json(
     logs = query.order_by(UsageLog.created_at.desc()).all()
 
     data = {
-        "exported_at": datetime.utcnow().isoformat(),
+        "exported_at": datetime.now(timezone.utc).isoformat(),
         "total_logs": len(logs),
         "total_cost_usd": round(sum(l.cost_usd for l in logs), 6),
         "logs": [
@@ -2033,7 +2097,7 @@ async def export_json(
         ],
     }
 
-    now = datetime.utcnow().strftime("%Y-%m-%d")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     return Response(
         content=json.dumps(data, indent=2),
         media_type="application/json",
@@ -2054,7 +2118,7 @@ async def get_forecast(
     db: Session = Depends(get_db),
 ):
     """Forecast next month's costs based on historical trends."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     thirty_days_ago = now - timedelta(days=30)
 
     # Get daily costs for last 30 days

@@ -3,7 +3,7 @@ Tests for the budget alert checking and webhook firing logic.
 """
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from alerts import check_and_fire_alerts, reset_fired_alerts, _fired_alerts
@@ -36,7 +36,7 @@ class TestCheckAndFireAlerts:
             input_tokens=100,
             output_tokens=50,
             cost_usd=0.001,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
         db_session.add(log)
         db_session.commit()
@@ -57,7 +57,7 @@ class TestCheckAndFireAlerts:
             input_tokens=100000,
             output_tokens=50000,
             cost_usd=85.0,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
         db_session.add(log)
         db_session.commit()
@@ -106,7 +106,7 @@ class TestCheckAndFireAlerts:
             input_tokens=100000,
             output_tokens=50000,
             cost_usd=60.0,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
         db_session.add(log)
         db_session.commit()
@@ -137,7 +137,7 @@ class TestCheckAndFireAlerts:
             input_tokens=100000,
             output_tokens=50000,
             cost_usd=85.0,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
         db_session.add(log)
         db_session.commit()
@@ -170,7 +170,7 @@ class TestCheckAndFireAlerts:
             input_tokens=100000,
             output_tokens=50000,
             cost_usd=85.0,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
         db_session.add(log)
         db_session.commit()
