@@ -23,8 +23,18 @@ def get_engine():
         Engine: SQLAlchemy engine instance.
     """
     settings = get_settings()
+    url = settings.database_url
+
+    # SQLite doesn't support pool_size/max_overflow/pool_timeout
+    if url.startswith("sqlite"):
+        return create_engine(
+            url,
+            connect_args={"check_same_thread": False},
+            echo=not settings.is_production,
+        )
+
     return create_engine(
-        settings.database_url,
+        url,
         pool_size=5,
         max_overflow=10,
         pool_timeout=30,

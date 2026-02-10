@@ -112,17 +112,24 @@ def patch(
 
 def _get_module_name(target) -> str:
     """Extract the module name from a module or class."""
-    # If it's a module, use __name__
-    name = getattr(target, "__name__", "")
-    if name:
-        return name.lower()
+    import types
 
-    # If it's a class instance, use the module it belongs to
+    # If it's a module, use __name__
+    if isinstance(target, types.ModuleType):
+        return getattr(target, "__name__", "").lower()
+
+    # If it's a class, check __module__ first (e.g., "anthropic")
+    if isinstance(target, type):
+        module = getattr(target, "__module__", "")
+        if module:
+            return module.lower()
+        return getattr(target, "__name__", "").lower()
+
+    # If it's a class instance, use __module__ or the type's __module__
     module = getattr(target, "__module__", "")
     if module:
         return module.lower()
 
-    # If it's a class, use the module of the class
     cls = type(target)
     module = getattr(cls, "__module__", "")
     return module.lower()

@@ -78,17 +78,17 @@ class TestResponseCache:
 
     def test_key_deterministic(self):
         """Same (provider, body) should produce the same cache key."""
-        cache = ResponseCache()
-        key1 = cache._make_key("openai", b"hello world")
-        key2 = cache._make_key("openai", b"hello world")
+        from cache import _make_key
+        key1 = _make_key("openai", b"hello world")
+        key2 = _make_key("openai", b"hello world")
         assert key1 == key2
 
     def test_key_different_inputs(self):
         """Different inputs should produce different cache keys."""
-        cache = ResponseCache()
-        key1 = cache._make_key("openai", b"hello")
-        key2 = cache._make_key("openai", b"world")
-        key3 = cache._make_key("anthropic", b"hello")
+        from cache import _make_key
+        key1 = _make_key("openai", b"hello")
+        key2 = _make_key("openai", b"world")
+        key3 = _make_key("anthropic", b"hello")
         assert key1 != key2
         assert key1 != key3
 

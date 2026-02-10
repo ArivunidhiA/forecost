@@ -21,7 +21,7 @@ jobs:
     env:
       DATABASE_URL: "sqlite:///:memory:"
       JWT_SECRET: "test-jwt-secret-key-for-ci"
-      ENCRYPTION_KEY: "dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1ieXRlcyE="
+      ENCRYPTION_KEY: "RwW3L0xvSoW8IcxrPCGZ2DC3RL9ATh6YNZpbYo72Hsw="
       GITHUB_CLIENT_ID: "test-client-id"
       GITHUB_CLIENT_SECRET: "test-client-secret"
       GITHUB_REDIRECT_URI: "http://localhost:8000/auth/github/callback"
@@ -91,7 +91,7 @@ jobs:
     env:
       DATABASE_URL: "sqlite:///:memory:"
       JWT_SECRET: "test-jwt-secret-key-for-ci"
-      ENCRYPTION_KEY: "dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1ieXRlcyE="
+      ENCRYPTION_KEY: "RwW3L0xvSoW8IcxrPCGZ2DC3RL9ATh6YNZpbYo72Hsw="
       GITHUB_CLIENT_ID: "test-client-id"
       GITHUB_CLIENT_SECRET: "test-client-secret"
       CORS_ORIGINS: "http://localhost:3000"

@@ -45,6 +45,32 @@ class TestExportCSV:
         response = client.get("/api/v1/export/csv", headers=auth_headers)
         assert response.status_code == 200
 
+    def test_invalid_date_from_returns_400(self, client, auth_headers, test_usage_logs):
+        """Invalid date_from should return 400."""
+        response = client.get("/api/v1/export/csv?date_from=bad-date", headers=auth_headers)
+        assert response.status_code == 400
+
+    def test_invalid_date_to_returns_400(self, client, auth_headers, test_usage_logs):
+        """Invalid date_to should return 400."""
+        response = client.get("/api/v1/export/csv?date_to=2024-13-45", headers=auth_headers)
+        assert response.status_code == 400
+
+    def test_date_from_after_date_to_returns_400(self, client, auth_headers, test_usage_logs):
+        """date_from > date_to should return 400."""
+        response = client.get(
+            "/api/v1/export/csv?date_from=2024-03-01&date_to=2024-02-01",
+            headers=auth_headers,
+        )
+        assert response.status_code == 400
+
+    def test_valid_date_range(self, client, auth_headers, test_usage_logs):
+        """Valid date range should return 200."""
+        response = client.get(
+            "/api/v1/export/csv?date_from=2020-01-01&date_to=2030-12-31",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+
     def test_requires_auth(self, client, test_usage_logs):
         """Export requires authentication."""
         response = client.get("/api/v1/export/csv")
@@ -81,6 +107,19 @@ class TestExportJSON:
         # At least one log should have tags
         tagged = [log for log in data["logs"] if log["tags"]]
         assert len(tagged) >= 1
+
+    def test_invalid_date_from_returns_400(self, client, auth_headers, test_usage_logs):
+        """Invalid date_from should return 400."""
+        response = client.get("/api/v1/export/json?date_from=bad", headers=auth_headers)
+        assert response.status_code == 400
+
+    def test_date_from_after_date_to_returns_400(self, client, auth_headers, test_usage_logs):
+        """date_from > date_to should return 400."""
+        response = client.get(
+            "/api/v1/export/json?date_from=2024-06-01&date_to=2024-01-01",
+            headers=auth_headers,
+        )
+        assert response.status_code == 400
 
     def test_requires_auth(self, client, test_usage_logs):
         """Export requires authentication."""

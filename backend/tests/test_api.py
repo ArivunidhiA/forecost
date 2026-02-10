@@ -185,6 +185,75 @@ class TestStats:
         response = client.get("/api/v1/stats")
         assert response.status_code in (401, 403)
 
+    def test_get_stats_tag_filter(
+        self, client: TestClient, auth_headers: dict, test_tagged_logs
+    ):
+        """Stats filtered by tag should only include tagged logs."""
+        response = client.get("/api/v1/stats?period=all&tag=backend", headers=auth_headers)
+        assert response.status_code == 200
+        data = response.json()
+        # Only the log tagged with "backend" should be included
+        assert data["total_calls"] >= 1
+        assert data["total_usd"] > 0
+
+    def test_get_stats_cache_savings(
+        self, client: TestClient, auth_headers: dict, test_usage_logs
+    ):
+        """Cache savings should be non-negative when cache hits exist."""
+        response = client.get("/api/v1/stats?period=all", headers=auth_headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["cache_hits"] >= 1
+        assert data["cache_savings_usd"] >= 0.0
+
+    def test_get_stats_by_model_aggregation(
+        self, client: TestClient, auth_headers: dict, test_usage_logs
+    ):
+        """by_model should group correctly with per-model stats."""
+        response = client.get("/api/v1/stats?period=all", headers=auth_headers)
+        data = response.json()
+        by_model = data["by_model"]
+        assert len(by_model) >= 2  # At least gpt-4o and claude-3-5-sonnet
+
+        for model_entry in by_model:
+            assert "model" in model_entry
+            assert "provider" in model_entry
+            assert "total_tokens" in model_entry
+            assert "cost_usd" in model_entry
+            assert "call_count" in model_entry
+            assert model_entry["call_count"] > 0
+
+    def test_get_stats_by_day_aggregation(
+        self, client: TestClient, auth_headers: dict, test_usage_logs
+    ):
+        """by_day should have entries for different days."""
+        response = client.get("/api/v1/stats?period=all", headers=auth_headers)
+        data = response.json()
+        by_day = data["by_day"]
+        assert len(by_day) >= 2  # Logs span multiple days
+
+        for day_entry in by_day:
+            assert "date" in day_entry
+            assert "cost_usd" in day_entry
+            assert "call_count" in day_entry
+
+        # Should be sorted by date
+        dates = [d["date"] for d in by_day]
+        assert dates == sorted(dates)
+
+    def test_get_stats_today_month_alltime(
+        self, client: TestClient, auth_headers: dict, test_usage_logs
+    ):
+        """today_usd, month_usd, all_time_usd should be independent values."""
+        response = client.get("/api/v1/stats?period=all", headers=auth_headers)
+        data = response.json()
+        assert data["today_usd"] >= 0
+        assert data["month_usd"] >= 0
+        assert data["all_time_usd"] >= 0
+        # all_time >= month >= today
+        assert data["all_time_usd"] >= data["month_usd"]
+        assert data["month_usd"] >= data["today_usd"]
+
 
 # =============================================================================
 # BUDGETS

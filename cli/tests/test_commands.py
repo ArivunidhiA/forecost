@@ -144,31 +144,31 @@ class TestProxyKey:
         assert result.exit_code == 1
         assert "Not logged in" in result.output
     
-    @patch("llmlab.commands.proxy_key.get_proxy_key")
+    @patch("llmlab.commands.proxy_key.get_proxy_keys")
     def test_proxy_key_shell_format(self, mock_get, runner, temp_config_dir):
         """Test proxy-key with shell format."""
         config.set_token("test-token")
-        mock_get.return_value = {"key": "llm_test_proxy_key_12345"}
+        mock_get.return_value = {"keys": [{"provider": "openai", "proxy_key": "llm_test_proxy_key_12345"}]}
         
         result = runner.invoke(cli, ["proxy-key"])
         assert result.exit_code == 0
         assert "export OPENAI_API_KEY=llm_test_proxy_key_12345" in result.output
     
-    @patch("llmlab.commands.proxy_key.get_proxy_key")
+    @patch("llmlab.commands.proxy_key.get_proxy_keys")
     def test_proxy_key_plain_format(self, mock_get, runner, temp_config_dir):
         """Test proxy-key with plain format."""
         config.set_token("test-token")
-        mock_get.return_value = {"key": "llm_test_proxy_key_12345"}
+        mock_get.return_value = {"keys": [{"provider": "openai", "proxy_key": "llm_test_proxy_key_12345"}]}
         
         result = runner.invoke(cli, ["proxy-key", "--format=plain"])
         assert result.exit_code == 0
         assert result.output.strip() == "llm_test_proxy_key_12345"
     
-    @patch("llmlab.commands.proxy_key.get_proxy_key")
+    @patch("llmlab.commands.proxy_key.get_proxy_keys")
     def test_proxy_key_json_format(self, mock_get, runner, temp_config_dir):
         """Test proxy-key with JSON format."""
         config.set_token("test-token")
-        mock_get.return_value = {"key": "llm_test_proxy_key_12345"}
+        mock_get.return_value = {"keys": [{"provider": "openai", "proxy_key": "llm_test_proxy_key_12345"}]}
         
         result = runner.invoke(cli, ["proxy-key", "--format=json"])
         assert result.exit_code == 0
@@ -290,3 +290,56 @@ class TestConfig:
         
         loaded = config.get_user()
         assert loaded == user
+
+
+# =============================================================================
+# EXPORT COMMAND
+# =============================================================================
+
+
+class TestExport:
+    """Tests for the export command."""
+
+    @patch("llmlab.commands.export.is_authenticated", return_value=True)
+    @patch("llmlab.commands.export.export_logs_csv")
+    def test_export_csv(self, mock_csv, mock_auth, runner, tmp_path):
+        """Export CSV should call export_logs_csv and write file."""
+        mock_csv.return_value = b"id,provider,model,cost_usd\n1,openai,gpt-4o,0.01\n"
+
+        output_file = str(tmp_path / "test_export.csv")
+        result = runner.invoke(cli, ["export", "-o", output_file])
+
+        assert result.exit_code == 0
+        mock_csv.assert_called_once()
+        assert (tmp_path / "test_export.csv").exists()
+
+    @patch("llmlab.commands.export.is_authenticated", return_value=True)
+    @patch("llmlab.commands.export.export_logs_json")
+    def test_export_json(self, mock_json, mock_auth, runner, tmp_path):
+        """Export JSON should call export_logs_json and write file."""
+        mock_json.return_value = b'{"logs": [], "total_logs": 0}'
+
+        output_file = str(tmp_path / "test_export.json")
+        result = runner.invoke(cli, ["export", "--json", "-o", output_file])
+
+        assert result.exit_code == 0
+        mock_json.assert_called_once()
+
+    @patch("llmlab.commands.export.is_authenticated", return_value=True)
+    @patch("llmlab.commands.export.export_logs_csv")
+    def test_export_with_provider_filter(self, mock_csv, mock_auth, runner, tmp_path):
+        """Export with --provider should pass filter to API."""
+        mock_csv.return_value = b"id,provider,model,cost_usd\n1,openai,gpt-4o,0.01\n"
+
+        output_file = str(tmp_path / "filtered.csv")
+        result = runner.invoke(cli, ["export", "--provider", "openai", "-o", output_file])
+
+        assert result.exit_code == 0
+        mock_csv.assert_called_once_with(period="month", provider="openai", model=None)
+
+    @patch("llmlab.commands.export.is_authenticated", return_value=False)
+    def test_export_requires_auth(self, mock_auth, runner):
+        """Export should require authentication."""
+        result = runner.invoke(cli, ["export"])
+        assert result.exit_code != 0
+        assert "Not logged in" in result.output
