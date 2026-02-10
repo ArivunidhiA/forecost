@@ -138,6 +138,103 @@ class TestPatch:
         patch(mock_module, proxy_key="llmlab_pk_test")
 
 
+class TestTagSupport:
+    """Tests for SDK tag support (set_tags, clear_tags, default_headers)."""
+
+    def test_patch_with_tags_sets_current_tags(self):
+        """patch(..., tags=["backend"]) should set _current_tags."""
+        from patch import _current_tags, set_tags, clear_tags, get_tags
+
+        clear_tags()
+        assert get_tags() == []
+
+        mock_module = types.ModuleType("openai")
+        mock_module.OpenAI = type("OpenAI", (), {"__init__": lambda self, **kw: None})
+
+        patch(mock_module, proxy_key="llmlab_pk_test", tags=["backend", "prod"])
+        assert get_tags() == ["backend", "prod"]
+
+        # Cleanup
+        clear_tags()
+
+    def test_set_tags_and_clear_tags(self):
+        """set_tags and clear_tags should update module-level state."""
+        from patch import set_tags, clear_tags, get_tags
+
+        set_tags(["alpha", "beta"])
+        assert get_tags() == ["alpha", "beta"]
+
+        clear_tags()
+        assert get_tags() == []
+
+    def test_openai_client_gets_tag_header(self):
+        """Patched OpenAI client should have X-LLMLab-Tags in default_headers."""
+        from patch import set_tags, clear_tags
+
+        set_tags(["backend", "prod"])
+
+        mock_module = types.ModuleType("openai")
+
+        class MockOpenAI:
+            def __init__(self, **kwargs):
+                self.base_url = kwargs.get("base_url")
+                self.api_key = kwargs.get("api_key")
+                self.default_headers = kwargs.get("default_headers", {})
+
+        mock_module.OpenAI = MockOpenAI
+
+        _patch_openai(mock_module, "llmlab_pk_test", "https://proxy.test.com")
+        client = mock_module.OpenAI()
+
+        assert client.default_headers.get("X-LLMLab-Tags") == "backend,prod"
+
+        # Cleanup
+        clear_tags()
+
+    def test_anthropic_client_gets_tag_header(self):
+        """Patched Anthropic client should have X-LLMLab-Tags in default_headers."""
+        from patch import set_tags, clear_tags
+
+        set_tags(["staging"])
+
+        mock_module = types.ModuleType("anthropic")
+
+        class MockAnthropic:
+            def __init__(self, **kwargs):
+                self.base_url = kwargs.get("base_url")
+                self.api_key = kwargs.get("api_key")
+                self.default_headers = kwargs.get("default_headers", {})
+
+        mock_module.Anthropic = MockAnthropic
+
+        _patch_anthropic(mock_module, "llmlab_pk_test", "https://proxy.test.com")
+        client = mock_module.Anthropic()
+
+        assert client.default_headers.get("X-LLMLab-Tags") == "staging"
+
+        # Cleanup
+        clear_tags()
+
+    def test_no_tags_no_header(self):
+        """Without tags, default_headers should not include X-LLMLab-Tags."""
+        from patch import clear_tags
+
+        clear_tags()
+
+        mock_module = types.ModuleType("openai")
+
+        class MockOpenAI:
+            def __init__(self, **kwargs):
+                self.default_headers = kwargs.get("default_headers", {})
+
+        mock_module.OpenAI = MockOpenAI
+
+        _patch_openai(mock_module, "llmlab_pk_test", "https://proxy.test.com")
+        client = mock_module.OpenAI()
+
+        assert "X-LLMLab-Tags" not in client.default_headers
+
+
 class TestUnpatch:
     def test_unpatch_noop_on_unpatched(self):
         """unpatch() should not raise on an unpatched module."""

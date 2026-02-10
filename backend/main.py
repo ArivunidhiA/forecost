@@ -107,8 +107,12 @@ from security import decrypt_api_key, encrypt_api_key
 # Track server start time
 SERVER_START_TIME = time.time()
 
-# Rate limiter
-limiter = Limiter(key_func=get_remote_address)
+# Rate limiter — disabled in test environment
+settings = get_settings()
+limiter = Limiter(
+    key_func=get_remote_address,
+    enabled=settings.environment != "test",
+)
 
 app = FastAPI(
     title="LLMLab API",
@@ -116,6 +120,15 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+)
+
+# CORS Middleware — must be added before app starts (not in startup handler)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins_list,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Add rate limit error handler
@@ -128,18 +141,9 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     )
 
 
-# CORS Middleware
 @app.on_event("startup")
 async def startup():
-    """Initialize on startup."""
-    settings = get_settings()
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origins_list,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    """Initialize database on startup."""
     init_db()
 
 
@@ -157,7 +161,8 @@ async def health_check(db: Session = Depends(get_db)) -> HealthResponse:
     """
     try:
         # Test database connection
-        db.execute("SELECT 1")
+        from sqlalchemy import text
+        db.execute(text("SELECT 1"))
         db_status = "connected"
     except Exception:
         db_status = "disconnected"

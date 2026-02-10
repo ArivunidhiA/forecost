@@ -17,12 +17,16 @@ from sqlalchemy.pool import StaticPool
 # Set test environment variables BEFORE importing app modules
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["JWT_SECRET"] = "test-jwt-secret-key-for-testing-only"
-os.environ["ENCRYPTION_KEY"] = "dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1ieXRlcyE="  # Base64 test key
+os.environ["ENCRYPTION_KEY"] = "RwW3L0xvSoW8IcxrPCGZ2DC3RL9ATh6YNZpbYo72Hsw="  # Valid Fernet key
 os.environ["GITHUB_CLIENT_ID"] = "test-client-id"
 os.environ["GITHUB_CLIENT_SECRET"] = "test-client-secret"
 os.environ["GITHUB_REDIRECT_URI"] = "http://localhost:8000/auth/github/callback"
 os.environ["CORS_ORIGINS"] = "http://localhost:3000"
 os.environ["ENVIRONMENT"] = "test"
+
+# Clear settings cache so env vars above take effect even if config was imported earlier
+from config import get_settings
+get_settings.cache_clear()
 
 from database import Base, get_db
 from main import app

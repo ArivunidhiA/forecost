@@ -109,6 +109,69 @@ class TestGetLogs:
         assert "created_at" in log
 
 
+class TestSortByWhitelist:
+    """Tests for sort_by parameter whitelist security."""
+
+    def test_sort_by_all_allowed_fields(self, client, auth_headers, test_usage_logs):
+        """Every allowed sort field should work without error."""
+        allowed = ["created_at", "cost_usd", "input_tokens", "output_tokens",
+                    "latency_ms", "provider", "model"]
+        for field in allowed:
+            response = client.get(f"/api/v1/logs?sort_by={field}", headers=auth_headers)
+            assert response.status_code == 200, f"sort_by={field} failed"
+
+    def test_sort_by_invalid_field_falls_back(self, client, auth_headers, test_usage_logs):
+        """Invalid sort_by field should fall back to created_at, not 500."""
+        response = client.get("/api/v1/logs?sort_by=user_id", headers=auth_headers)
+        assert response.status_code == 200
+        assert response.json()["total"] == 5
+
+    def test_sort_by_malicious_field_safe(self, client, auth_headers, test_usage_logs):
+        """Malicious sort_by field (e.g., __class__) should return safely."""
+        response = client.get("/api/v1/logs?sort_by=__class__", headers=auth_headers)
+        assert response.status_code == 200
+
+    def test_sort_order_asc(self, client, auth_headers, test_usage_logs):
+        """Ascending sort order should work."""
+        response = client.get("/api/v1/logs?sort_by=cost_usd&sort_order=asc", headers=auth_headers)
+        assert response.status_code == 200
+        costs = [log["cost_usd"] for log in response.json()["logs"]]
+        assert costs == sorted(costs)
+
+
+class TestDateValidation:
+    """Tests for date filter validation returning 400 errors."""
+
+    def test_invalid_date_from_returns_400(self, client, auth_headers, test_usage_logs):
+        """Invalid date_from format should return 400."""
+        response = client.get("/api/v1/logs?date_from=not-a-date", headers=auth_headers)
+        assert response.status_code == 400
+        assert "date_from" in response.json()["detail"].lower()
+
+    def test_invalid_date_to_returns_400(self, client, auth_headers, test_usage_logs):
+        """Invalid date_to format should return 400."""
+        response = client.get("/api/v1/logs?date_to=2024-13-45", headers=auth_headers)
+        assert response.status_code == 400
+        assert "date_to" in response.json()["detail"].lower()
+
+    def test_date_from_after_date_to_returns_400(self, client, auth_headers, test_usage_logs):
+        """date_from > date_to should return 400."""
+        response = client.get(
+            "/api/v1/logs?date_from=2024-03-01&date_to=2024-02-01",
+            headers=auth_headers,
+        )
+        assert response.status_code == 400
+        assert "before or equal" in response.json()["detail"].lower()
+
+    def test_valid_date_range_returns_200(self, client, auth_headers, test_usage_logs):
+        """Valid date range should return 200."""
+        response = client.get(
+            "/api/v1/logs?date_from=2020-01-01&date_to=2030-12-31",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+
+
 class TestGetLog:
     """Tests for GET /api/v1/logs/{log_id}."""
 

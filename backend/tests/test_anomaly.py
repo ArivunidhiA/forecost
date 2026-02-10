@@ -231,7 +231,7 @@ class TestAnomalyWebhookFiring:
         mock_response = AsyncMock()
         mock_response.status_code = 200
 
-        with patch("anomaly.httpx.AsyncClient") as mock_client_cls:
+        with patch("httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -288,7 +288,7 @@ class TestAnomalyWebhookFiring:
         mock_response = AsyncMock()
         mock_response.status_code = 200
 
-        with patch("anomaly.httpx.AsyncClient") as mock_client_cls:
+        with patch("httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
