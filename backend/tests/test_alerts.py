@@ -6,16 +6,16 @@ import pytest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from alerts import check_and_fire_alerts, reset_fired_alerts, _fired_alerts
-from models import Budget, UsageLog, Webhook
+from alerts import check_and_fire_alerts, reset_fired_alerts
+from models import Budget, FiredAlert, UsageLog, Webhook
 
 
 @pytest.fixture(autouse=True)
-def reset_alerts():
+def reset_alerts(db_session):
     """Reset fired alerts state before each test."""
-    reset_fired_alerts()
+    reset_fired_alerts(db_session)
     yield
-    reset_fired_alerts()
+    reset_fired_alerts(db_session)
 
 
 class TestCheckAndFireAlerts:
@@ -178,10 +178,11 @@ class TestCheckAndFireAlerts:
         # Should not raise
         await check_and_fire_alerts(test_user.id, db_session)
 
-    def test_reset_fired_alerts(self):
+    def test_reset_fired_alerts(self, db_session, test_user):
         """reset_fired_alerts() should clear the dedup state."""
-        _fired_alerts.add(("user1", "budget1", "warning"))
-        assert len(_fired_alerts) == 1
+        db_session.add(FiredAlert(user_id=test_user.id, budget_id="budget1", alert_type="budget_warning"))
+        db_session.commit()
+        assert db_session.query(FiredAlert).count() == 1
 
-        reset_fired_alerts()
-        assert len(_fired_alerts) == 0
+        reset_fired_alerts(db_session)
+        assert db_session.query(FiredAlert).count() == 0

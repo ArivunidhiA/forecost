@@ -24,6 +24,8 @@ jest.mock('@/lib/api', () => ({
     getTags: (...args: any[]) => mockGetTags(...args),
   },
   isAuthenticated: jest.fn(() => true),
+  getUser: jest.fn(() => ({ email: 'test@example.com' })),
+  logout: jest.fn(),
   getLogs: (...args: any[]) => mockGetLogs(...args),
   downloadExport: (...args: any[]) => mockDownloadExport(...args),
   LogsParams: {},

@@ -3,6 +3,8 @@
  * @description Main landing page with hero, problem/solution, and install instructions
  */
 
+'use client';
+
 import Navigation from '@/components/Navigation';
 import Button from '@/components/Button';
 import Link from 'next/link';

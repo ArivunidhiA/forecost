@@ -194,7 +194,7 @@ class TestAnomalyWebhookFiring:
         from anomaly import check_and_fire_anomaly_alerts, reset_fired_anomaly_alerts
         from models import Webhook
 
-        reset_fired_anomaly_alerts()
+        reset_fired_anomaly_alerts(db_session)
 
         now = datetime.now(timezone.utc)
         for i in range(1, 14):
@@ -251,7 +251,7 @@ class TestAnomalyWebhookFiring:
         from anomaly import check_and_fire_anomaly_alerts, reset_fired_anomaly_alerts
         from models import Webhook
 
-        reset_fired_anomaly_alerts()
+        reset_fired_anomaly_alerts(db_session)
 
         now = datetime.now(timezone.utc)
         for i in range(1, 14):

@@ -14,10 +14,6 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-# Track which (user_id, budget_id, status) combos have already fired
-# to avoid spamming webhooks on every request.
-_fired_alerts: set[tuple[str, str, str]] = set()
-
 
 async def check_and_fire_alerts(user_id: str, db: Session) -> None:
     """
@@ -30,7 +26,7 @@ async def check_and_fire_alerts(user_id: str, db: Session) -> None:
         user_id: The user whose budgets to check.
         db: Database session.
     """
-    from models import Budget, UsageLog, Webhook
+    from models import Budget, FiredAlert, UsageLog, Webhook
 
     try:
         # Get user's budgets
@@ -69,9 +65,13 @@ async def check_and_fire_alerts(user_id: str, db: Session) -> None:
             else:
                 continue  # No alert needed
 
-            # Check if we already fired this alert
-            alert_key = (user_id, budget.id, alert_status)
-            if alert_key in _fired_alerts:
+            # Check if we already fired this alert (persisted in DB)
+            existing = db.query(FiredAlert).filter(
+                FiredAlert.user_id == user_id,
+                FiredAlert.budget_id == budget.id,
+                FiredAlert.alert_type == alert_status,
+            ).first()
+            if existing:
                 continue
 
             # Fire matching webhooks
@@ -102,13 +102,16 @@ async def check_and_fire_alerts(user_id: str, db: Session) -> None:
                 except Exception as e:
                     logger.warning(f"Failed to fire webhook {webhook.url}: {e}")
 
-            # Mark as fired so we don't spam
-            _fired_alerts.add(alert_key)
+            # Persist fired alert so we don't spam (survives restarts)
+            db.add(FiredAlert(user_id=user_id, budget_id=budget.id, alert_type=alert_status))
+            db.commit()
 
     except Exception as e:
         logger.error(f"Error checking budget alerts for user {user_id}: {e}")
 
 
-def reset_fired_alerts() -> None:
+def reset_fired_alerts(db: Session) -> None:
     """Reset the fired alerts tracker (useful for testing or new billing periods)."""
-    _fired_alerts.clear()
+    from models import FiredAlert
+    db.query(FiredAlert).delete()
+    db.commit()

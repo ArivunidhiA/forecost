@@ -30,9 +30,9 @@ global.URL.revokeObjectURL = jest.fn();
 
 beforeEach(() => {
   jest.clearAllMocks();
-  (localStorage.getItem as jest.Mock).mockReset();
-  (localStorage.setItem as jest.Mock).mockReset();
-  (localStorage.removeItem as jest.Mock).mockReset();
+  Storage.prototype.getItem = jest.fn();
+  Storage.prototype.setItem = jest.fn();
+  Storage.prototype.removeItem = jest.fn();
 });
 
 // ---------------------------------------------------------------------------

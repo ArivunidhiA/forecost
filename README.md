@@ -262,51 +262,72 @@ NEXT_PUBLIC_GITHUB_CLIENT_ID=your-github-id
 
 ### Authentication
 
-All requests require JWT token in header:
+GitHub OAuth → JWT. Authenticate via GitHub, then include the JWT in all subsequent requests:
 ```
 Authorization: Bearer {token}
 ```
 
 ### Key Endpoints
 
-#### Track API Call
+#### GitHub OAuth Login
 ```bash
-POST /api/events/track
+POST /auth/github
 Content-Type: application/json
 
-{
-  "model": "gpt-4",
-  "provider": "openai",
-  "tokens_input": 500,
-  "tokens_output": 200,
-  "timestamp": "2024-02-09T10:00:00Z"
-}
+{ "code": "github_oauth_authorization_code" }
 
 Response:
 {
-  "success": true,
-  "data": {
-    "cost_usd": 0.0175,
-    "event_id": "evt_123"
-  }
+  "user_id": "550e8400-e29b-41d4-a716-446655440000",
+  "email": "user@example.com",
+  "username": "octocat",
+  "token": "eyJhbGciOiJIUzI1NiIs...",
+  "expires_in": 86400
 }
 ```
 
-#### Get Cost Summary
+#### Store an API Key
 ```bash
-GET /api/costs/summary?period=month
+POST /api/v1/keys
+Authorization: Bearer {token}
+
+{ "provider": "openai", "api_key": "sk-proj-abc123..." }
 
 Response:
 {
-  "success": true,
-  "data": {
-    "total_usd": 1234.56,
-    "by_model": [
-      {"model": "gpt-4", "cost": 500, "calls": 100},
-      {"model": "claude-3-opus", "cost": 400, "calls": 80}
-    ],
-    "daily_costs": [...]
-  }
+  "id": "key_550e8400",
+  "provider": "openai",
+  "proxy_key": "pql_openai_abc123",
+  "created_at": "2026-02-10T12:00:00Z",
+  "last_used_at": null,
+  "is_active": true
+}
+```
+
+#### Get Usage Statistics
+```bash
+GET /api/v1/stats?period=month
+
+Response:
+{
+  "period": "month",
+  "total_usd": 1234.56,
+  "total_calls": 680,
+  "total_tokens": 2450000,
+  "avg_latency_ms": 320.5,
+  "today_usd": 42.10,
+  "month_usd": 1234.56,
+  "all_time_usd": 5678.90,
+  "cache_hits": 120,
+  "cache_misses": 560,
+  "cache_savings_usd": 18.40,
+  "by_model": [
+    {"model": "gpt-4", "provider": "openai", "total_tokens": 750000, "cost_usd": 500.00, "call_count": 100, "avg_latency_ms": 450.2},
+    {"model": "claude-3-opus-20240229", "provider": "anthropic", "cost_usd": 400.00, "call_count": 80, "total_tokens": 600000, "avg_latency_ms": 380.0}
+  ],
+  "by_day": [
+    {"date": "2026-02-01", "cost_usd": 40.00, "call_count": 25}
+  ]
 }
 ```
 

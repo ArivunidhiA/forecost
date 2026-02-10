@@ -1,15 +1,30 @@
 """HTTP client for LLMLab backend API."""
 
+import os
 import time
 from typing import Any, Dict, Optional
 
 import httpx
 
-from .config import get_token
+from .config import get_token, load_config
 
 
-# Backend URL - will be configurable
-API_BASE_URL = "https://api.llmlab.dev"
+def _get_api_base_url() -> str:
+    """Get API base URL from environment variable, config, or default fallback."""
+    # 1. Environment variable takes priority
+    env_url = os.environ.get("LLMLAB_API_URL")
+    if env_url:
+        return env_url.rstrip("/")
+    # 2. Config file
+    config = load_config()
+    config_url = config.get("api_url")
+    if config_url:
+        return config_url.rstrip("/")
+    # 3. Default fallback
+    return "https://api.llmlab.dev"
+
+
+API_BASE_URL = _get_api_base_url()
 
 # Request settings
 TIMEOUT = 30.0

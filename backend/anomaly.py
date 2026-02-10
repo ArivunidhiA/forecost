@@ -15,9 +15,6 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-# Track fired anomaly alerts to avoid duplicates
-_fired_anomaly_alerts: set[tuple[str, str]] = set()
-
 
 def detect_anomalies(user_id: str, db: Session) -> List:
     """
@@ -135,7 +132,7 @@ async def check_and_fire_anomaly_alerts(user_id: str, db: Session) -> None:
     This runs as a fire-and-forget asyncio task.
     """
     import httpx
-    from models import Webhook
+    from models import FiredAlert, Webhook
 
     try:
         anomalies = detect_anomalies(user_id, db)
@@ -147,9 +144,14 @@ async def check_and_fire_anomaly_alerts(user_id: str, db: Session) -> None:
         if not active_anomalies:
             return
 
-        # Check dedup
-        alert_key = (user_id, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
-        if alert_key in _fired_anomaly_alerts:
+        # Check dedup (persisted in DB)
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        existing = db.query(FiredAlert).filter(
+            FiredAlert.user_id == user_id,
+            FiredAlert.budget_id == today_str,
+            FiredAlert.alert_type == "anomaly",
+        ).first()
+        if existing:
             return
 
         # Get user's anomaly webhooks
@@ -160,7 +162,8 @@ async def check_and_fire_anomaly_alerts(user_id: str, db: Session) -> None:
         ).all()
 
         if not webhooks:
-            _fired_anomaly_alerts.add(alert_key)
+            db.add(FiredAlert(user_id=user_id, budget_id=today_str, alert_type="anomaly"))
+            db.commit()
             return
 
         for anomaly in active_anomalies:
@@ -186,12 +189,15 @@ async def check_and_fire_anomaly_alerts(user_id: str, db: Session) -> None:
                 except Exception as e:
                     logger.warning(f"Failed to fire anomaly webhook {webhook.url}: {e}")
 
-        _fired_anomaly_alerts.add(alert_key)
+        db.add(FiredAlert(user_id=user_id, budget_id=today_str, alert_type="anomaly"))
+        db.commit()
 
     except Exception as e:
         logger.error(f"Error checking anomalies for user {user_id}: {e}")
 
 
-def reset_fired_anomaly_alerts() -> None:
+def reset_fired_anomaly_alerts(db: Session) -> None:
     """Reset the fired anomaly alerts tracker."""
-    _fired_anomaly_alerts.clear()
+    from models import FiredAlert
+    db.query(FiredAlert).filter(FiredAlert.alert_type == "anomaly").delete()
+    db.commit()

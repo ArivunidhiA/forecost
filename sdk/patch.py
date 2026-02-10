@@ -19,10 +19,11 @@ Supported libraries:
     - google-generativeai (v0.3+)
 """
 
+import os
 from typing import List, Optional
 
-# Default LLMLab proxy base URL
-DEFAULT_BASE_URL = "https://api.llmlab.dev"
+# Default LLMLab proxy base URL (configurable via LLMLAB_API_URL env var)
+DEFAULT_BASE_URL = os.environ.get("LLMLAB_API_URL", "https://api.llmlab.dev").rstrip("/")
 
 # Module-level tag state for runtime tag changes
 _current_tags: List[str] = []

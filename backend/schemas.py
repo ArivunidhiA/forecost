@@ -7,7 +7,12 @@ All API inputs and outputs are validated through these schemas.
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+import ipaddress
+import os
+import re
+from urllib.parse import urlparse
+
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 
 # =============================================================================
@@ -260,12 +265,57 @@ class ComparisonResponse(BaseModel):
 class WebhookCreate(BaseModel):
     """Request to register a webhook."""
 
-    url: str = Field(..., min_length=10, description="Webhook URL to POST to")
+    url: HttpUrl = Field(..., description="Webhook URL to POST to")
     event_type: str = Field(
         ...,
         description="Event type",
         pattern="^(budget_warning|budget_exceeded|anomaly)$",
     )
+
+    @field_validator("url")
+    @classmethod
+    def validate_url_not_private(cls, v: HttpUrl) -> str:
+        """Block private/loopback URLs to prevent SSRF attacks."""
+        url_str = str(v)
+        parsed = urlparse(url_str)
+        hostname = parsed.hostname or ""
+
+        # Must be http or https
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError("Only HTTP and HTTPS URLs are allowed")
+
+        # In production, require HTTPS
+        is_production = os.environ.get("ENVIRONMENT", "development").lower() == "production"
+        if is_production and parsed.scheme != "https":
+            raise ValueError("HTTPS is required for webhook URLs in production")
+
+        # Block well-known loopback/private hostnames
+        blocked_hostnames = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+        if hostname.lower() in blocked_hostnames:
+            raise ValueError("Webhook URL must not point to a local/private address")
+
+        # Check if hostname is an IP address in a private range
+        try:
+            ip = ipaddress.ip_address(hostname)
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                raise ValueError("Webhook URL must not point to a private or reserved IP address")
+        except ValueError as e:
+            # Not a raw IP — check hostname patterns for private ranges
+            if str(e).startswith("Webhook"):
+                raise
+            # Pattern-match common private-range hostnames (e.g. 10.x.x.x, 172.16-31.x.x, 192.168.x.x, 169.254.x.x)
+            private_patterns = [
+                r"^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$",
+                r"^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$",
+                r"^192\.168\.\d{1,3}\.\d{1,3}$",
+                r"^169\.254\.\d{1,3}\.\d{1,3}$",
+            ]
+            for pattern in private_patterns:
+                if re.match(pattern, hostname):
+                    raise ValueError("Webhook URL must not point to a private IP range")
+
+        # Return as plain string so downstream code works with str, not HttpUrl
+        return url_str
 
 
 class WebhookResponse(BaseModel):

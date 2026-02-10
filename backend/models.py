@@ -209,6 +209,17 @@ usage_log_tags = Table(
 )
 
 
+class FiredAlert(Base):
+    """Tracks fired budget/anomaly alerts to prevent duplicates."""
+    __tablename__ = "fired_alerts"
+
+    id: str = Column(String(36), primary_key=True, default=generate_uuid)
+    user_id: str = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    budget_id: str = Column(String(36), nullable=False)
+    alert_type: str = Column(String(50), nullable=False)  # budget_warning, budget_exceeded, anomaly
+    created_at: datetime = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
 class Tag(Base):
     """
     User-defined tag for cost attribution and filtering.

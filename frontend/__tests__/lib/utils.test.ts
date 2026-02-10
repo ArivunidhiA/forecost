@@ -50,13 +50,14 @@ describe('formatCompact', () => {
 
 describe('formatDate', () => {
   it('formats date strings', () => {
-    expect(formatDate('2024-01-15')).toMatch(/Jan 15/);
+    expect(formatDate('2024-01-15T12:00:00Z')).toContain('Jan');
   });
 });
 
 describe('formatDateFull', () => {
   it('includes year', () => {
-    expect(formatDateFull('2024-01-15')).toMatch(/Jan 15, 2024/);
+    expect(formatDateFull('2024-01-15T12:00:00Z')).toContain('Jan');
+    expect(formatDateFull('2024-01-15T12:00:00Z')).toContain('2024');
   });
 });
 

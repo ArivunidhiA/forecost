@@ -2,7 +2,6 @@
 LLMLab API Client - Communication with backend
 """
 
-import json
 from typing import Any, Dict, Optional
 
 import requests
@@ -18,82 +17,58 @@ class APIClient:
         self.backend_url = backend_url or get_backend_url()
         self.headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
 
-    def log_call(self, entry: Dict[str, Any]) -> Dict[str, Any]:
+    def get_status(self, period: str = "month") -> Dict[str, Any]:
         """
-        Send a cost log entry to the backend.
+        Get current usage stats and budget status.
 
         Args:
-            entry: Log entry dict
-
-        Returns:
-            Response from backend
-
-        Raises:
-            requests.RequestException: If request fails
-        """
-        response = requests.post(
-            f"{self.backend_url}/api/v1/costs/log",
-            json=entry,
-            headers=self.headers,
-            timeout=5,
-        )
-        response.raise_for_status()
-        return response.json()
-
-    def get_status(self) -> Dict[str, Any]:
-        """
-        Get current month's spend and budget status.
+            period: Time period - "today", "week", "month", or "all"
 
         Returns:
             Status dict with spend and budget info
         """
         response = requests.get(
-            f"{self.backend_url}/api/v1/status",
+            f"{self.backend_url}/api/v1/stats",
+            params={"period": period},
             headers=self.headers,
             timeout=5,
         )
         response.raise_for_status()
         return response.json()
 
-    def set_budget(self, amount: float) -> Dict[str, Any]:
+    def set_budget(self, amount: float, alert_threshold: float = 80.0) -> Dict[str, Any]:
         """
-        Set monthly budget.
+        Create or update monthly budget.
 
         Args:
             amount: Budget amount in USD
+            alert_threshold: Alert threshold percentage (default 80.0)
 
         Returns:
             Response from backend
         """
         response = requests.post(
-            f"{self.backend_url}/api/v1/budget",
-            json={"budget": amount},
+            f"{self.backend_url}/api/v1/budgets",
+            json={"amount_usd": amount, "alert_threshold": alert_threshold},
             headers=self.headers,
             timeout=5,
         )
         response.raise_for_status()
         return response.json()
 
-    def get_costs(self, start_date: Optional[str] = None, end_date: Optional[str] = None) -> Dict[str, Any]:
+    def get_costs(self, period: str = "month") -> Dict[str, Any]:
         """
-        Get costs for a date range.
+        Get costs for a time period.
 
         Args:
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)
+            period: Time period - "today", "week", "month", or "all"
 
         Returns:
             Costs data
         """
-        params = {}
-        if start_date:
-            params["start_date"] = start_date
-        if end_date:
-            params["end_date"] = end_date
-
         response = requests.get(
-            f"{self.backend_url}/api/v1/costs",
-            params=params,
+            f"{self.backend_url}/api/v1/stats",
+            params={"period": period},
             headers=self.headers,
             timeout=5,
         )
@@ -108,7 +83,7 @@ class APIClient:
             Optimization tips
         """
         response = requests.get(
-            f"{self.backend_url}/api/v1/optimize",
+            f"{self.backend_url}/api/v1/recommendations",
             headers=self.headers,
             timeout=5,
         )

@@ -7,7 +7,9 @@ http://localhost:8000
 
 ## Authentication
 
-All endpoints except `/api/health`, `/api/auth/signup`, and `/api/auth/login` require JWT authentication.
+Authentication uses **GitHub OAuth → JWT**. There is no email/password signup or login.
+
+All endpoints except `GET /health` and `POST /auth/github` require a JWT token:
 
 **Header:**
 ```
@@ -20,136 +22,126 @@ Authorization: Bearer <access_token>
 
 ### AUTH ENDPOINTS
 
-#### POST `/api/auth/signup`
-Register a new user.
+#### POST `/auth/github`
+Exchange a GitHub OAuth authorization code for a JWT token.
 
 **Request:**
 ```json
 {
+  "code": "github_oauth_authorization_code"
+}
+```
+
+**Response (200):**
+```json
+{
+  "user_id": "550e8400-e29b-41d4-a716-446655440000",
   "email": "user@example.com",
-  "password": "secure_password",
-  "name": "John Doe"
-}
-```
-
-**Response (200):**
-```json
-{
-  "access_token": "eyJhbGc...",
-  "token_type": "bearer",
-  "user_id": "550e8400-e29b-41d4-a716-446655440000"
+  "username": "octocat",
+  "token": "eyJhbGciOiJIUzI1NiIs...",
+  "expires_in": 86400
 }
 ```
 
 **Errors:**
-- `400` - Email already registered
-- `422` - Validation error (password < 8 chars)
+- `400` - Invalid or expired OAuth code
+- `422` - Validation error
 
 ---
 
-#### POST `/api/auth/login`
-Authenticate user.
+#### POST `/auth/dev-login`
+Dev-only login (disabled in production).
 
-**Request:**
+**Response (200):**
 ```json
 {
+  "user_id": "dev-user-id",
+  "email": "dev@localhost",
+  "username": "dev",
+  "token": "eyJhbGciOiJIUzI1NiIs...",
+  "expires_in": 86400
+}
+```
+
+---
+
+#### GET `/api/v1/me`
+Get the current authenticated user's profile.
+
+**Response (200):**
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "github_id": 12345678,
   "email": "user@example.com",
-  "password": "secure_password"
-}
-```
-
-**Response (200):**
-```json
-{
-  "access_token": "eyJhbGc...",
-  "token_type": "bearer",
-  "user_id": "550e8400-e29b-41d4-a716-446655440000"
+  "username": "octocat",
+  "avatar_url": "https://avatars.githubusercontent.com/u/12345678",
+  "created_at": "2026-01-15T08:30:00Z"
 }
 ```
 
 **Errors:**
-- `401` - Invalid email or password
-
----
-
-#### POST `/api/auth/logout`
-Logout user (client-side token removal).
-
-**Response (200):**
-```json
-{
-  "message": "Successfully logged out"
-}
-```
-
----
-
-### EVENT TRACKING ENDPOINTS
-
-#### POST `/api/events/track`
-Track an LLM API call.
-
-**Request:**
-```json
-{
-  "provider": "openai",
-  "model": "gpt-4",
-  "input_tokens": 1000,
-  "output_tokens": 500,
-  "cost": null,
-  "metadata": {
-    "conversation_id": "conv_123",
-    "session": "prod"
-  },
-  "timestamp": "2024-02-09T12:00:00Z"
-}
-```
-
-**Response (201):**
-```json
-{
-  "event_id": "evt_123",
-  "user_id": "usr_456",
-  "provider": "openai",
-  "model": "gpt-4",
-  "total_tokens": 1500,
-  "cost": 0.045,
-  "tracked_at": "2024-02-09T12:00:00Z"
-}
-```
-
-**Providers:**
-- `openai` - OpenAI API
-- `anthropic` - Anthropic Claude API
-- `google` - Google Gemini API
-
-**Errors:**
-- `400` - Validation error
 - `401` - Unauthorized
 
 ---
 
-#### GET `/api/events/`
-List user's tracked events.
+### API KEY ENDPOINTS
 
-**Query Parameters:**
-- None
+#### POST `/api/v1/keys`
+Store an encrypted API key for a provider.
+
+**Request:**
+```json
+{
+  "provider": "openai",
+  "api_key": "sk-proj-abc123def456..."
+}
+```
+
+**Validation:**
+- `provider` must be one of: `openai`, `anthropic`, `google`
+- `api_key` minimum length: 10 characters
+
+**Response (201):**
+```json
+{
+  "id": "key_550e8400",
+  "provider": "openai",
+  "proxy_key": "pql_openai_abc123",
+  "created_at": "2026-02-10T12:00:00Z",
+  "last_used_at": null,
+  "is_active": true
+}
+```
+
+**Errors:**
+- `400` - Invalid provider or key too short
+- `401` - Unauthorized
+
+---
+
+#### GET `/api/v1/keys`
+List all API keys for the authenticated user.
 
 **Response (200):**
 ```json
 {
-  "count": 42,
-  "events": [
+  "keys": [
     {
-      "event_id": "evt_123",
-      "user_id": "usr_456",
+      "id": "key_550e8400",
       "provider": "openai",
-      "model": "gpt-4",
-      "input_tokens": 1000,
-      "output_tokens": 500,
-      "total_tokens": 1500,
-      "cost": 0.045,
-      "timestamp": "2024-02-09T12:00:00Z"
+      "proxy_key": "pql_openai_abc123",
+      "created_at": "2026-02-10T12:00:00Z",
+      "last_used_at": "2026-02-10T14:30:00Z",
+      "is_active": true
+    },
+    {
+      "id": "key_660f9500",
+      "provider": "anthropic",
+      "proxy_key": "pql_anthropic_def456",
+      "created_at": "2026-02-10T12:05:00Z",
+      "last_used_at": null,
+      "is_active": true
     }
   ]
 }
@@ -157,71 +149,103 @@ List user's tracked events.
 
 ---
 
-### COST ANALYTICS ENDPOINTS
-
-#### GET `/api/costs/summary`
-Get cost summary for time period.
-
-**Query Parameters:**
-- `days` (int, 1-365, default: 30) - Days to include in summary
+#### DELETE `/api/v1/keys/{key_id}`
+Delete an API key.
 
 **Response (200):**
 ```json
 {
-  "total_cost": 125.45,
-  "call_count": 250,
-  "average_cost_per_call": 0.5018,
+  "success": true
+}
+```
+
+**Errors:**
+- `404` - Key not found
+- `403` - Not authorized to delete this key
+
+---
+
+### PROXY ENDPOINTS
+
+These endpoints forward requests to LLM providers, logging usage and cost automatically.
+
+#### `POST/GET/etc` `/api/v1/proxy/openai/{path:path}`
+Proxy requests to OpenAI API. Use your proxy key (from `/api/v1/keys`) instead of your real OpenAI key.
+
+#### `POST/GET/etc` `/api/v1/proxy/anthropic/{path:path}`
+Proxy requests to Anthropic API.
+
+#### `POST/GET/etc` `/api/v1/proxy/google/{path:path}`
+Proxy requests to Google Gemini API.
+
+**Example — OpenAI chat completion via proxy:**
+```bash
+curl -X POST http://localhost:8000/api/v1/proxy/openai/v1/chat/completions \
+  -H "Authorization: Bearer pql_openai_abc123" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+The response is the raw OpenAI response. Cost and token usage are logged automatically.
+
+**Headers:**
+- `X-LLMLab-Tags: backend,prod` — Optional. Attach tags to this log entry for cost attribution.
+
+---
+
+### USAGE STATISTICS ENDPOINTS
+
+#### GET `/api/v1/stats`
+Get usage statistics for a time period.
+
+**Query Parameters:**
+- `period` (string): `today`, `week`, `month`, `all` (default: `month`)
+
+**Response (200):**
+```json
+{
+  "period": "month",
+  "total_usd": 1234.56,
+  "total_calls": 680,
+  "total_tokens": 2450000,
+  "avg_latency_ms": 320.5,
+  "today_usd": 42.10,
+  "month_usd": 1234.56,
+  "all_time_usd": 5678.90,
+  "cache_hits": 120,
+  "cache_misses": 560,
+  "cache_savings_usd": 18.40,
   "by_model": [
     {
       "model": "gpt-4",
       "provider": "openai",
-      "total_calls": 50,
-      "total_tokens": 75000,
-      "total_cost": 75.50
+      "total_tokens": 750000,
+      "cost_usd": 500.00,
+      "call_count": 100,
+      "avg_latency_ms": 450.2
+    },
+    {
+      "model": "claude-3-opus-20240229",
+      "provider": "anthropic",
+      "total_tokens": 600000,
+      "cost_usd": 400.00,
+      "call_count": 80,
+      "avg_latency_ms": 380.0
     }
   ],
-  "by_date": [
+  "by_day": [
     {
-      "date": "2024-02-09",
-      "total_cost": 12.35,
+      "date": "2026-02-01",
+      "cost_usd": 40.00,
       "call_count": 25
-    }
-  ],
-  "date_range_start": "2024-01-10",
-  "date_range_end": "2024-02-09"
-}
-```
-
----
-
-#### GET `/api/costs/by-provider`
-Get costs broken down by provider.
-
-**Query Parameters:**
-- `days` (int, 1-365, default: 30) - Days to include
-
-**Response (200):**
-```json
-{
-  "date_range": {
-    "start": "2024-01-10",
-    "end": "2024-02-09"
-  },
-  "provider_costs": [
+    },
     {
-      "provider": "openai",
-      "total_cost": 85.20,
-      "call_count": 200,
-      "models": {
-        "gpt-4": {
-          "cost": 60.50,
-          "calls": 100
-        },
-        "gpt-3.5-turbo": {
-          "cost": 24.70,
-          "calls": 100
-        }
-      }
+      "date": "2026-02-02",
+      "cost_usd": 45.00,
+      "call_count": 30
     }
   ]
 }
@@ -229,34 +253,287 @@ Get costs broken down by provider.
 
 ---
 
-#### GET `/api/costs/top-models`
-Get most expensive models.
-
-**Query Parameters:**
-- `limit` (int, 1-100, default: 10) - Number of models to return
-- `days` (int, 1-365, default: 30) - Days to include
+#### GET `/api/v1/stats/heatmap`
+Get a usage heatmap (calls and cost by day-of-week × hour-of-day).
 
 **Response (200):**
 ```json
 {
-  "count": 5,
-  "models": [
+  "cells": [
+    { "day": 0, "hour": 9, "call_count": 45, "cost_usd": 12.30 },
+    { "day": 0, "hour": 10, "call_count": 60, "cost_usd": 18.50 },
+    { "day": 1, "hour": 14, "call_count": 30, "cost_usd": 8.20 }
+  ]
+}
+```
+
+**Fields:**
+- `day`: 0 = Monday … 6 = Sunday
+- `hour`: 0–23
+
+---
+
+#### GET `/api/v1/stats/comparison`
+Compare cost across providers and models, with cheaper alternatives.
+
+**Response (200):**
+```json
+{
+  "comparisons": [
     {
       "model": "gpt-4",
       "provider": "openai",
-      "total_calls": 100,
-      "total_tokens": 150000,
-      "total_cost": 75.50
+      "actual_cost": 500.00,
+      "input_tokens": 500000,
+      "output_tokens": 250000,
+      "alternatives": [
+        { "provider": "anthropic", "model": "claude-3-sonnet-20240229", "estimated_cost": 225.00 },
+        { "provider": "google", "model": "gemini-1.5-pro", "estimated_cost": 180.00 }
+      ]
+    }
+  ],
+  "current_total": 500.00,
+  "cheapest_total": 180.00
+}
+```
+
+---
+
+#### GET `/api/v1/stats/forecast`
+Get a cost forecast based on historical spending trends.
+
+**Response (200):**
+```json
+{
+  "predicted_next_month_usd": 1450.00,
+  "daily_average_usd": 48.33,
+  "trend": "increasing",
+  "trend_pct_change": 12.5,
+  "confidence": "medium",
+  "projected_daily": [
+    { "date": "2026-03-01", "cost_usd": 47.00, "call_count": 28 },
+    { "date": "2026-03-02", "cost_usd": 49.00, "call_count": 30 }
+  ]
+}
+```
+
+---
+
+#### GET `/api/v1/stats/anomalies`
+Get detected spending anomalies.
+
+**Response (200):**
+```json
+{
+  "anomalies": [
+    {
+      "type": "spend_spike",
+      "message": "Spending on 2026-02-08 was 3.2x above average",
+      "severity": "warning",
+      "current_value": 150.00,
+      "expected_value": 47.00,
+      "deviation_factor": 3.2,
+      "detected_at": "2026-02-08T23:00:00Z"
+    }
+  ],
+  "has_active_anomaly": true
+}
+```
+
+---
+
+### USAGE LOGS ENDPOINTS
+
+#### GET `/api/v1/logs`
+List usage logs (paginated).
+
+**Query Parameters:**
+- `page` (int, default: 1)
+- `page_size` (int, default: 50)
+- `provider` (string, optional): Filter by provider
+- `model` (string, optional): Filter by model
+- `tag` (string, optional): Filter by tag
+
+**Response (200):**
+```json
+{
+  "logs": [
+    {
+      "id": "log_abc123",
+      "provider": "openai",
+      "model": "gpt-4",
+      "input_tokens": 1000,
+      "output_tokens": 500,
+      "cost_usd": 0.045,
+      "latency_ms": 1250.5,
+      "cache_hit": false,
+      "tags": ["backend", "prod"],
+      "created_at": "2026-02-10T14:30:00Z"
+    }
+  ],
+  "total": 1234,
+  "page": 1,
+  "page_size": 50,
+  "has_more": true
+}
+```
+
+---
+
+#### GET `/api/v1/logs/{log_id}`
+Get a single usage log entry.
+
+**Response (200):**
+```json
+{
+  "id": "log_abc123",
+  "provider": "openai",
+  "model": "gpt-4",
+  "input_tokens": 1000,
+  "output_tokens": 500,
+  "cost_usd": 0.045,
+  "latency_ms": 1250.5,
+  "cache_hit": false,
+  "tags": ["backend", "prod"],
+  "created_at": "2026-02-10T14:30:00Z"
+}
+```
+
+**Errors:**
+- `404` - Log not found
+
+---
+
+### TAG ENDPOINTS
+
+#### POST `/api/v1/tags`
+Create a new tag for cost attribution.
+
+**Request:**
+```json
+{
+  "name": "production",
+  "color": "#6366f1"
+}
+```
+
+**Validation:**
+- `name`: 1–100 characters
+- `color`: hex color, e.g. `#6366f1`
+
+**Response (201):**
+```json
+{
+  "id": "tag_abc123",
+  "name": "production",
+  "color": "#6366f1",
+  "usage_count": 0,
+  "created_at": "2026-02-10T12:00:00Z"
+}
+```
+
+---
+
+#### GET `/api/v1/tags`
+List all tags for the authenticated user.
+
+**Response (200):**
+```json
+{
+  "tags": [
+    {
+      "id": "tag_abc123",
+      "name": "production",
+      "color": "#6366f1",
+      "usage_count": 42,
+      "created_at": "2026-02-10T12:00:00Z"
+    },
+    {
+      "id": "tag_def456",
+      "name": "backend",
+      "color": "#f59e0b",
+      "usage_count": 18,
+      "created_at": "2026-02-10T12:05:00Z"
     }
   ]
 }
 ```
+
+---
+
+#### DELETE `/api/v1/tags/{tag_id}`
+Delete a tag.
+
+**Response (200):**
+```json
+{
+  "success": true
+}
+```
+
+**Errors:**
+- `404` - Tag not found
+
+---
+
+#### POST `/api/v1/logs/{log_id}/tags`
+Attach tags to a log entry.
+
+**Request:**
+```json
+{
+  "tag_ids": ["tag_abc123", "tag_def456"]
+}
+```
+
+**Response (200):**
+```json
+{
+  "success": true
+}
+```
+
+---
+
+#### DELETE `/api/v1/logs/{log_id}/tags/{tag_id}`
+Detach a tag from a log entry.
+
+**Response (200):**
+```json
+{
+  "success": true
+}
+```
+
+---
+
+### EXPORT ENDPOINTS
+
+#### GET `/api/v1/export/csv`
+Export usage logs as a CSV file.
+
+**Query Parameters:**
+- `provider` (string, optional): Filter by provider
+- `start_date` (string, optional): ISO date
+- `end_date` (string, optional): ISO date
+- `tag` (string, optional): Filter by tag
+
+**Response (200):** CSV file download
+
+---
+
+#### GET `/api/v1/export/json`
+Export usage logs as a JSON file.
+
+**Query Parameters:** Same as CSV export.
+
+**Response (200):** JSON file download
 
 ---
 
 ### BUDGET ENDPOINTS
 
-#### GET `/api/budgets`
+#### GET `/api/v1/budgets`
 Get user's budgets.
 
 **Response (200):**
@@ -264,169 +541,201 @@ Get user's budgets.
 {
   "budgets": [
     {
-      "id": "bdg_123",
-      "user_id": "usr_456",
-      "limit": 100.0,
+      "id": "bdg_abc123",
+      "amount_usd": 1000.00,
       "period": "monthly",
-      "current_spend": 45.67,
+      "alert_threshold": 80.0,
+      "current_spend": 456.78,
       "status": "ok",
-      "created_at": "2024-01-01T00:00:00Z",
-      "updated_at": "2024-02-09T12:00:00Z"
+      "created_at": "2026-01-01T00:00:00Z",
+      "updated_at": "2026-02-10T12:00:00Z"
     }
-  ],
-  "total_limits": 300.0,
-  "total_spend": 89.34
+  ]
 }
 ```
 
 **Budget Status:**
-- `ok` - Under 80% of limit
-- `warning` - 80-100% of limit
-- `exceeded` - Over 100% of limit
+- `ok` — Under alert threshold
+- `warning` — Exceeded alert threshold percentage
+- `exceeded` — Over 100% of budget
 
 ---
 
-#### POST `/api/budgets`
+#### POST `/api/v1/budgets`
 Create or update a budget.
 
 **Request:**
 ```json
 {
-  "limit": 100.0,
-  "period": "monthly"
+  "amount_usd": 1000.00,
+  "period": "monthly",
+  "alert_threshold": 80.0
 }
 ```
 
-**Periods:**
-- `daily` - Daily budget
-- `weekly` - Weekly budget
-- `monthly` - Monthly budget
+**Validation:**
+- `amount_usd`: must be > 0
+- `alert_threshold`: 0–100 (default: 80)
 
 **Response (201):**
 ```json
 {
-  "id": "bdg_123",
-  "user_id": "usr_456",
-  "limit": 100.0,
+  "id": "bdg_abc123",
+  "amount_usd": 1000.00,
   "period": "monthly",
+  "alert_threshold": 80.0,
   "current_spend": 0.0,
   "status": "ok",
-  "created_at": "2024-02-09T12:00:00Z",
-  "updated_at": "2024-02-09T12:00:00Z"
+  "created_at": "2026-02-10T12:00:00Z",
+  "updated_at": "2026-02-10T12:00:00Z"
 }
 ```
 
 **Errors:**
-- `400` - Invalid limit or period
+- `400` - Invalid amount or period
 
 ---
 
-#### DELETE `/api/budgets/{budget_id}`
+#### DELETE `/api/v1/budgets/{budget_id}`
 Delete a budget.
 
-**Response (204):** No content
+**Response (200):**
+```json
+{
+  "success": true
+}
+```
 
 **Errors:**
 - `404` - Budget not found
-- `403` - Not authorized
 
 ---
 
-### RECOMMENDATIONS ENDPOINTS
+### RECOMMENDATIONS ENDPOINT
 
-#### GET `/api/recommendations`
-Get all recommendations.
-
-**Query Parameters:**
-- `days` (int, 1-365, default: 30) - Days to analyze
+#### GET `/api/v1/recommendations`
+Get cost-saving recommendations based on usage patterns.
 
 **Response (200):**
 ```json
 {
-  "optimizations": [
-    {
-      "type": "batch_processing",
-      "title": "Implement Batch Processing",
-      "description": "Group multiple requests...",
-      "potential_savings": 25.50,
-      "priority": "high"
-    }
-  ],
-  "model_recommendations": [
-    {
-      "current_model": "gpt-4",
-      "suggested_model": "gpt-4-turbo",
-      "current_cost_per_call": 0.09,
-      "suggested_cost_per_call": 0.04,
-      "estimated_monthly_savings": 500.00,
-      "use_case": "Complex reasoning"
-    }
-  ],
-  "anomalies": [
-    {
-      "event_id": "evt_999",
-      "model": "gpt-4",
-      "cost": 5.50,
-      "z_score": 3.2,
-      "severity": "high"
-    }
-  ],
-  "last_updated": "2024-02-09T12:00:00Z"
-}
-```
-
----
-
-#### GET `/api/recommendations/anomalies`
-Detect spending anomalies.
-
-**Query Parameters:**
-- `days` (int, 1-365, default: 30) - Days to analyze
-- `threshold` (float, 1.0-5.0, default: 2.0) - Z-score threshold
-
-**Response (200):**
-```json
-{
-  "count": 3,
-  "anomalies": [
-    {
-      "event_id": "evt_999",
-      "model": "gpt-4",
-      "cost": 5.50,
-      "z_score": 3.2,
-      "severity": "high"
-    }
-  ],
-  "analysis_period": {
-    "start": "2024-01-10",
-    "end": "2024-02-09"
-  }
-}
-```
-
----
-
-#### GET `/api/recommendations/model-switching`
-Get model switching recommendations.
-
-**Query Parameters:**
-- `days` (int, 1-365, default: 30) - Days to analyze
-
-**Response (200):**
-```json
-{
-  "count": 2,
   "recommendations": [
     {
+      "type": "model_switch",
+      "title": "Switch to GPT-4-turbo for coding tasks",
+      "description": "You're using GPT-4 for 80% of calls. GPT-4-turbo is 3x cheaper with comparable quality for your use case.",
+      "potential_savings": 150.00,
+      "priority": "high",
       "current_model": "gpt-4",
-      "suggested_model": "gpt-4-turbo",
-      "current_cost_per_call": 0.09,
-      "suggested_cost_per_call": 0.04,
-      "estimated_monthly_savings": 500.00,
-      "use_case": "Complex reasoning"
+      "suggested_model": "gpt-4-turbo"
+    },
+    {
+      "type": "caching",
+      "title": "Enable response caching",
+      "description": "22% of your requests have identical prompts. Caching could save $40/mo.",
+      "potential_savings": 40.00,
+      "priority": "medium",
+      "current_model": null,
+      "suggested_model": null
     }
   ],
-  "total_potential_savings": 750.00
+  "total_potential_savings": 190.00,
+  "analyzed_period_days": 30
+}
+```
+
+---
+
+### WEBHOOK ENDPOINTS
+
+#### POST `/api/v1/webhooks`
+Register a webhook for budget or anomaly alerts.
+
+**Request:**
+```json
+{
+  "url": "https://hooks.slack.com/services/T00/B00/xxxx",
+  "event_type": "budget_exceeded"
+}
+```
+
+**Validation:**
+- `url`: minimum 10 characters
+- `event_type`: one of `budget_warning`, `budget_exceeded`, `anomaly`
+
+**Response (201):**
+```json
+{
+  "id": "wh_abc123",
+  "url": "https://hooks.slack.com/services/T00/B00/xxxx",
+  "event_type": "budget_exceeded",
+  "is_active": true,
+  "created_at": "2026-02-10T12:00:00Z"
+}
+```
+
+---
+
+#### GET `/api/v1/webhooks`
+List all registered webhooks.
+
+**Response (200):**
+```json
+{
+  "webhooks": [
+    {
+      "id": "wh_abc123",
+      "url": "https://hooks.slack.com/services/T00/B00/xxxx",
+      "event_type": "budget_exceeded",
+      "is_active": true,
+      "created_at": "2026-02-10T12:00:00Z"
+    }
+  ]
+}
+```
+
+---
+
+#### DELETE `/api/v1/webhooks/{webhook_id}`
+Delete a webhook.
+
+**Response (200):**
+```json
+{
+  "success": true
+}
+```
+
+**Errors:**
+- `404` - Webhook not found
+
+---
+
+### CACHE ENDPOINTS
+
+#### GET `/api/v1/cache/stats`
+Get cache statistics.
+
+**Response (200):**
+```json
+{
+  "hit_rate": 0.22,
+  "total_hits": 120,
+  "total_misses": 425,
+  "size": 545,
+  "max_size": 10000
+}
+```
+
+---
+
+#### DELETE `/api/v1/cache`
+Clear the response cache.
+
+**Response (200):**
+```json
+{
+  "success": true
 }
 ```
 
@@ -434,17 +743,16 @@ Get model switching recommendations.
 
 ### HEALTH ENDPOINT
 
-#### GET `/api/health`
-Health check.
+#### GET `/health`
+Health check (no authentication required).
 
 **Response (200):**
 ```json
 {
   "status": "healthy",
+  "database": "connected",
   "version": "1.0.0",
-  "uptime_seconds": 3600.5,
-  "database_connected": true,
-  "timestamp": "2024-02-09T12:00:00Z"
+  "uptime_seconds": 3600
 }
 ```
 
@@ -456,36 +764,50 @@ All errors follow this format:
 
 ```json
 {
-  "detail": "Error message"
+  "success": false,
+  "error": "Error message describing what went wrong",
+  "detail": "Additional context (optional)"
 }
 ```
 
 ### Common Status Codes
 - `200` - OK
 - `201` - Created
-- `204` - No Content
 - `400` - Bad Request
 - `401` - Unauthorized
 - `403` - Forbidden
 - `404` - Not Found
 - `422` - Validation Error
+- `429` - Rate Limited
 - `500` - Internal Server Error
+
+---
+
+## Authentication Flow
+
+1. **User clicks "Login with GitHub"** in the frontend
+2. **GitHub redirects** back with an authorization `code`
+3. **Frontend sends** `POST /auth/github` with `{ "code": "..." }`
+4. **Backend exchanges** the code for a GitHub access token, fetches user info, creates/finds the user, returns a JWT
+5. **Frontend stores** the JWT and sends `Authorization: Bearer {token}` on all requests
+6. **Token expires** after the period indicated by `expires_in` — re-authenticate via GitHub
 
 ---
 
 ## Rate Limiting
 
-Currently no rate limiting. Recommended to add:
-- 100 requests/minute per user
-- 1000 requests/hour per user
+Rate limits are configurable per-endpoint. Default limits:
+- Proxy endpoints: 60 requests/minute
+- Other endpoints: 100 requests/minute
 
 ---
 
 ## Pagination
 
-Cost summary and event listing support:
-- `limit` - Results per page
-- `offset` - Start position
+The `/api/v1/logs` endpoint supports pagination:
+- `page` - Page number (1-based)
+- `page_size` - Results per page (default: 50)
+- Response includes `total`, `page`, `page_size`, and `has_more`
 
 ---
 
@@ -493,7 +815,7 @@ Cost summary and event listing support:
 
 All timestamps are in ISO 8601 format (UTC):
 ```
-2024-02-09T12:00:00Z
+2026-02-10T12:00:00Z
 ```
 
 ---
@@ -501,10 +823,10 @@ All timestamps are in ISO 8601 format (UTC):
 ## Data Types
 
 ### Cost Values
-All cost values are in USD and stored with 6 decimal places precision.
+All cost values are in USD (float).
 
 ### Token Counts
-Token counts are integers (whole tokens).
+Token counts are integers.
 
 ### Percentages
-Percentages are floats (0-100).
+Percentages are floats (0–100), except `hit_rate` which is 0–1.

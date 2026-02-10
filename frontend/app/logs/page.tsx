@@ -9,7 +9,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Navigation from '@/components/Navigation';
 import LogsTable from '@/components/LogsTable';
-import { api, isAuthenticated, getLogs, downloadExport, LogsParams } from '@/lib/api';
+import { isAuthenticated, getLogs, downloadExport, LogsParams } from '@/lib/api';
 import { UsageLogEntry } from '@/types';
 
 export default function LogsPage() {

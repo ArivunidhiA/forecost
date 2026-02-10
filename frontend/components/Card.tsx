@@ -30,7 +30,7 @@ export const Card = ({
 };
 
 interface CardHeaderProps extends HTMLAttributes<HTMLDivElement> {
-  children: ReactNode;
+  children?: ReactNode;
   title?: string;
   subtitle?: string;
 }

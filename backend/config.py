@@ -4,9 +4,11 @@ Configuration management for LLMLab backend.
 Loads settings from environment variables with validation.
 """
 
+import base64
 from functools import lru_cache
 from typing import List, Optional
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -37,6 +39,34 @@ class Settings(BaseSettings):
 
     # Environment
     environment: str = "development"
+
+    @field_validator('jwt_secret')
+    @classmethod
+    def jwt_secret_min_length(cls, v: str) -> str:
+        if len(v) < 32:
+            raise ValueError('jwt_secret must be at least 32 characters long')
+        return v
+
+    @field_validator('encryption_key')
+    @classmethod
+    def encryption_key_valid_base64(cls, v: str) -> str:
+        try:
+            decoded = base64.urlsafe_b64decode(v)
+            if len(decoded) != 32:
+                raise ValueError
+        except Exception:
+            raise ValueError(
+                'encryption_key must be a valid 44-character base64-encoded Fernet key'
+            )
+        return v
+
+    @field_validator('environment')
+    @classmethod
+    def environment_must_be_valid(cls, v: str) -> str:
+        allowed = {'development', 'test', 'production'}
+        if v.lower() not in allowed:
+            raise ValueError(f'environment must be one of: {", ".join(sorted(allowed))}')
+        return v
 
     class Config:
         env_file = ".env"
