@@ -316,25 +316,64 @@ See full API docs in `/docs/API_SPEC.md`
 
 ## 🌍 Deployment
 
+LLMLab uses **Railway** for the backend and **Vercel** for the frontend, with automated CI/CD via GitHub Actions.
+
+### Prerequisites
+
+1. A [Railway](https://railway.app/) account with a project
+2. A [Vercel](https://vercel.com/) account linked to your GitHub repo
+3. A [GitHub OAuth App](https://github.com/settings/developers) for authentication
+
+### GitHub Repository Secrets
+
+Set these in your repo: **Settings > Secrets and variables > Actions**:
+
+| Secret | Description |
+|--------|-------------|
+| `RAILWAY_TOKEN` | Railway project deploy token |
+| `VERCEL_TOKEN` | Vercel personal access token |
+
 ### Railway (Backend)
-```bash
-# Connect GitHub repo to Railway
-# Set environment variables in Railway dashboard
-# Auto-deploys on git push to main
-```
+
+1. Create a new Railway project and add **PostgreSQL** and **Redis** add-ons.
+2. Connect your GitHub repo to Railway (set root directory to `backend/`).
+3. Set the following environment variables in the Railway dashboard:
+
+| Variable | Value |
+|----------|-------|
+| `DATABASE_URL` | Auto-set by Railway PostgreSQL add-on |
+| `REDIS_URL` | Auto-set by Railway Redis add-on |
+| `JWT_SECRET` | Generate: `openssl rand -hex 32` |
+| `ENCRYPTION_KEY` | Generate: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
+| `GITHUB_CLIENT_ID` | From your GitHub OAuth App |
+| `GITHUB_CLIENT_SECRET` | From your GitHub OAuth App |
+| `GITHUB_REDIRECT_URI` | `https://<your-railway-domain>/auth/github/callback` |
+| `CORS_ORIGINS` | `https://<your-vercel-domain>.vercel.app` |
+| `ENVIRONMENT` | `production` |
 
 ### Vercel (Frontend)
-```bash
-# Import project from GitHub
-# Set NEXT_PUBLIC_API_URL
-# Auto-deploys on git push
-```
 
-### Supabase (Database)
+1. Import the repo on Vercel (set root directory to `frontend/`).
+2. Set these environment variables:
+
+| Variable | Value |
+|----------|-------|
+| `NEXT_PUBLIC_API_URL` | `https://<your-railway-domain>` |
+| `NEXT_PUBLIC_GITHUB_CLIENT_ID` | From your GitHub OAuth App |
+| `NEXT_PUBLIC_GITHUB_REDIRECT_URI` | `https://<your-vercel-domain>.vercel.app/auth/callback` |
+
+### Docker (Self-hosted)
+
 ```bash
-# Create project at supabase.com
-# Run migration: psql < docs/DATABASE_SCHEMA.sql
-# Get CONNECTION_STRING for Railway
+# 1. Copy .env.example and set your secrets
+cp backend/.env.example .env
+# Edit .env — at minimum set JWT_SECRET and ENCRYPTION_KEY
+
+# 2. Start everything
+docker compose up --build -d
+
+# 3. Open dashboard
+open http://localhost:3000
 ```
 
 ---

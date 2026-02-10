@@ -7,7 +7,7 @@ and fires webhooks when anomalies are found.
 
 import logging
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List
 
 from sqlalchemy import func
@@ -36,7 +36,7 @@ def detect_anomalies(user_id: str, db: Session) -> List:
     from models import UsageLog
     from schemas import AnomalyEvent
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     fourteen_days_ago = now - timedelta(days=14)
 
     # Get daily costs for last 14 days
@@ -148,7 +148,7 @@ async def check_and_fire_anomaly_alerts(user_id: str, db: Session) -> None:
             return
 
         # Check dedup
-        alert_key = (user_id, datetime.utcnow().strftime("%Y-%m-%d"))
+        alert_key = (user_id, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
         if alert_key in _fired_anomaly_alerts:
             return
 

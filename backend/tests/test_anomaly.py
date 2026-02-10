@@ -1,6 +1,6 @@
 """Tests for anomaly detection."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -22,7 +22,7 @@ class TestDetectAnomalies:
         """No anomalies with insufficient historical data (< 3 days)."""
         from anomaly import detect_anomalies
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # Only 2 days of data
         for i in range(2):
             log = UsageLog(
@@ -44,7 +44,7 @@ class TestDetectAnomalies:
         """Detect a spending spike anomaly."""
         from anomaly import detect_anomalies
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # 13 normal days at $0.01
         for i in range(1, 14):
             log = UsageLog(
@@ -81,7 +81,7 @@ class TestDetectAnomalies:
         """Normal, consistent spending doesn't trigger anomalies."""
         from anomaly import detect_anomalies
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for i in range(14):
             log = UsageLog(
                 user_id=test_user.id,
@@ -103,7 +103,7 @@ class TestDetectAnomalies:
         """Detect a token usage surge."""
         from anomaly import detect_anomalies
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # 13 normal days with 1500 tokens
         for i in range(1, 14):
             log = UsageLog(
@@ -148,7 +148,7 @@ class TestAnomalyEndpoint:
 
     def test_anomalies_endpoint_with_spike(self, client, auth_headers, db_session, test_user):
         """Anomalies endpoint returns events when spike detected."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for i in range(1, 14):
             log = UsageLog(
                 user_id=test_user.id,
@@ -196,7 +196,7 @@ class TestAnomalyWebhookFiring:
 
         reset_fired_anomaly_alerts()
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for i in range(1, 14):
             log = UsageLog(
                 user_id=test_user.id,
@@ -253,7 +253,7 @@ class TestAnomalyWebhookFiring:
 
         reset_fired_anomaly_alerts()
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for i in range(1, 14):
             log = UsageLog(
                 user_id=test_user.id,

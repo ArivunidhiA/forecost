@@ -7,7 +7,7 @@ when thresholds are newly crossed.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy.orm import Session
@@ -39,7 +39,7 @@ async def check_and_fire_alerts(user_id: str, db: Session) -> None:
             return
 
         # Get current month's spend
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         month_start = now - timedelta(days=30)
         current_spend = sum(
             log.cost_usd

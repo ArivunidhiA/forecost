@@ -13,7 +13,7 @@ Tables:
 
 import secrets
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, Table, Text
@@ -57,7 +57,7 @@ class User(Base):
     email: str = Column(String(255), nullable=False, index=True)
     username: Optional[str] = Column(String(255), nullable=True)
     avatar_url: Optional[str] = Column(String(500), nullable=True)
-    created_at: datetime = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: datetime = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     is_active: bool = Column(Boolean, default=True, nullable=False)
 
     # Relationships
@@ -94,7 +94,7 @@ class ApiKey(Base):
     provider: str = Column(String(50), nullable=False, index=True)
     encrypted_key: str = Column(Text, nullable=False)
     proxy_key: str = Column(String(50), unique=True, nullable=False, index=True, default=generate_proxy_key)
-    created_at: datetime = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: datetime = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     last_used_at: Optional[datetime] = Column(DateTime, nullable=True)
     is_active: bool = Column(Boolean, default=True, nullable=False)
 
@@ -136,7 +136,7 @@ class UsageLog(Base):
     latency_ms: Optional[float] = Column(Float, nullable=True)
     cache_hit: bool = Column(Boolean, default=False, nullable=False)
     request_id: Optional[str] = Column(String(100), nullable=True)
-    created_at: datetime = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    created_at: datetime = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
     # Relationships
     user = relationship("User", back_populates="usage_logs")
@@ -164,8 +164,8 @@ class Budget(Base):
     amount_usd: float = Column(Float, nullable=False)
     period: str = Column(String(20), default="monthly", nullable=False)
     alert_threshold: float = Column(Float, default=80.0, nullable=False)
-    created_at: datetime = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at: datetime = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at: datetime = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: datetime = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
     # Relationships
     user = relationship("User", back_populates="budgets")
@@ -191,7 +191,7 @@ class Webhook(Base):
     url: str = Column(String(500), nullable=False)
     event_type: str = Column(String(50), nullable=False)
     is_active: bool = Column(Boolean, default=True, nullable=False)
-    created_at: datetime = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: datetime = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     # Relationships
     user = relationship("User", back_populates="webhooks")
@@ -230,7 +230,7 @@ class Tag(Base):
     user_id: str = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     name: str = Column(String(100), nullable=False)
     color: str = Column(String(7), default="#6366f1", nullable=False)
-    created_at: datetime = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: datetime = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     # Relationships
     user = relationship("User", back_populates="tags")
