@@ -171,8 +171,8 @@ export async function deleteKey(keyId: string): Promise<void> {
 /**
  * Get user's cost statistics
  */
-export async function getStats(period: string = 'month'): Promise<Stats> {
-  return apiFetch<Stats>(`/api/v1/stats?period=${period}`);
+export async function getStats(period: string = 'month', signal?: AbortSignal): Promise<Stats> {
+  return apiFetch<Stats>(`/api/v1/stats?period=${period}`, { signal });
 }
 
 // =============================================================================
@@ -182,8 +182,8 @@ export async function getStats(period: string = 'month'): Promise<Stats> {
 /**
  * Get user's budgets
  */
-export async function getBudgets(): Promise<Budget[]> {
-  const response = await apiFetch<BudgetListResponse>('/api/v1/budgets');
+export async function getBudgets(signal?: AbortSignal): Promise<Budget[]> {
+  const response = await apiFetch<BudgetListResponse>('/api/v1/budgets', { signal });
   return response.budgets;
 }
 
@@ -293,7 +293,7 @@ export interface LogsParams {
   sort_order?: string;
 }
 
-export async function getLogs(params: LogsParams = {}): Promise<UsageLogsResponse> {
+export async function getLogs(params: LogsParams = {}, signal?: AbortSignal): Promise<UsageLogsResponse> {
   const searchParams = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== '') {
@@ -301,7 +301,7 @@ export async function getLogs(params: LogsParams = {}): Promise<UsageLogsRespons
     }
   });
   const qs = searchParams.toString();
-  return apiFetch<UsageLogsResponse>(`/api/v1/logs${qs ? `?${qs}` : ''}`);
+  return apiFetch<UsageLogsResponse>(`/api/v1/logs${qs ? `?${qs}` : ''}`, { signal });
 }
 
 // =============================================================================
@@ -343,8 +343,8 @@ export async function getForecast(): Promise<ForecastData> {
 // ANOMALIES
 // =============================================================================
 
-export async function getAnomalies(): Promise<AnomalyResponse> {
-  return apiFetch<AnomalyResponse>('/api/v1/stats/anomalies');
+export async function getAnomalies(signal?: AbortSignal): Promise<AnomalyResponse> {
+  return apiFetch<AnomalyResponse>('/api/v1/stats/anomalies', { signal });
 }
 
 // =============================================================================

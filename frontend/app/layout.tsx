@@ -5,6 +5,7 @@
 
 import type { Metadata, Viewport } from 'next';
 import { ReactNode } from 'react';
+import ClientErrorBoundary from '@/components/ClientErrorBoundary';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -51,7 +52,9 @@ export default function RootLayout({
         />
       </head>
       <body className="antialiased">
-        {children}
+        <ClientErrorBoundary>
+          {children}
+        </ClientErrorBoundary>
       </body>
     </html>
   );

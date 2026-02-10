@@ -31,7 +31,7 @@ export default function LogsPage() {
   const [sortBy, setSortBy] = useState('created_at');
   const [sortOrder, setSortOrder] = useState('desc');
 
-  const fetchLogs = useCallback(async () => {
+  const fetchLogs = useCallback(async (signal?: AbortSignal) => {
     setIsLoading(true);
     try {
       const params: LogsParams = {
@@ -48,11 +48,12 @@ export default function LogsPage() {
       if (dateFrom) params.date_from = dateFrom;
       if (dateTo) params.date_to = dateTo;
 
-      const data = await getLogs(params);
+      const data = await getLogs(params, signal);
       setLogs(data.logs);
       setTotal(data.total);
       setHasMore(data.has_more);
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       console.error('Failed to fetch logs:', err);
     } finally {
       setIsLoading(false);
@@ -64,7 +65,9 @@ export default function LogsPage() {
       router.push('/');
       return;
     }
-    fetchLogs();
+    const controller = new AbortController();
+    fetchLogs(controller.signal);
+    return () => controller.abort();
   }, [router, fetchLogs]);
 
   const handleSort = (field: string) => {

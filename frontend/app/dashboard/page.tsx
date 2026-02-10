@@ -34,12 +34,12 @@ export default function DashboardPage() {
   /**
    * Fetch stats and budgets from API
    */
-  const fetchStats = useCallback(async () => {
+  const fetchStats = useCallback(async (signal?: AbortSignal) => {
     try {
       const [data, budgetList, anomalies] = await Promise.all([
-        api.getStats('month'),
-        api.getBudgets().catch(() => [] as Budget[]),
-        api.getAnomalies().catch(() => null as AnomalyResponse | null),
+        api.getStats('month', signal),
+        api.getBudgets(signal).catch(() => [] as Budget[]),
+        api.getAnomalies(signal).catch(() => null as AnomalyResponse | null),
       ]);
       setStats(data);
       setBudgets(budgetList);
@@ -47,6 +47,7 @@ export default function DashboardPage() {
       setLastUpdated(new Date());
       setError(null);
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       console.error('Failed to fetch stats:', err);
       setError('Failed to load statistics. Please try again.');
     }
@@ -56,6 +57,8 @@ export default function DashboardPage() {
    * Initial load and auth check
    */
   useEffect(() => {
+    const controller = new AbortController();
+
     const init = async () => {
       // Check authentication
       if (!isAuthenticated()) {
@@ -70,21 +73,53 @@ export default function DashboardPage() {
       }
 
       // Fetch initial stats
-      await fetchStats();
+      await fetchStats(controller.signal);
       setIsLoading(false);
     };
 
     init();
+    return () => controller.abort();
   }, [router, fetchStats]);
 
   /**
-   * Poll for updates every 30 seconds
+   * Poll for updates every 30 seconds, pause when tab is hidden
    */
   useEffect(() => {
     if (isLoading) return;
 
-    const interval = setInterval(fetchStats, 30000);
-    return () => clearInterval(interval);
+    let interval: ReturnType<typeof setInterval> | null = null;
+    let controller = new AbortController();
+
+    const startPolling = () => {
+      stopPolling();
+      controller = new AbortController();
+      interval = setInterval(() => fetchStats(controller.signal), 30000);
+    };
+
+    const stopPolling = () => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+      controller.abort();
+    };
+
+    const handleVisibility = () => {
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        fetchStats(new AbortController().signal); // immediate refresh on return
+        startPolling();
+      }
+    };
+
+    startPolling();
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      stopPolling();
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [isLoading, fetchStats]);
 
   // Loading state
