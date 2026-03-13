@@ -63,8 +63,13 @@ def _extract_model(data: dict) -> str:
     return "unknown"
 
 
+def _is_streaming(response) -> bool:
+    ct = response.headers.get("content-type", "")
+    return ct.startswith("text/event-stream")
+
+
 def _extract_and_log_usage(response) -> None:
-    if response.headers.get("Transfer-Encoding") == "chunked":
+    if _is_streaming(response):
         return
     try:
         data = response.json()
@@ -99,8 +104,6 @@ def _patched_send(self, *args, **kwargs):
         response = _original_send(self, *args, **kwargs)
     except Exception:
         raise
-    if kwargs.get("stream"):
-        return response
     try:
         _extract_and_log_usage(response)
     except Exception as e:
@@ -113,13 +116,39 @@ async def _patched_async_send(self, *args, **kwargs):
         response = await _original_async_send(self, *args, **kwargs)
     except Exception:
         raise
-    if kwargs.get("stream"):
-        return response
     try:
         _extract_and_log_usage(response)
     except Exception as e:
         _log_internal_error(e)
     return response
+
+
+def log_stream_usage(response_data: dict) -> None:
+    """Log usage from a streaming response after it has been consumed.
+
+    Call this after reading all chunks from a streaming LLM API call.
+    Pass the final accumulated response dict containing a "usage" key.
+    """
+    try:
+        extracted = _extract_usage(response_data)
+        if extracted is None:
+            return
+        tokens_in, tokens_out, _ = extracted
+        model = _extract_model(response_data)
+        provider = get_provider(model)
+        cost = calculate_cost(model, tokens_in, tokens_out)
+        project_id = _current_project_id
+        if project_id is None:
+            return
+        ts = datetime.now(timezone.utc).isoformat()
+        _get_queue().put(project_id, ts, model, provider, tokens_in, tokens_out, cost, None)
+        if _on_usage:
+            try:
+                _on_usage(model=model, tokens_in=tokens_in, tokens_out=tokens_out, cost=cost)
+            except Exception:
+                pass
+    except Exception as e:
+        _log_internal_error(e)
 
 
 def set_project_id(project_id: int | None) -> None:
@@ -134,6 +163,8 @@ def set_on_usage(callback: Callable[..., None] | None) -> None:
 
 def install(on_usage: Callable[..., None] | None = None) -> None:
     global _original_send, _original_async_send, _on_usage
+    if os.environ.get("LLMLAB_DISABLED", "").lower() in ("1", "true", "yes"):
+        return
     import httpx
 
     if _original_send is not None:

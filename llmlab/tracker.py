@@ -2,6 +2,7 @@
 
 import functools
 import json
+import os
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,10 +37,13 @@ def _find_project() -> dict | None:
                     data = tomllib.load(f)
             except Exception:
                 return None
-            path = data.get("path", str(parent))
+            toml_dir = str(toml_path.parent)
+            path = data.get("path", ".")
             if path == ".":
-                path = str(parent)
-            return get_project_by_path(path)
+                project_path = toml_dir
+            else:
+                project_path = str((Path(toml_dir) / path).resolve())
+            return get_project_by_path(os.path.abspath(project_path))
     return None
 
 
@@ -64,10 +68,17 @@ def _record_usage(model: str, tokens_in: int, tokens_out: int, cost: float) -> N
 
 
 def auto_track() -> None:
+    if os.environ.get("LLMLAB_DISABLED", "").lower() in ("1", "true", "yes"):
+        return
     proj = _find_project()
     if proj:
         interceptor.set_project_id(proj["id"])
     interceptor.install(on_usage=_record_usage)
+
+
+def log_stream_usage(response_data: dict) -> None:
+    """Log usage from a consumed streaming response. Delegates to interceptor."""
+    interceptor.log_stream_usage(response_data)
 
 
 def track_cost(provider: str = "openai"):

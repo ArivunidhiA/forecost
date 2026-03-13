@@ -5,16 +5,18 @@ __all__ = [
     "track_cost",
     "track",
     "log_call",
+    "log_stream_usage",
     "get_session_summary",
+    "disable",
     "__version__",
 ]
 
 
-def __getattr__(name):
+def __getattr__(name: str):
     if name == "auto_track":
-        from llmlab.interceptor import install
+        from llmlab.tracker import auto_track
 
-        return install
+        return auto_track
     if name == "track_cost":
         from llmlab.tracker import track_cost
 
@@ -27,8 +29,22 @@ def __getattr__(name):
         from llmlab.tracker import log_call
 
         return log_call
+    if name == "log_stream_usage":
+        from llmlab.tracker import log_stream_usage
+
+        return log_stream_usage
     if name == "get_session_summary":
         from llmlab.tracker import get_session_summary
 
         return get_session_summary
+    if name == "disable":
+        import os
+
+        from llmlab.interceptor import uninstall
+
+        def _disable() -> None:
+            uninstall()
+            os.environ["LLMLAB_DISABLED"] = "1"
+
+        return _disable
     raise AttributeError(f"module 'llmlab' has no attribute {name}")

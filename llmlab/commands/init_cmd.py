@@ -6,7 +6,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from llmlab.db import create_project, get_project_by_path
+from llmlab.db import create_project, get_or_create_db, get_project_by_path
 from llmlab.scope import analyze_heuristic, analyze_with_llm
 
 console = Console()
@@ -25,11 +25,22 @@ def init(smart, days, budget):
 
     existing = get_project_by_path(project_path)
     if existing:
-        console.print(
-            "[yellow]Project already initialized. Re-run with a different"
-            " directory or remove .llmlab.toml.[/yellow]"
-        )
-        raise SystemExit(1)
+        if not click.confirm("Re-initialize?"):
+            console.print(
+                f"[yellow]Project already initialized at {project_path}[/yellow]\n\n"
+                "  To reset: delete .llmlab.toml and run llmlab init again\n"
+                "  Your usage history in ~/.llmlab/costs.db is preserved."
+            )
+            raise SystemExit(1)
+        conn = get_or_create_db()
+        pid = existing["id"]
+        conn.execute("DELETE FROM forecasts WHERE project_id = ?", (pid,))
+        conn.execute("DELETE FROM usage_logs WHERE project_id = ?", (pid,))
+        conn.execute("DELETE FROM projects WHERE id = ?", (pid,))
+        conn.commit()
+        toml_path = os.path.join(project_path, ".llmlab.toml")
+        if os.path.exists(toml_path):
+            os.remove(toml_path)
 
     if smart:
         result = analyze_with_llm(project_path)
@@ -70,7 +81,7 @@ def init(smart, days, budget):
     config_path = os.path.join(project_path, ".llmlab.toml")
     created_at = datetime.now(timezone.utc).isoformat()
     config_content = f'''project_name = "{project_name}"
-project_path = "{project_path}"
+path = "."
 created_at = "{created_at}"
 '''
     try:
@@ -78,6 +89,13 @@ created_at = "{created_at}"
             f.write(config_content)
     except OSError as e:
         console.print(f"[yellow]Could not write .llmlab.toml: {e}[/yellow]")
+    else:
+        gitignore_path = os.path.join(project_path, ".gitignore")
+        if os.path.isfile(gitignore_path):
+            with open(gitignore_path, "r") as f:
+                gitignore_content = f.read()
+            if ".llmlab.toml" not in gitignore_content:
+                console.print("[dim]Tip: Add .llmlab.toml to your .gitignore[/dim]")
 
     table = Table(show_header=False)
     table.add_column("", style="dim")
@@ -96,3 +114,7 @@ created_at = "{created_at}"
 
     content = table
     console.print(Panel(content, title="[bold]llmlab initialized[/bold]", border_style="green"))
+    if result["project_type"] == "default":
+        console.print(
+            "[dim]Using default estimates. Override with: llmlab init --days 14 --budget 50[/dim]"
+        )

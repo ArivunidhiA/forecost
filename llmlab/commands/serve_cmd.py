@@ -66,7 +66,7 @@ class LLMLabHandler(BaseHTTPRequestHandler):
         if self.path == "/api/forecast":
             try:
                 forecaster = ProjectForecaster(project["id"])
-                result = forecaster.calculate_forecast()
+                result = forecaster.calculate_forecast(save=False)
                 _send_json(self, result)
             except Exception as e:
                 _send_json(self, {"error": str(e)}, 500)

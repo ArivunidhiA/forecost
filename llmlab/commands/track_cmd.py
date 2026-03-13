@@ -17,13 +17,26 @@ def track(limit):
     project = get_project_by_path(project_path)
 
     if project is None:
-        console.print("[yellow]No llmlab project found. Run 'llmlab init' first.[/yellow]")
+        console.print(
+            f"[red]No llmlab project found in {project_path}[/red]\n\n"
+            "  To get started:\n"
+            f"    cd {project_path}\n"
+            "    llmlab init\n\n"
+            "  llmlab looks for a .llmlab.toml file in the current directory."
+        )
         raise SystemExit(1)
 
     logs = get_recent_usage_logs(project["id"], limit=limit)
 
     if not logs:
-        console.print("[dim]No tracked calls yet.[/dim]")
+        console.print(
+            "[yellow]No tracked calls yet.[/yellow]\n\n"
+            "  Quick start:\n"
+            "    import llmlab\n"
+            "    llmlab.auto_track()  # Add to your app\n\n"
+            "  Or track manually:\n"
+            "    llmlab.log_call(model='gpt-4o', tokens_in=500, tokens_out=200)"
+        )
         return
 
     table = Table(title="Recent LLM calls")

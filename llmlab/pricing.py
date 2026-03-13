@@ -4,6 +4,7 @@ import os
 import re
 from typing import Optional
 
+# Last verified: March 2026
 FALLBACK_PRICING: dict[str, dict[str, float]] = {
     # OpenAI
     "gpt-4o": {"input": 2.50, "output": 10.00},
@@ -69,6 +70,36 @@ FALLBACK_PRICING: dict[str, dict[str, float]] = {
     "mistral-small-latest": {"input": 0.20, "output": 0.60},
     "open-mistral-nemo": {"input": 0.15, "output": 0.15},
     "codestral-latest": {"input": 0.20, "output": 0.60},
+    # OpenAI - newer models
+    "gpt-4.5-preview": {"input": 75.00, "output": 150.00},
+    "o3": {"input": 10.00, "output": 40.00},
+    "o3-2025-04-16": {"input": 10.00, "output": 40.00},
+    "o3-pro": {"input": 20.00, "output": 80.00},
+    "gpt-4o-audio-preview": {"input": 2.50, "output": 10.00},
+    "gpt-4o-realtime": {"input": 5.00, "output": 20.00},
+    # Anthropic - Claude 4 family
+    "claude-sonnet-4-20250514": {"input": 3.00, "output": 15.00},
+    "claude-opus-4-20250514": {"input": 15.00, "output": 75.00},
+    "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.00},
+    # Google Gemini 2.5
+    "gemini-2.5-pro": {"input": 1.25, "output": 10.00},
+    "gemini-2.5-pro-preview-05-06": {"input": 1.25, "output": 10.00},
+    "gemini-2.5-flash": {"input": 0.15, "output": 0.60},
+    "gemini-2.5-flash-preview-04-17": {"input": 0.15, "output": 0.60},
+    # DeepSeek
+    "deepseek-chat": {"input": 0.27, "output": 1.10},
+    "deepseek-reasoner": {"input": 0.55, "output": 2.19},
+    # xAI
+    "grok-2": {"input": 2.00, "output": 10.00},
+    "grok-2-mini": {"input": 0.30, "output": 0.50},
+    "grok-3": {"input": 3.00, "output": 15.00},
+    # Meta (via inference providers)
+    "llama-3.1-405b": {"input": 3.00, "output": 3.00},
+    "llama-3.1-70b": {"input": 0.80, "output": 0.80},
+    "llama-3.3-70b": {"input": 0.80, "output": 0.80},
+    # Cohere
+    "command-r-plus": {"input": 2.50, "output": 10.00},
+    "command-r": {"input": 0.15, "output": 0.60},
 }
 
 DEFAULT_COST = {"input": 5.0, "output": 15.0}
@@ -122,4 +153,12 @@ def get_provider(model: str) -> str:
         return "google"
     if m.startswith("mistral") or m.startswith("codestral") or m.startswith("open-mistral"):
         return "mistral"
+    if m.startswith("deepseek"):
+        return "deepseek"
+    if m.startswith("grok"):
+        return "xai"
+    if m.startswith("llama"):
+        return "meta"
+    if m.startswith("command"):
+        return "cohere"
     return "unknown"

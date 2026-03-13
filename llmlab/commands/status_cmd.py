@@ -26,12 +26,18 @@ def status():
     project = get_project_by_path(project_path)
 
     if project is None:
-        console.print("[yellow]No llmlab project found. Run 'llmlab init' first.[/yellow]")
+        console.print(
+            f"[red]No llmlab project found in {project_path}[/red]\n\n"
+            "  To get started:\n"
+            f"    cd {project_path}\n"
+            "    llmlab init\n\n"
+            "  llmlab looks for a .llmlab.toml file in the current directory."
+        )
         raise SystemExit(1)
 
     try:
         forecaster = ProjectForecaster(project["id"])
-        result = forecaster.calculate_forecast()
+        result = forecaster.calculate_forecast(save=False)
     except ValueError as e:
         console.print(f"[red]{e}[/red]")
         raise SystemExit(1)

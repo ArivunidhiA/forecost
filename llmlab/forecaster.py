@@ -2,6 +2,8 @@
 Adaptive Exponential Smoothing forecasting engine for LLM cost tracking.
 """
 
+from __future__ import annotations
+
 from llmlab.db import get_daily_costs, get_forecast_history, get_or_create_db, save_forecast
 
 
@@ -20,7 +22,7 @@ class ProjectForecaster:
         self._daily_costs = get_daily_costs(project_id)
         self._forecast_history = get_forecast_history(project_id)
 
-    def calculate_forecast(self) -> dict:
+    def calculate_forecast(self, *, save: bool = False) -> dict:
         active_days_data = [(day, cost) for day, cost in self._daily_costs if cost > 0]
         n = len(active_days_data)
         daily_costs = [c for _, c in active_days_data]
@@ -87,25 +89,41 @@ class ProjectForecaster:
         else:
             confidence = "very-high"
 
-        mape = None
-        if actual_spend > 0 and self._forecast_history:
-            errors = [
-                abs(h["projected_total"] - actual_spend) / actual_spend
-                for h in self._forecast_history
+        # Forecast stability: how much the projection changes between runs.
+        # Unlike MAPE (which needs ground truth), this measures convergence.
+        stability = None
+        stability_label = None
+        history_totals = [h["projected_total"] for h in self._forecast_history]
+        history_totals.append(projected_total)
+        recent = history_totals[-5:]
+        if len(recent) >= 2:
+            changes = [
+                abs(recent[i] - recent[i - 1]) / recent[i] * 100
+                for i in range(1, len(recent))
+                if recent[i] > 0
             ]
-            mape = sum(errors) / len(errors) * 100
+            if changes:
+                stability = sum(changes) / len(changes)
+                if stability < 5:
+                    stability_label = "converged"
+                elif stability <= 15:
+                    stability_label = "stabilizing"
+                else:
+                    stability_label = "adjusting"
 
         iteration = len(self._forecast_history) + 1
-        save_forecast(
-            self._project_id,
-            iteration,
-            projected_total,
-            remaining_active_days,
-            smoothed_ratio,
-            confidence,
-            n,
-            mape,
-        )
+
+        if save:
+            save_forecast(
+                self._project_id,
+                iteration,
+                projected_total,
+                remaining_active_days,
+                smoothed_ratio,
+                confidence,
+                n,
+                stability,
+            )
 
         return {
             "project_id": self._project_id,
@@ -119,7 +137,8 @@ class ProjectForecaster:
             "smoothed_burn_ratio": smoothed_ratio,
             "drift_status": drift_status,
             "confidence": confidence,
-            "mape": mape,
+            "stability": stability,
+            "stability_label": stability_label,
             "model_breakdown": model_breakdown,
             "iteration": iteration,
             "baseline_daily_cost": self._baseline_daily_cost,

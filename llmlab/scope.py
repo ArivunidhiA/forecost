@@ -84,29 +84,40 @@ def analyze_heuristic(project_path: str) -> dict:
     sdks = _detect_sdk_imports(project_path)
     use_anthropic = "anthropic" in sdks
 
+    if total_files < 10:
+        estimated_days = 7
+    elif total_files <= 50:
+        estimated_days = 14
+    elif total_files <= 200:
+        estimated_days = 21
+    else:
+        estimated_days = 30
+
     if has_agent_kw and not has_rag_kw:
         project_type = "agent"
         calls_per_day = 80
-        tokens_in, tokens_out = 800, 1500
+        tokens_in, tokens_out = 2000, 1500
+        model = "claude-3-5-sonnet-latest" if use_anthropic else "gpt-4o"
+        daily_cost = calls_per_day * calculate_cost(model, tokens_in, tokens_out)
     elif has_rag_kw or has_agent_kw:
         project_type = "rag"
-        calls_per_day = 120
-        tokens_in, tokens_out = 1200, 800
+        embed_calls, embed_model, embed_tokens = 100, "text-embedding-3-small", 1500
+        gen_calls = 25
+        gen_model = "claude-3-5-sonnet-latest" if use_anthropic else "gpt-4o"
+        gen_tokens_in, gen_tokens_out = 3000, 1000
+        model = gen_model
+        tokens_in, tokens_out = gen_tokens_in, gen_tokens_out
+        calls_per_day = embed_calls + gen_calls
+        daily_cost = embed_calls * calculate_cost(
+            embed_model, embed_tokens, 0
+        ) + gen_calls * calculate_cost(gen_model, gen_tokens_in, gen_tokens_out)
     else:
         project_type = "default"
         calls_per_day = 50
         tokens_in, tokens_out = 600, 1000
+        model = "claude-3-5-haiku-latest" if use_anthropic else "gpt-4o-mini"
+        daily_cost = calls_per_day * calculate_cost(model, tokens_in, tokens_out)
 
-    if total_files < 20:
-        estimated_days = 7
-    elif total_files <= 100:
-        estimated_days = 14
-    else:
-        estimated_days = 30
-
-    model = "claude-3-5-haiku-latest" if use_anthropic else "gpt-4o-mini"
-    cost_per_call = calculate_cost(model, tokens_in, tokens_out)
-    daily_cost = calls_per_day * cost_per_call
     total_cost = daily_cost * estimated_days
 
     return {

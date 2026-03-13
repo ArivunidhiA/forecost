@@ -5,9 +5,8 @@
 [![PyPI version](https://img.shields.io/pypi/v/llmlab.svg)](https://pypi.org/project/llmlab/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![GitHub stars](https://img.shields.io/github/stars/ArivunidhiA/llmlab.svg)](https://github.com/ArivunidhiA/llmlab)
 
-<!-- GIF placeholder -->
+<!-- GIF placeholder: demo output -->
 
 ## The Problem
 
@@ -23,6 +22,10 @@ llmlab forecast
 ```
 
 Initialize at project start, build as usual, and run `forecast` whenever you need a cost estimate. The more you use it, the smarter it gets.
+
+## See It in Action
+
+`llmlab demo` runs a forecast with sample data and no setup. Use it to see the full output before tracking your own project.
 
 ## The Magic: It Learns
 
@@ -41,10 +44,15 @@ By day 14, the model has enough data to self-correct for pricing changes and usa
 ```python
 import llmlab
 llmlab.auto_track()
-# That's it. Every LLM call is now tracked.
 ```
 
 Call `auto_track()` once at startup. llmlab intercepts OpenAI, Anthropic, and other provider calls automatically. No decorators, no manual logging.
+
+Note: `auto_track()` captures non-streaming calls automatically. For streaming responses, call `log_stream_usage` after consuming the stream:
+
+```python
+llmlab.log_stream_usage(response_data)
+```
 
 ## Manual Tracking
 
@@ -55,38 +63,68 @@ import llmlab
 
 @llmlab.track_cost(provider="openai")
 def call_gpt(prompt: str):
-    return openai.ChatCompletion.create(model="gpt-4", messages=[{"role": "user", "content": prompt}])
+    return openai.chat.completions.create(model="gpt-4", messages=[{"role": "user", "content": prompt}])
 
 # Or log calls manually
-llmlab.log_call(model="gpt-4", tokens=150, cost=0.003, provider="openai")
+llmlab.log_call(model="gpt-4", tokens_in=500, tokens_out=200, provider="openai")
 ```
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `llmlab init` | Initialize project and create `.llmlab` config |
+| `llmlab init` | Initialize project and create `.llmlab.toml` config |
+| `llmlab init --budget X` | Set a budget cap in USD |
 | `llmlab forecast` | Show cost forecast in terminal |
-| `llmlab forecast --tui` | Interactive TUI dashboard |
+| `llmlab forecast --tui` | Interactive TUI dashboard (requires `pip install llmlab[tui]`) |
 | `llmlab forecast --json` | JSON output for CI/scripts |
+| `llmlab forecast --exit-code` | Exit 1 if projected over budget, 2 if actual over budget (for CI) |
 | `llmlab status` | Show current usage and summary |
-| `llmlab track` | Start tracking session |
-| `llmlab serve` | Run local API server for dashboards |
+| `llmlab track` | View recent tracked LLM calls |
+| `llmlab watch` | Live cost dashboard; updates as your app makes calls |
+| `llmlab demo` | Run forecast with sample data, no setup needed |
+| `llmlab optimize` | Suggest cost optimizations based on usage |
+| `llmlab reset` | Reset the current project (optionally keep usage logs) |
+| `llmlab serve` | Run local API server for programmatic access |
 
-## Advanced Usage
+## Budget Enforcement
 
-- **TUI dashboard**: `pip install llmlab[tui]` then `llmlab forecast --tui`
-- **JSON output for CI**: `llmlab forecast --json`
-- **Local API server**: `llmlab serve`
-- **Smart init with LLM**: `pip install llmlab[llm]` then `llmlab init --smart`
+Set a budget at init with `--budget`:
+
+```bash
+llmlab init --budget 100
+```
+
+Use `--exit-code` on forecast to fail CI when over budget:
+
+```yaml
+- name: Check LLM Budget
+  run: |
+    pip install llmlab
+    llmlab forecast --exit-code
+```
+
+Exit codes: 0 = on track, 1 = projected over budget, 2 = actual spend over budget.
+
+## Disabling in Tests
+
+```bash
+LLMLAB_DISABLED=1 pytest
+```
+
+Or in code:
+
+```python
+llmlab.disable()
+```
 
 ## How Forecasting Works
 
-llmlab uses **Adaptive Exponential Smoothing** on your daily spend. It weights recent days more heavily and adjusts for trends. Pricing ratios (cost per token) are inferred from your data and self-correct when provider prices change. The result is a forecast that adapts to your project's actual usage, not generic benchmarks.
+llmlab uses **Adaptive Exponential Smoothing** on your daily spend. It weights recent days more heavily and adjusts for trends. Pricing ratios (cost per token) are inferred from your data and self-correct when provider prices change. A forecast stability metric tracks how much projections change between runs (converged, stabilizing, or adjusting). The result is a forecast that adapts to your project's actual usage, not generic benchmarks.
 
 ## Contributing
 
-Contributions are welcome. Please open an issue or pull request on [GitHub](https://github.com/ArivunidhiA/llmlab).
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

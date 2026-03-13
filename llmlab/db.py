@@ -249,6 +249,9 @@ class WriteQueue:
         )
 
     def _worker(self) -> None:
+        _ensure_dir()
+        writer_conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
+        _apply_pragmas(writer_conn)
         batch: list[tuple] = []
         last_flush = time.monotonic()
         while True:
@@ -257,25 +260,25 @@ class WriteQueue:
             except Empty:
                 now = time.monotonic()
                 if batch and (now - last_flush) >= _FLUSH_INTERVAL:
-                    self._flush(batch)
+                    self._flush(batch, writer_conn)
                     batch = []
                     last_flush = now
                 continue
             if item is None:
-                self._flush(batch)
+                self._flush(batch, writer_conn)
+                writer_conn.close()
                 break
             batch.append(item)
             now = time.monotonic()
             if len(batch) >= _BATCH_SIZE or (now - last_flush) >= _FLUSH_INTERVAL:
-                self._flush(batch)
+                self._flush(batch, writer_conn)
                 batch = []
                 last_flush = now
 
-    def _flush(self, batch: list[tuple]) -> None:
+    def _flush(self, batch: list[tuple], conn: sqlite3.Connection) -> None:
         if not batch:
             return
         try:
-            conn = get_or_create_db()
             _insert_usage_logs_batch(conn, batch)
         except Exception:
             pass
