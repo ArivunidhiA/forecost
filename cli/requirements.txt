@@ -1,9 +1,0 @@
-# Core dependencies
-click>=8.0.0
-httpx>=0.24.0
-cryptography>=41.0.0
-
-# Development dependencies
-pytest>=7.0.0
-pytest-cov>=4.0.0
-pytest-mock>=3.0.0

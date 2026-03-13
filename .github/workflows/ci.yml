@@ -6,27 +6,12 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  PYTHON_VERSION: "3.11"
-  NODE_VERSION: "20"
-
 jobs:
-  # ============================================================================
-  # Backend Tests
-  # ============================================================================
-  backend-tests:
-    name: Backend Tests
+  test:
     runs-on: ubuntu-latest
-
-    env:
-      DATABASE_URL: "sqlite:///:memory:"
-      JWT_SECRET: "test-jwt-secret-key-for-ci"
-      ENCRYPTION_KEY: "RwW3L0xvSoW8IcxrPCGZ2DC3RL9ATh6YNZpbYo72Hsw="
-      GITHUB_CLIENT_ID: "test-client-id"
-      GITHUB_CLIENT_SECRET: "test-client-secret"
-      GITHUB_REDIRECT_URI: "http://localhost:8000/auth/github/callback"
-      CORS_ORIGINS: "http://localhost:3000"
-      ENVIRONMENT: "test"
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v4
@@ -34,90 +19,14 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: ${{ matrix.python-version }}
           cache: pip
 
       - name: Install dependencies
-        working-directory: backend
-        run: pip install -r requirements.txt
+        run: pip install -e ".[dev]"
 
-      - name: Run tests with coverage
-        working-directory: backend
-        run: python -m pytest tests/ -v --cov=. --cov-report=term-missing --tb=short
+      - name: Run ruff
+        run: ruff check llmlab/ tests/
 
-      - name: Upload coverage
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-coverage
-          path: backend/.coverage
-
-  # ============================================================================
-  # Frontend Lint & Build
-  # ============================================================================
-  frontend-lint:
-    name: Frontend Lint & Build
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Lint
-        working-directory: frontend
-        run: npm run lint
-
-      - name: Test
-        working-directory: frontend
-        run: npm run test -- --ci --passWithNoTests
-
-      - name: Build
-        working-directory: frontend
-        run: npm run build
-
-  # ============================================================================
-  # CLI Tests
-  # ============================================================================
-  cli-tests:
-    name: CLI Tests
-    runs-on: ubuntu-latest
-
-    env:
-      DATABASE_URL: "sqlite:///:memory:"
-      JWT_SECRET: "test-jwt-secret-key-for-ci"
-      ENCRYPTION_KEY: "RwW3L0xvSoW8IcxrPCGZ2DC3RL9ATh6YNZpbYo72Hsw="
-      GITHUB_CLIENT_ID: "test-client-id"
-      GITHUB_CLIENT_SECRET: "test-client-secret"
-      CORS_ORIGINS: "http://localhost:3000"
-      ENVIRONMENT: "test"
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-
-      - name: Install backend dependencies
-        working-directory: backend
-        run: pip install -r requirements.txt
-
-      - name: Install CLI dependencies
-        working-directory: cli
-        run: pip install -r requirements.txt 2>/dev/null || true
-
-      - name: Run CLI tests
-        working-directory: cli
-        run: python -m pytest tests/ -v --tb=short 2>/dev/null || echo "No CLI tests found"
+      - name: Run pytest
+        run: pytest --cov=llmlab tests/ -v
