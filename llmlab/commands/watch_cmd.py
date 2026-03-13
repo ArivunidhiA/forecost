@@ -8,7 +8,7 @@ from rich.live import Live
 from rich.table import Table
 from rich.text import Text
 
-from llmlab.db import get_daily_costs, get_project_by_path, get_recent_usage_logs
+from llmlab.db import get_daily_costs, get_or_create_db, get_project_by_path, get_recent_usage_logs
 
 console = Console()
 
@@ -18,12 +18,24 @@ def _build_display(project):
     daily_costs = get_daily_costs(pid)
     total = sum(c for _, c in daily_costs)
     logs = get_recent_usage_logs(pid, limit=5)
+
+    conn = get_or_create_db()
+    call_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM usage_logs WHERE project_id = ?",
+        (pid,),
+    ).fetchone()["cnt"]
+    total_tokens = conn.execute(
+        "SELECT COALESCE(SUM(tokens_in + tokens_out), 0) as tok "
+        "FROM usage_logs WHERE project_id = ?",
+        (pid,),
+    ).fetchone()["tok"]
+
     table = Table(show_header=False, box=None, padding=(0, 2))
     table.add_column("", style="dim")
     table.add_column("")
     table.add_row("Total", f"[bold green]${total:.4f}[/bold green]")
-    table.add_row("Calls", str(len(daily_costs)))
-    table.add_row("", "")
+    table.add_row("Calls", f"{call_count:,}")
+    table.add_row("Tokens", f"{total_tokens:,}")
 
     if logs:
         log_table = Table(title="Recent calls", box=None)

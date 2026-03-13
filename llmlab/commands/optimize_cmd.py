@@ -8,12 +8,15 @@ from llmlab.db import get_or_create_db, get_project_by_path
 
 console = Console()
 
-CHEAPER_ALTERNATIVES = {
-    "gpt-4o": ("gpt-4o-mini", 0.94),
+ALWAYS_SWITCH = {
     "gpt-4-turbo": ("gpt-4o", 0.67),
     "gpt-4": ("gpt-4o", 0.92),
     "claude-3-opus-20240229": ("claude-3-5-sonnet-latest", 0.80),
     "claude-3-opus-latest": ("claude-3-5-sonnet-latest", 0.80),
+}
+
+SHORT_OUTPUT_SWITCH = {
+    "gpt-4o": ("gpt-4o-mini", 0.94),
     "claude-3-5-sonnet-20241022": ("claude-3-5-haiku-latest", 0.73),
     "claude-3-5-sonnet-latest": ("claude-3-5-haiku-latest", 0.73),
 }
@@ -33,8 +36,7 @@ def optimize():
 
     conn = get_or_create_db()
     rows = conn.execute(
-        "SELECT model, COUNT(*) AS calls, "
-        "AVG(tokens_out) AS avg_out, SUM(cost_usd) AS total_cost "
+        "SELECT model, COUNT(*) AS calls, SUM(cost_usd) AS total_cost "
         "FROM usage_logs WHERE project_id = ? GROUP BY model",
         (project["id"],),
     ).fetchall()
@@ -53,21 +55,39 @@ def optimize():
     for r in rows:
         model = r["model"]
         calls = r["calls"]
-        avg_out = float(r["avg_out"] or 0)
         cost = float(r["total_cost"])
 
-        if model in CHEAPER_ALTERNATIVES:
-            alt, savings_pct = CHEAPER_ALTERNATIVES[model]
-            if avg_out < 200:
-                saved = cost * savings_pct
+        if model in ALWAYS_SWITCH:
+            alt, savings_pct = ALWAYS_SWITCH[model]
+            saved = cost * savings_pct
+            total_savings += saved
+            suggestions.append(
+                {
+                    "model": model,
+                    "alternative": alt,
+                    "reason": f"Newer/cheaper model ({calls} calls)",
+                    "savings": saved,
+                }
+            )
+        elif model in SHORT_OUTPUT_SWITCH:
+            alt, savings_pct = SHORT_OUTPUT_SWITCH[model]
+            short = conn.execute(
+                "SELECT COUNT(*) as cnt, COALESCE(SUM(cost_usd), 0) as cost "
+                "FROM usage_logs "
+                "WHERE project_id = ? AND model = ? AND tokens_out < 200",
+                (project["id"], model),
+            ).fetchone()
+            short_count = short["cnt"]
+            short_cost = float(short["cost"])
+            if short_count > 0:
+                saved = short_cost * savings_pct
                 total_savings += saved
                 suggestions.append(
                     {
                         "model": model,
                         "alternative": alt,
-                        "reason": f"Short outputs (avg {avg_out:.0f} tokens)",
+                        "reason": f"{short_count} of {calls} calls have short outputs",
                         "savings": saved,
-                        "calls": calls,
                     }
                 )
 
