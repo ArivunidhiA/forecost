@@ -21,6 +21,8 @@ llmlab init
 llmlab forecast
 ```
 
+Minimal footprint: llmlab has only 3 runtime dependencies (click, rich, httpx) and installs in under 3MB.
+
 Initialize at project start, build as usual, and run `forecast` whenever you need a cost estimate. The more you use it, the smarter it gets.
 
 ## See It in Action
@@ -145,6 +147,7 @@ without additional dependencies.
 | Cost forecasting | Yes | No | No | No |
 | Prediction intervals | Yes | No | No | No |
 | Zero infrastructure | Yes | No (proxy) | No (cloud) | No (cloud) |
+| Zero overhead on requests | Yes (post-response) | No (proxy latency) | No (proxy latency) | No (SDK wrapper) |
 | Local-only / private | Yes | Partial | No | No |
 | pip install, 2 lines | Yes | SDK wrapper | Proxy setup | SDK setup |
 | Free forever | Yes | Freemium | Freemium | $39/seat/mo |

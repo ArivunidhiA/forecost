@@ -1,5 +1,7 @@
+import csv
 import json
 import os
+import sys
 
 import click
 from rich.columns import Columns
@@ -151,11 +153,18 @@ def _build_premium_output(result: dict, project: dict) -> None:
 
 
 @click.command()
+@click.option(
+    "--output",
+    "output_fmt",
+    type=click.Choice(["markdown", "csv"]),
+    default=None,
+    help="Output format",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.option("--tui", is_flag=True, help="Launch interactive TUI dashboard")
 @click.option("--brief", is_flag=True, help="One-line summary")
 @click.option("--exit-code", is_flag=True, help="Exit 1 if over budget (for CI)")
-def forecast(as_json, tui, brief, exit_code):
+def forecast(output_fmt, as_json, tui, brief, exit_code):
     """Run cost forecast for the current project."""
     project_path = os.path.abspath(os.getcwd())
     project = get_project_by_path(project_path)
@@ -172,10 +181,56 @@ def forecast(as_json, tui, brief, exit_code):
 
     try:
         forecaster = ProjectForecaster(project["id"])
-        result = forecaster.calculate_forecast(save=True)
+        should_save = not exit_code
+        result = forecaster.calculate_forecast(save=should_save)
     except ValueError as e:
         console.print(f"[red]{e}[/red]")
         raise SystemExit(1)
+
+    if output_fmt == "markdown":
+        lines = [
+            f"## Cost Forecast: {result['project_name']}",
+            "",
+            "| Metric | Value |",
+            "|--------|-------|",
+            f"| Projected Total | ${result['projected_total']:.2f} |",
+            f"| Actual Spend | ${result['actual_spend']:.2f} |",
+            f"| Remaining | ${result['projected_remaining']:.2f} |",
+            f"| Day | {result['active_days']}/{result['total_days']} |",
+            f"| Confidence | {result['confidence']} |",
+            f"| Status | {result['drift_status'].replace('_', ' ').title()} |",
+        ]
+        if result.get("model_breakdown"):
+            lines.extend(
+                [
+                    "",
+                    "| Model | Spent | Projected | Share |",
+                    "|-------|-------|-----------|-------|",
+                ]
+            )
+            for m in result["model_breakdown"]:
+                lines.append(
+                    f"| {m['model']} | ${m['spent']:.2f}"
+                    f" | ${m['projected']:.2f} | {m['share']:.0%} |"
+                )
+        print("\n".join(lines))
+        if exit_code:
+            _check_budget_exit(project, result)
+        return
+
+    if output_fmt == "csv":
+        writer = csv.writer(sys.stdout)
+        writer.writerow(["metric", "value"])
+        writer.writerow(["projected_total", f"{result['projected_total']:.4f}"])
+        writer.writerow(["actual_spend", f"{result['actual_spend']:.4f}"])
+        writer.writerow(["projected_remaining", f"{result['projected_remaining']:.4f}"])
+        writer.writerow(["confidence", result["confidence"]])
+        writer.writerow(["drift_status", result["drift_status"]])
+        for m in result.get("model_breakdown", []):
+            writer.writerow([f"model:{m['model']}", f"{m['spent']:.4f}"])
+        if exit_code:
+            _check_budget_exit(project, result)
+        return
 
     if as_json:
         print(json.dumps(result, indent=2))

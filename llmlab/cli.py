@@ -1,6 +1,7 @@
 import click
 
 from llmlab.commands.demo_cmd import demo
+from llmlab.commands.export_cmd import export_data
 from llmlab.commands.forecast_cmd import forecast
 from llmlab.commands.init_cmd import init
 from llmlab.commands.optimize_cmd import optimize
@@ -19,6 +20,7 @@ def main():
 
 
 main.add_command(demo)
+main.add_command(export_data)
 main.add_command(init)
 main.add_command(forecast)
 main.add_command(optimize)

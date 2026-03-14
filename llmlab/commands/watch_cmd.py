@@ -15,20 +15,26 @@ console = Console()
 
 def _build_display(project):
     pid = project["id"]
-    daily_costs = get_daily_costs(pid)
-    total = sum(c for _, c in daily_costs)
-    logs = get_recent_usage_logs(pid, limit=5)
-
-    conn = get_or_create_db()
-    call_count = conn.execute(
-        "SELECT COUNT(*) as cnt FROM usage_logs WHERE project_id = ?",
-        (pid,),
-    ).fetchone()["cnt"]
-    total_tokens = conn.execute(
-        "SELECT COALESCE(SUM(tokens_in + tokens_out), 0) as tok "
-        "FROM usage_logs WHERE project_id = ?",
-        (pid,),
-    ).fetchone()["tok"]
+    try:
+        daily_costs = get_daily_costs(pid)
+        total = sum(c for _, c in daily_costs)
+        logs = get_recent_usage_logs(pid, limit=5)
+        conn = get_or_create_db()
+        call_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM usage_logs WHERE project_id = ?",
+            (pid,),
+        ).fetchone()["cnt"]
+        total_tokens = conn.execute(
+            "SELECT COALESCE(SUM(tokens_in + tokens_out), 0) as tok "
+            "FROM usage_logs WHERE project_id = ?",
+            (pid,),
+        ).fetchone()["tok"]
+    except Exception:
+        daily_costs = []
+        total = 0.0
+        logs = []
+        call_count = 0
+        total_tokens = 0
 
     table = Table(show_header=False, box=None, padding=(0, 2))
     table.add_column("", style="dim")

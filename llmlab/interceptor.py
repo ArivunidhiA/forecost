@@ -7,6 +7,15 @@ from typing import Callable
 from llmlab.db import WriteQueue
 from llmlab.pricing import calculate_cost, get_provider
 
+__all__ = [
+    "install",
+    "uninstall",
+    "set_project_id",
+    "set_on_usage",
+    "log_stream_usage",
+    "get_interceptor_stats",
+]
+
 _original_send = None
 _original_async_send = None
 _current_project_id: int | None = None
@@ -29,8 +38,17 @@ def _log_internal_error(e: Exception) -> None:
     log_path = os.path.join(log_dir, "error.log")
     try:
         os.makedirs(log_dir, exist_ok=True)
+        try:
+            if os.path.getsize(log_path) > 1_000_000:
+                with open(log_path, "r") as rf:
+                    lines = rf.readlines()[-100:]
+                with open(log_path, "w") as wf:
+                    wf.writelines(lines)
+        except OSError:
+            pass
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         with open(log_path, "a") as f:
-            f.write(f"[interceptor] {e!r}\n")
+            f.write(f"{ts} [interceptor] {e!r}\n")
     except OSError:
         pass
 
@@ -107,11 +125,7 @@ def _extract_and_log_usage(response) -> None:
 
 def _patched_send(self, *args, **kwargs):
     global _errors_count
-    try:
-        response = _original_send(self, *args, **kwargs)
-    except Exception:
-        _errors_count += 1
-        raise
+    response = _original_send(self, *args, **kwargs)
     try:
         _extract_and_log_usage(response)
     except Exception as e:
@@ -122,11 +136,7 @@ def _patched_send(self, *args, **kwargs):
 
 async def _patched_async_send(self, *args, **kwargs):
     global _errors_count
-    try:
-        response = await _original_async_send(self, *args, **kwargs)
-    except Exception:
-        _errors_count += 1
-        raise
+    response = await _original_async_send(self, *args, **kwargs)
     try:
         _extract_and_log_usage(response)
     except Exception as e:

@@ -1,19 +1,38 @@
 """Public tracking API for LLM cost tracking."""
 
+from __future__ import annotations
+
 import functools
 import json
 import os
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from llmlab import interceptor
 from llmlab.db import WriteQueue, get_project_by_path
 from llmlab.pricing import calculate_cost, get_provider
 
+if TYPE_CHECKING:
+    pass
+
+__all__ = [
+    "auto_track",
+    "track_cost",
+    "track",
+    "log_call",
+    "log_stream_usage",
+    "get_session_summary",
+    "_clear_project_cache",
+]
+
 _write_queue: WriteQueue | None = None
 _session_stats: dict[str, Any] = {}
+_stats_lock = threading.Lock()
+_cached_project: dict | None = None
+_project_cache_set = False
 
 
 def _get_queue() -> WriteQueue:
@@ -24,6 +43,10 @@ def _get_queue() -> WriteQueue:
 
 
 def _find_project() -> dict | None:
+    global _cached_project, _project_cache_set
+    if _project_cache_set:
+        return _cached_project
+
     cwd = Path.cwd()
     for parent in [cwd, *cwd.parents]:
         toml_path = parent / ".llmlab.toml"
@@ -32,10 +55,12 @@ def _find_project() -> dict | None:
                 try:
                     import tomllib
                 except ImportError:
-                    import tomli as tomllib
+                    import tomli as tomllib  # type: ignore[no-redef]
                 with open(toml_path, "rb") as f:
                     data = tomllib.load(f)
             except Exception:
+                _cached_project = None
+                _project_cache_set = True
                 return None
             toml_dir = str(toml_path.parent)
             path = data.get("path", ".")
@@ -43,28 +68,43 @@ def _find_project() -> dict | None:
                 project_path = toml_dir
             else:
                 project_path = str((Path(toml_dir) / path).resolve())
-            return get_project_by_path(os.path.abspath(project_path))
+            result = get_project_by_path(os.path.abspath(project_path))
+            _cached_project = result
+            _project_cache_set = True
+            return result
+
+    _cached_project = None
+    _project_cache_set = True
     return None
 
 
+def _clear_project_cache() -> None:
+    """Reset the cached project lookup. Used in tests."""
+    global _cached_project, _project_cache_set
+    _cached_project = None
+    _project_cache_set = False
+
+
 def _record_usage(model: str, tokens_in: int, tokens_out: int, cost: float) -> None:
-    global _session_stats
-    if "total_cost" not in _session_stats:
-        _session_stats = {
-            "total_cost": 0.0,
-            "total_tokens": 0,
-            "calls": 0,
-            "by_model": {},
-        }
-    _session_stats["total_cost"] += cost
-    _session_stats["total_tokens"] += tokens_in + tokens_out
-    _session_stats["calls"] += 1
-    by_model = _session_stats["by_model"]
-    if model not in by_model:
-        by_model[model] = {"cost": 0.0, "tokens": 0, "calls": 0}
-    by_model[model]["cost"] += cost
-    by_model[model]["tokens"] += tokens_in + tokens_out
-    by_model[model]["calls"] += 1
+    with _stats_lock:
+        if "total_cost" not in _session_stats:
+            _session_stats.update(
+                {
+                    "total_cost": 0.0,
+                    "total_tokens": 0,
+                    "calls": 0,
+                    "by_model": {},
+                }
+            )
+        _session_stats["total_cost"] += cost
+        _session_stats["total_tokens"] += tokens_in + tokens_out
+        _session_stats["calls"] += 1
+        by_model = _session_stats["by_model"]
+        if model not in by_model:
+            by_model[model] = {"cost": 0.0, "tokens": 0, "calls": 0}
+        by_model[model]["cost"] += cost
+        by_model[model]["tokens"] += tokens_in + tokens_out
+        by_model[model]["calls"] += 1
 
 
 def auto_track() -> None:
@@ -164,11 +204,7 @@ def log_call(
 
 
 def get_session_summary() -> dict:
-    if not _session_stats:
-        return {
-            "total_cost": 0.0,
-            "total_tokens": 0,
-            "calls": 0,
-            "by_model": {},
-        }
-    return dict(_session_stats)
+    with _stats_lock:
+        if not _session_stats:
+            return {"total_cost": 0.0, "total_tokens": 0, "calls": 0, "by_model": {}}
+        return dict(_session_stats)

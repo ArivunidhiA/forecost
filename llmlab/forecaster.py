@@ -15,6 +15,8 @@ import warnings
 
 from llmlab.db import get_daily_costs, get_forecast_history, get_or_create_db, save_forecast
 
+__all__ = ["ProjectForecaster"]
+
 _HAS_STATSMODELS = True
 try:
     import numpy as np

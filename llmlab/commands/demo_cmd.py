@@ -105,3 +105,13 @@ def demo():
     console.print("  cd your-project/")
     console.print("  llmlab init")
     console.print()
+
+    # Clean up demo data from DB
+    try:
+        conn = get_or_create_db()
+        conn.execute("DELETE FROM forecasts WHERE project_id = ?", (pid,))
+        conn.execute("DELETE FROM usage_logs WHERE project_id = ?", (pid,))
+        conn.execute("DELETE FROM projects WHERE id = ?", (pid,))
+        conn.commit()
+    except Exception:
+        pass

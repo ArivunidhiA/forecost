@@ -6,6 +6,8 @@ from pathlib import Path
 
 from llmlab.pricing import calculate_cost
 
+__all__ = ["analyze_heuristic", "analyze_with_llm"]
+
 _PROJECT_KEYWORDS = ("chatbot", "agent", "rag", "retrieval", "assistant")
 _SDK_PATTERNS = [
     (r"import\s+openai\b", "openai"),
@@ -33,7 +35,7 @@ def _is_ignored(path: Path, root: Path) -> bool:
     parts = rel.parts
     if ".git" in parts or "__pycache__" in parts or "node_modules" in parts:
         return True
-    if any(p.startswith(".") and p != ".py" for p in parts):
+    if any(p.startswith(".") for p in parts):
         return True
     return False
 

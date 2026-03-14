@@ -4,12 +4,25 @@ Zero-maintenance SQLite database module for llmlab cost tracking.
 
 import atexit
 import json
+import os
 import sqlite3
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from queue import Empty, Queue
+
+__all__ = [
+    "get_or_create_db",
+    "create_project",
+    "get_project_by_path",
+    "get_daily_costs",
+    "get_recent_usage_logs",
+    "get_active_days",
+    "save_forecast",
+    "get_forecast_history",
+    "WriteQueue",
+]
 
 _DB_PATH = Path.home() / ".llmlab" / "costs.db"
 _BATCH_SIZE = 100
@@ -294,6 +307,14 @@ class WriteQueue:
                 _insert_usage_logs_batch(conn, batch)
             except Exception:
                 try:
+                    try:
+                        if os.path.getsize(recovery_path) > 1_000_000:
+                            with open(recovery_path, "r") as rf:
+                                lines = rf.readlines()[-100:]
+                            with open(recovery_path, "w") as wf:
+                                wf.writelines(lines)
+                    except OSError:
+                        pass
                     with open(recovery_path, "a") as f:
                         for item in batch:
                             d = {
