@@ -1,6 +1,8 @@
 """Auto-tracking via httpx monkey-patching. Non-blocking, transport-level."""
 
+import json as _json
 import os
+import threading
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -24,6 +26,7 @@ _write_queue: WriteQueue | None = None
 _calls_tracked: int = 0
 _calls_skipped_streaming: int = 0
 _errors_count: int = 0
+_stats_lock = threading.Lock()
 
 
 def _get_queue() -> WriteQueue:
@@ -92,10 +95,16 @@ def _is_streaming(response) -> bool:
 def _extract_and_log_usage(response) -> None:
     global _calls_tracked, _calls_skipped_streaming
     if _is_streaming(response):
-        _calls_skipped_streaming += 1
+        with _stats_lock:
+            _calls_skipped_streaming += 1
         return
+    # Parse from response.content (bytes) to avoid consuming the body stream.
+    # httpx caches content after .read(), so this is safe for non-streaming responses.
     try:
-        data = response.json()
+        body = response.content
+        if not body:
+            return
+        data = _json.loads(body)
     except Exception:
         return
     extracted = _extract_usage(data)
@@ -110,7 +119,8 @@ def _extract_and_log_usage(response) -> None:
         return
     ts = datetime.now(timezone.utc).isoformat()
     _get_queue().put(project_id, ts, model, provider, tokens_in, tokens_out, cost, None)
-    _calls_tracked += 1
+    with _stats_lock:
+        _calls_tracked += 1
     if _on_usage:
         try:
             _on_usage(
@@ -129,7 +139,8 @@ def _patched_send(self, *args, **kwargs):
     try:
         _extract_and_log_usage(response)
     except Exception as e:
-        _errors_count += 1
+        with _stats_lock:
+            _errors_count += 1
         _log_internal_error(e)
     return response
 
@@ -140,7 +151,8 @@ async def _patched_async_send(self, *args, **kwargs):
     try:
         _extract_and_log_usage(response)
     except Exception as e:
-        _errors_count += 1
+        with _stats_lock:
+            _errors_count += 1
         _log_internal_error(e)
     return response
 
@@ -174,11 +186,12 @@ def log_stream_usage(response_data: dict) -> None:
 
 
 def get_interceptor_stats() -> dict:
-    return {
-        "calls_tracked": _calls_tracked,
-        "calls_skipped_streaming": _calls_skipped_streaming,
-        "errors": _errors_count,
-    }
+    with _stats_lock:
+        return {
+            "calls_tracked": _calls_tracked,
+            "calls_skipped_streaming": _calls_skipped_streaming,
+            "errors": _errors_count,
+        }
 
 
 def set_project_id(project_id: int | None) -> None:

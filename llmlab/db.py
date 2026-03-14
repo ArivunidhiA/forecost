@@ -241,7 +241,7 @@ class WriteQueue:
     """
 
     def __init__(self) -> None:
-        self._queue: Queue[tuple | None] = Queue()
+        self._queue: Queue[tuple | None] = Queue(maxsize=10_000)
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
         atexit.register(self._on_exit)
@@ -257,9 +257,12 @@ class WriteQueue:
         cost_usd: float,
         metadata: str | None = None,
     ) -> None:
-        self._queue.put_nowait(
-            (project_id, timestamp, model, provider, tokens_in, tokens_out, cost_usd, metadata)
-        )
+        try:
+            self._queue.put_nowait(
+                (project_id, timestamp, model, provider, tokens_in, tokens_out, cost_usd, metadata)
+            )
+        except Exception:
+            pass  # Drop item if queue is full — never block the caller
 
     def _worker(self) -> None:
         _ensure_dir()

@@ -66,7 +66,14 @@ def test_confidence_scoring_at_different_day_counts(tmp_path, monkeypatch):
     conn = get_or_create_db()
     base = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
-    for n, expected_conf in [(0, "low"), (2, "medium-low"), (5, "medium"), (10, "high")]:
+    # Explicitly test n=0 (project with 0 usage data)
+    conn.execute("DELETE FROM usage_logs WHERE project_id = ?", (pid,))
+    conn.commit()
+    f = ProjectForecaster(pid)
+    result = f.calculate_forecast()
+    assert result["confidence"] == "low"
+
+    for n, expected_conf in [(2, "medium-low"), (5, "medium"), (10, "high")]:
         conn.execute("DELETE FROM usage_logs WHERE project_id = ?", (pid,))
         conn.commit()
         items = [

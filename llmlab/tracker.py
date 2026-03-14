@@ -67,7 +67,15 @@ def _find_project() -> dict | None:
             if path == ".":
                 project_path = toml_dir
             else:
-                project_path = str((Path(toml_dir) / path).resolve())
+                resolved = (Path(toml_dir) / path).resolve()
+                # Reject traversal outside the toml directory
+                try:
+                    resolved.relative_to(Path(toml_dir).resolve())
+                except ValueError:
+                    _cached_project = None
+                    _project_cache_set = True
+                    return None
+                project_path = str(resolved)
             result = get_project_by_path(os.path.abspath(project_path))
             _cached_project = result
             _project_cache_set = True
@@ -113,6 +121,14 @@ def auto_track() -> None:
     proj = _find_project()
     if proj:
         interceptor.set_project_id(proj["id"])
+    else:
+        import sys
+
+        print(
+            "llmlab: no .llmlab.toml found in current or parent directories. "
+            "Tracking disabled. Run 'llmlab init' in your project root.",
+            file=sys.stderr,
+        )
     interceptor.install(on_usage=_record_usage)
 
 

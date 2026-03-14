@@ -106,7 +106,7 @@ class LLMLabHandler(BaseHTTPRequestHandler):
 @click.option("--port", default=8787, help="Port to listen on")
 def serve(port):
     """Start a local API server for programmatic access."""
-    server = HTTPServer(("", port), LLMLabHandler)
+    server = HTTPServer(("127.0.0.1", port), LLMLabHandler)
     print(f"llmlab server running on http://localhost:{port}")
     try:
         server.serve_forever()

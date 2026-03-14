@@ -24,9 +24,10 @@ def _count_files_by_extension(project_path: str) -> dict[str, int]:
     if not root.is_dir():
         return ext_counts
     for p in root.rglob("*"):
-        if p.is_file() and not _is_ignored(p, root):
-            ext = p.suffix or "(no ext)"
-            ext_counts[ext] = ext_counts.get(ext, 0) + 1
+        if p.is_symlink() or not p.is_file() or _is_ignored(p, root):
+            continue
+        ext = p.suffix or "(no ext)"
+        ext_counts[ext] = ext_counts.get(ext, 0) + 1
     return ext_counts
 
 
@@ -62,7 +63,7 @@ def _detect_sdk_imports(project_path: str) -> set[str]:
     root = Path(project_path)
     py_files = list(root.rglob("*.py"))[:100]
     for p in py_files:
-        if not p.is_file() or _is_ignored(p, root):
+        if p.is_symlink() or not p.is_file() or _is_ignored(p, root):
             continue
         try:
             lines = p.read_text(encoding="utf-8", errors="replace").splitlines()[:50]
