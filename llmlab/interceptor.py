@@ -12,6 +12,9 @@ _original_async_send = None
 _current_project_id: int | None = None
 _on_usage: Callable[..., None] | None = None
 _write_queue: WriteQueue | None = None
+_calls_tracked: int = 0
+_calls_skipped_streaming: int = 0
+_errors_count: int = 0
 
 
 def _get_queue() -> WriteQueue:
@@ -69,7 +72,9 @@ def _is_streaming(response) -> bool:
 
 
 def _extract_and_log_usage(response) -> None:
+    global _calls_tracked, _calls_skipped_streaming
     if _is_streaming(response):
+        _calls_skipped_streaming += 1
         return
     try:
         data = response.json()
@@ -87,6 +92,7 @@ def _extract_and_log_usage(response) -> None:
         return
     ts = datetime.now(timezone.utc).isoformat()
     _get_queue().put(project_id, ts, model, provider, tokens_in, tokens_out, cost, None)
+    _calls_tracked += 1
     if _on_usage:
         try:
             _on_usage(
@@ -100,25 +106,31 @@ def _extract_and_log_usage(response) -> None:
 
 
 def _patched_send(self, *args, **kwargs):
+    global _errors_count
     try:
         response = _original_send(self, *args, **kwargs)
     except Exception:
+        _errors_count += 1
         raise
     try:
         _extract_and_log_usage(response)
     except Exception as e:
+        _errors_count += 1
         _log_internal_error(e)
     return response
 
 
 async def _patched_async_send(self, *args, **kwargs):
+    global _errors_count
     try:
         response = await _original_async_send(self, *args, **kwargs)
     except Exception:
+        _errors_count += 1
         raise
     try:
         _extract_and_log_usage(response)
     except Exception as e:
+        _errors_count += 1
         _log_internal_error(e)
     return response
 
@@ -149,6 +161,14 @@ def log_stream_usage(response_data: dict) -> None:
                 pass
     except Exception as e:
         _log_internal_error(e)
+
+
+def get_interceptor_stats() -> dict:
+    return {
+        "calls_tracked": _calls_tracked,
+        "calls_skipped_streaming": _calls_skipped_streaming,
+        "errors": _errors_count,
+    }
 
 
 def set_project_id(project_id: int | None) -> None:

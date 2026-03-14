@@ -9,6 +9,7 @@ from rich.table import Table
 from rich.text import Text
 
 from llmlab.db import get_forecast_history, get_project_by_path
+from llmlab.forecaster import _HAS_STATSMODELS as _HAS_STATSMODELS_FLAG
 from llmlab.forecaster import ProjectForecaster
 
 console = Console()
@@ -124,6 +125,29 @@ def _build_premium_output(result: dict, project: dict) -> None:
     if result.get("stability") is not None:
         label = result.get("stability_label", "")
         console.print(f"[dim]Stability: {result['stability']:.1f}% avg change ({label})[/dim]")
+
+    pi80 = result.get("prediction_interval_80")
+    pi95 = result.get("prediction_interval_95")
+    if pi80:
+        console.print(f"[dim]80% range: ${pi80['lower']:.2f} -- ${pi80['upper']:.2f}[/dim]")
+    if pi95:
+        console.print(f"[dim]95% range: ${pi95['lower']:.2f} -- ${pi95['upper']:.2f}[/dim]")
+
+    mase_val = result.get("mase")
+    if mase_val is not None:
+        if mase_val < 1.0:
+            console.print(f"[dim]MASE: {mase_val:.2f} (beating naive baseline)[/dim]")
+        else:
+            console.print(f"[dim]MASE: {mase_val:.2f} (limited data)[/dim]")
+
+    mae_val = result.get("mae_dollars")
+    if mae_val is not None:
+        console.print(f"[dim]Expected accuracy: +/-${mae_val:.2f}[/dim]")
+
+    if not _HAS_STATSMODELS_FLAG and result.get("models_used") == ["ema_fallback"]:
+        console.print(
+            "\n[dim]Tip: pip install llmlab[forecast] for research-grade forecasting[/dim]"
+        )
 
 
 @click.command()

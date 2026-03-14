@@ -7,6 +7,7 @@ __all__ = [
     "log_call",
     "log_stream_usage",
     "get_session_summary",
+    "get_interceptor_stats",
     "disable",
     "__version__",
 ]
@@ -37,6 +38,10 @@ def __getattr__(name: str):
         from llmlab.tracker import get_session_summary
 
         return get_session_summary
+    if name == "get_interceptor_stats":
+        from llmlab.interceptor import get_interceptor_stats
+
+        return get_interceptor_stats
     if name == "disable":
         import os
 

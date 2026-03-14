@@ -27,10 +27,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+forecast = ["statsmodels>=0.14", "numpy>=1.24"]
 tui = ["textual>=0.50", "plotext>=5.0"]
 llm = ["litellm>=1.0"]
-all = ["llmlab[tui,llm]"]
-dev = ["pytest>=7.0", "pytest-cov", "ruff", "mypy"]
+all = ["llmlab[forecast,tui,llm]"]
+dev = ["pytest>=7.0", "pytest-cov", "ruff", "mypy", "statsmodels>=0.14", "numpy>=1.24"]
 
 [project.scripts]
 llmlab = "llmlab.cli:main"

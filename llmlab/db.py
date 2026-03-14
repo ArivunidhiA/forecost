@@ -278,10 +278,37 @@ class WriteQueue:
     def _flush(self, batch: list[tuple], conn: sqlite3.Connection) -> None:
         if not batch:
             return
+        log_path = Path.home() / ".llmlab" / "error.log"
+        recovery_path = Path.home() / ".llmlab" / "recovery.jsonl"
         try:
             _insert_usage_logs_batch(conn, batch)
-        except Exception:
-            pass
+        except Exception as e:
+            _ensure_dir()
+            try:
+                with open(log_path, "a") as f:
+                    f.write(f"[db] {e!r}\n")
+            except OSError:
+                pass
+            time.sleep(0.5)
+            try:
+                _insert_usage_logs_batch(conn, batch)
+            except Exception:
+                try:
+                    with open(recovery_path, "a") as f:
+                        for item in batch:
+                            d = {
+                                "project_id": item[0],
+                                "timestamp": item[1],
+                                "model": item[2],
+                                "provider": item[3],
+                                "tokens_in": item[4],
+                                "tokens_out": item[5],
+                                "cost_usd": item[6],
+                                "metadata": item[7],
+                            }
+                            f.write(json.dumps(d) + "\n")
+                except OSError:
+                    pass
 
     def _on_exit(self) -> None:
         self._queue.put_nowait(None)

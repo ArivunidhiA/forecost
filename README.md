@@ -31,13 +31,13 @@ Initialize at project start, build as usual, and run `forecast` whenever you nee
 
 llmlab improves its predictions as your usage data grows. Early forecasts are rough; later ones converge on reality.
 
-| Day  | Forecast (30-day) | Actual Trend | Accuracy |
-|------|-------------------|--------------|----------|
-| 3    | $120 - $180       | Early ramp   | ~40%     |
-| 7    | $95 - $130        | Pattern seen | ~75%     |
-| 14   | $102 - $108       | Converging   | ~95%     |
-
-By day 14, the model has enough data to self-correct for pricing changes and usage patterns. You get forecasts you can trust.
+| Day | What happens |
+|-----|-------------|
+| 0 | Baseline estimate from code analysis |
+| 1-3 | Rough forecast, wide prediction intervals |
+| 4-7 | Forecast stabilizing, intervals narrowing |
+| 8-14 | Reliable forecast, MASE < 1.0 |
+| 15+ | High-confidence projection |
 
 ## Auto-Tracking (Zero Code Changes)
 
@@ -118,9 +118,36 @@ Or in code:
 llmlab.disable()
 ```
 
-## How Forecasting Works
+## Forecasting Accuracy
 
-llmlab uses **Adaptive Exponential Smoothing** on your daily spend. It weights recent days more heavily and adjusts for trends. Pricing ratios (cost per token) are inferred from your data and self-correct when provider prices change. A forecast stability metric tracks how much projections change between runs (converged, stabilizing, or adjusting). The result is a forecast that adapts to your project's actual usage, not generic benchmarks.
+llmlab uses an ensemble of three statistical forecasting methods
+(Simple Exponential Smoothing, Damped Trend, and Linear Regression)
+inspired by the M4 Forecasting Competition, where simple combinations
+beat complex ML models across 100,000 time series.
+
+| Metric | What it means | Typical result |
+|--------|--------------|----------------|
+| MASE | Are we beating a naive guess? | < 1.0 after 5 days |
+| MAE | How many dollars could we be off? | Decreases as data grows |
+| 80% interval | Will the real cost land here? | ~80% of the time |
+| 95% interval | Conservative budget range | ~95% of the time |
+
+Install the ensemble engine for best results: `pip install llmlab[forecast]`
+
+The base install uses a simpler exponential moving average that works
+without additional dependencies.
+
+## Why llmlab?
+
+| Feature | llmlab | LiteLLM | Helicone | LangSmith |
+|---------|--------|---------|----------|-----------|
+| Cost tracking | Yes | Yes | Yes | Yes |
+| Cost forecasting | Yes | No | No | No |
+| Prediction intervals | Yes | No | No | No |
+| Zero infrastructure | Yes | No (proxy) | No (cloud) | No (cloud) |
+| Local-only / private | Yes | Partial | No | No |
+| pip install, 2 lines | Yes | SDK wrapper | Proxy setup | SDK setup |
+| Free forever | Yes | Freemium | Freemium | $39/seat/mo |
 
 ## Contributing
 
