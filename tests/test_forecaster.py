@@ -289,6 +289,43 @@ def test_forecaster_prefers_buckets_over_daily(tmp_path, monkeypatch):
     assert result["active_days"] == 1
 
 
+def test_adaptive_buckets_avoids_ema_fallback(tmp_path, monkeypatch):
+    """BUG 2 regression: closely-spaced calls should use finer buckets so the ensemble activates."""
+    db_path = tmp_path / "costs.db"
+    monkeypatch.setattr("forecost.db._DB_PATH", db_path)
+    monkeypatch.setattr("forecost.db._conn", None)
+    pid = create_project(
+        name="adaptive",
+        path=str(tmp_path),
+        baseline_daily_cost=10.0,
+        baseline_total_days=14,
+        baseline_total_cost=140.0,
+    )
+    conn = get_or_create_db()
+    base = datetime(2026, 3, 10, 14, 0, 0, tzinfo=timezone.utc)
+    items = [
+        (
+            pid,
+            (base + timedelta(minutes=i)).isoformat(),
+            "gpt-4o",
+            "openai",
+            200,
+            100,
+            1.0,
+            None,
+        )
+        for i in range(12)
+    ]
+    _insert_usage_logs_batch(conn, items)
+
+    f = ProjectForecaster(pid)
+    result = f.calculate_forecast()
+    assert "ema_fallback" not in result["models_used"]
+    assert result["n_models_used"] >= 1
+    assert result["data_points"] >= 3
+    assert "min_buckets" in result["data_granularity"]
+
+
 def test_day_one_accuracy_with_buckets(tmp_path, monkeypatch):
     """On day 1 with enough intra-day calls, the ensemble should engage (>= 2 models)."""
     db_path = tmp_path / "costs.db"

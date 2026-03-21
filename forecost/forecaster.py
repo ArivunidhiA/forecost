@@ -111,8 +111,18 @@ class ProjectForecaster:
         self._baseline_total_days = int(self._project["baseline_total_days"])
         self._baseline_total_cost = float(self._project["baseline_total_cost"])
         self._daily_costs = get_daily_costs(project_id)
-        self._bucketed_costs = get_bucketed_costs(project_id, bucket_minutes=15)
+        self._bucketed_costs, self._bucket_minutes = self._adaptive_buckets(project_id)
         self._forecast_history = get_forecast_history(project_id)
+
+    @staticmethod
+    def _adaptive_buckets(project_id: int) -> tuple[list[tuple[str, float]], int]:
+        """Try progressively finer bucket granularity until we get >= 3 data points."""
+        for minutes in (15, 5, 1):
+            buckets = get_bucketed_costs(project_id, bucket_minutes=minutes)
+            active = [(b, c) for b, c in buckets if c > 0]
+            if len(active) >= 3:
+                return buckets, minutes
+        return buckets, minutes
 
     def calculate_forecast(self, *, save: bool = False) -> dict:
         active_days_data = [(day, cost) for day, cost in self._daily_costs if cost > 0]
@@ -332,7 +342,7 @@ class ProjectForecaster:
             "remaining_days": remaining_days,
             "active_days": n_days,
             "data_points": n,
-            "data_granularity": "15min_buckets" if use_buckets else "daily",
+            "data_granularity": f"{self._bucket_minutes}min_buckets" if use_buckets else "daily",
             "total_days": self._baseline_total_days,
             "smoothed_burn_ratio": smoothed_ratio,
             "drift_status": drift_status,

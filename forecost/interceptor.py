@@ -214,11 +214,12 @@ def install(on_usage: Callable[..., None] | None = None) -> None:
         return
     import httpx
 
+    if on_usage is not None:
+        _on_usage = on_usage
     if _original_send is not None:
         return
     _original_send = httpx.Client.send
     _original_async_send = httpx.AsyncClient.send
-    _on_usage = on_usage
     httpx.Client.send = _patched_send
     httpx.AsyncClient.send = _patched_async_send
 

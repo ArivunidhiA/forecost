@@ -179,6 +179,30 @@ async def test_async_interceptor_tracks_usage(db_path, project_id, captured_usag
         interceptor.uninstall()
 
 
+def test_reinstall_updates_on_usage_callback(db_path, project_id, captured_usage):
+    """BUG 1 regression: calling install() again with on_usage must update the callback."""
+    captured, on_usage = captured_usage
+    body = {
+        "model": "gpt-4o",
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+    }
+
+    def handler(request):
+        return httpx.Response(200, json=body)
+
+    interceptor.install()
+    try:
+        interceptor.set_project_id(project_id)
+        interceptor.install(on_usage=on_usage)
+        transport = httpx.MockTransport(handler)
+        client = httpx.Client(transport=transport)
+        client.get("https://api.openai.com/v1/chat/completions")
+        assert len(captured) == 1
+        assert captured[0]["model"] == "gpt-4o"
+    finally:
+        interceptor.uninstall()
+
+
 def test_streaming_response_passes_through(db_path, project_id, captured_usage):
     captured, on_usage = captured_usage
     body = 'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n'
