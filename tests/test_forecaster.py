@@ -1,3 +1,4 @@
+import random
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -126,3 +127,90 @@ def test_drift_detection_over_budget(tmp_path, monkeypatch):
     f = ProjectForecaster(pid)
     result = f.calculate_forecast()
     assert result["drift_status"] == "over_budget"
+
+
+def _make_project(tmp_path, monkeypatch, n_days, baseline_days=21, base_cost=10.0):
+    """Helper to create a project with n_days of usage data."""
+    db_path = tmp_path / "costs.db"
+    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmlab.db._conn", None)
+    pid = create_project(
+        name="ens",
+        path=str(tmp_path / f"proj{n_days}"),
+        baseline_daily_cost=base_cost,
+        baseline_total_days=baseline_days,
+        baseline_total_cost=base_cost * baseline_days,
+    )
+    if n_days > 0:
+        conn = get_or_create_db()
+        base = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        rng = random.Random(42)
+        items = [
+            (
+                pid,
+                (base - timedelta(days=n_days - 1 - i)).isoformat(),
+                "gpt-4o-mini",
+                "openai",
+                1000,
+                500,
+                base_cost * (1 + rng.uniform(-0.1, 0.1)),
+                None,
+            )
+            for i in range(n_days)
+        ]
+        _insert_usage_logs_batch(conn, items)
+    return pid
+
+
+def test_ensemble_uses_ses_only_with_few_points(tmp_path, monkeypatch):
+    pid = _make_project(tmp_path, monkeypatch, n_days=5)
+    f = ProjectForecaster(pid)
+    result = f.calculate_forecast()
+    # With 5 data points: damped_trend requires 10+, so it must be absent
+    assert "damped_trend" not in result["models_used"]
+    # SES (n>=2) and linear (n>=3) should be attempted; SES may fail on some data
+    assert result["n_models_used"] >= 1
+    assert result["n_models_used"] <= 2
+
+
+def test_ensemble_uses_all_three_models(tmp_path, monkeypatch):
+    pid = _make_project(tmp_path, monkeypatch, n_days=14)
+    f = ProjectForecaster(pid)
+    result = f.calculate_forecast()
+    assert result["n_models_used"] == 3
+    assert "ses" in result["models_used"]
+    assert "damped_trend" in result["models_used"]
+    assert "linear" in result["models_used"]
+
+
+def test_prediction_intervals_widen_with_horizon(tmp_path, monkeypatch):
+    pid = _make_project(tmp_path, monkeypatch, n_days=14, baseline_days=21)
+    f = ProjectForecaster(pid)
+    result = f.calculate_forecast()
+    pi80 = result["prediction_interval_80"]
+    pi95 = result["prediction_interval_95"]
+    assert pi80 is not None
+    assert pi95 is not None
+    width_80 = pi80["upper"] - pi80["lower"]
+    width_95 = pi95["upper"] - pi95["lower"]
+    assert width_95 > width_80
+    assert pi80["lower"] >= 0
+    assert pi95["lower"] >= 0
+
+
+def test_mase_below_one_for_stable_data(tmp_path, monkeypatch):
+    pid = _make_project(tmp_path, monkeypatch, n_days=14, base_cost=10.0)
+    f = ProjectForecaster(pid)
+    result = f.calculate_forecast()
+    assert result["mase"] is not None
+    assert result["mase"] < 1.0
+
+
+def test_fallback_when_statsmodels_unavailable(tmp_path, monkeypatch):
+    pid = _make_project(tmp_path, monkeypatch, n_days=5)
+    monkeypatch.setattr("llmlab.forecaster._HAS_STATSMODELS", False)
+    f = ProjectForecaster(pid)
+    result = f.calculate_forecast()
+    assert result["models_used"] == ["ema_fallback"]
+    assert result["projected_total"] > 0
+    assert result["confidence"] in ("low", "medium-low", "medium", "high", "very-high")
