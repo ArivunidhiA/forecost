@@ -1,3 +1,5 @@
+HAS_PLOTEXT = False
+
 try:
     from textual.app import App, ComposeResult
     from textual.containers import Horizontal, Vertical
@@ -13,7 +15,7 @@ if HAS_TEXTUAL:
 
         HAS_PLOTEXT = True
     except ImportError:
-        HAS_PLOTEXT = False
+        pass
 
 
 def _text_bar_chart(daily_costs: list[tuple[str, float]], width: int = 40) -> str:

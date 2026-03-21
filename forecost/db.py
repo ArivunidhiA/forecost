@@ -154,6 +154,8 @@ def get_bucketed_costs(project_id: int, bucket_minutes: int = 15) -> list[tuple[
     Only returns buckets that have actual costs (no zero-fill).
     Default 15-minute buckets give 16 data points per 4-hour session.
     """
+    if bucket_minutes < 1:
+        raise ValueError(f"bucket_minutes must be >= 1, got {bucket_minutes}")
     conn = get_or_create_db()
     rows = conn.execute(
         """
@@ -360,5 +362,8 @@ class WriteQueue:
                     pass
 
     def _on_exit(self) -> None:
-        self._queue.put_nowait(None)
+        try:
+            self._queue.put(None, timeout=_EXIT_TIMEOUT)
+        except Exception:
+            return
         self._thread.join(timeout=_EXIT_TIMEOUT)

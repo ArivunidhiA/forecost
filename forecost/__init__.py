@@ -28,6 +28,9 @@ if TYPE_CHECKING:
         track_cost as track_cost,
     )
 
+    def disable() -> None: ...
+
+
 __all__ = [
     "auto_track",
     "track_cost",

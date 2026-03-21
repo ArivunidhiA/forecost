@@ -153,6 +153,32 @@ def test_interceptor_disabled_via_env_var(monkeypatch):
     interceptor.uninstall()
 
 
+@pytest.mark.asyncio
+async def test_async_interceptor_tracks_usage(db_path, project_id, captured_usage):
+    captured, on_usage = captured_usage
+    body = {
+        "id": "chatcmpl-async-123",
+        "model": "gpt-4o",
+        "choices": [{"message": {"role": "assistant", "content": "Hi"}}],
+        "usage": {"prompt_tokens": 30, "completion_tokens": 10},
+    }
+
+    async def handler(request):
+        return httpx.Response(200, json=body)
+
+    interceptor.install(on_usage=on_usage)
+    try:
+        interceptor.set_project_id(project_id)
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            await client.get("https://api.openai.com/v1/chat/completions")
+        assert len(captured) == 1
+        assert captured[0]["model"] == "gpt-4o"
+        assert captured[0]["tokens_in"] == 30
+    finally:
+        interceptor.uninstall()
+
+
 def test_streaming_response_passes_through(db_path, project_id, captured_usage):
     captured, on_usage = captured_usage
     body = 'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n'

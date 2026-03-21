@@ -181,7 +181,7 @@ def forecast(output_fmt, as_json, tui, brief, exit_code):
 
     try:
         forecaster = ProjectForecaster(project["id"])
-        should_save = not exit_code
+        should_save = not (exit_code or as_json or output_fmt or brief)
         result = forecaster.calculate_forecast(save=should_save)
     except ValueError as e:
         console.print(f"[red]{e}[/red]")

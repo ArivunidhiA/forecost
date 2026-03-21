@@ -103,6 +103,14 @@ if __name__ == "__main__":
         status = "PASS" if passed else "SKIP/FAIL"
         print(f"  {name}: {status}")
 
-    if all(r[1] for r in results if r[1] is not False):
+    ran = [r for r in results if r[1] is not False]
+    failed = [r for r in results if r[1] is False]
+    if ran and not failed:
         print("\nAll available SDKs validated.")
-    sys.exit(0)
+        sys.exit(0)
+    elif failed:
+        print(f"\n{len(failed)} SDK(s) failed.")
+        sys.exit(1)
+    else:
+        print("\nNo SDKs were available to test.")
+        sys.exit(0)

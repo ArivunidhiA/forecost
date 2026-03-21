@@ -31,10 +31,17 @@ def _count_files_by_extension(project_path: str) -> dict[str, int]:
     return ext_counts
 
 
+_MAX_SCAN_DEPTH = 6
+
+
 def _is_ignored(path: Path, root: Path) -> bool:
     rel = path.relative_to(root)
     parts = rel.parts
+    if len(parts) > _MAX_SCAN_DEPTH:
+        return True
     if ".git" in parts or "__pycache__" in parts or "node_modules" in parts:
+        return True
+    if "vendor" in parts or ".venv" in parts or "venv" in parts:
         return True
     if any(p.startswith(".") for p in parts):
         return True

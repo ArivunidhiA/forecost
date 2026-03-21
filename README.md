@@ -166,7 +166,7 @@ The base install uses a simpler exponential moving average that works without ad
 | pip install, 2 lines | Yes | SDK wrapper | Proxy setup | SDK setup |
 | Free forever | Yes | Freemium | Freemium | $39/seat/mo |
 
-Minimal footprint: 3 runtime dependencies (click, rich, httpx), under 3MB.
+Minimal footprint: 3 runtime dependencies (click, rich, httpx; plus tomli on Python 3.10), under 3MB.
 
 ## Data Storage
 

@@ -80,7 +80,8 @@ def init(smart, days, budget):
 
     config_path = os.path.join(project_path, ".forecost.toml")
     created_at = datetime.now(timezone.utc).isoformat()
-    config_content = f'''project_name = "{project_name}"
+    safe_name = project_name.replace("\\", "\\\\").replace('"', '\\"')
+    config_content = f'''project_name = "{safe_name}"
 path = "."
 created_at = "{created_at}"
 '''

@@ -6,6 +6,7 @@ from forecost.db import (
     WriteQueue,
     create_project,
     get_active_days,
+    get_bucketed_costs,
     get_daily_costs,
     get_forecast_history,
     get_or_create_db,
@@ -119,3 +120,61 @@ def test_save_forecast_and_get_forecast_history(db_path):
     assert history[0]["projected_total"] == 45.0
     assert history[0]["iteration"] == 1
     assert history[0]["mape"] == 8.5
+
+
+def test_bucketed_costs_zero_minutes_raises(db_path):
+    pid = create_project(
+        name="bk0",
+        path="/tmp/bk0",
+        baseline_daily_cost=1.0,
+        baseline_total_days=7,
+        baseline_total_cost=7.0,
+    )
+    with pytest.raises(ValueError, match="bucket_minutes must be >= 1"):
+        get_bucketed_costs(pid, bucket_minutes=0)
+
+
+def test_create_project_duplicate_path_raises(db_path):
+    create_project(
+        name="dup",
+        path="/tmp/dup",
+        baseline_daily_cost=1.0,
+        baseline_total_days=7,
+        baseline_total_cost=7.0,
+    )
+    import sqlite3
+
+    with pytest.raises(sqlite3.IntegrityError):
+        create_project(
+            name="dup2",
+            path="/tmp/dup",
+            baseline_daily_cost=2.0,
+            baseline_total_days=14,
+            baseline_total_cost=28.0,
+        )
+
+
+def test_write_queue_on_exit_handles_full_queue(db_path):
+    """_on_exit doesn't raise even if the internal queue is at capacity."""
+    q = WriteQueue()
+    dummy = (1, "2026-01-01T00:00:00Z", "m", "p", 0, 0, 0.0, None)
+    for _ in range(10_000):
+        try:
+            q._queue.put_nowait(dummy)
+        except Exception:
+            break
+    # _on_exit should not raise even when queue is full
+    q._on_exit()
+
+
+def test_calculate_cost_zero_tokens():
+    from forecost.pricing import calculate_cost
+
+    assert calculate_cost("gpt-4o", 0, 0) == 0.0
+
+
+def test_forecaster_nonexistent_project_raises(db_path):
+    from forecost.forecaster import ProjectForecaster
+
+    with pytest.raises(ValueError, match="Project 99999 not found"):
+        ProjectForecaster(99999)

@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import json
 import os
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from forecost import interceptor
-from forecost.db import WriteQueue, get_project_by_path
+from forecost.db import get_project_by_path
 from forecost.pricing import calculate_cost, get_provider
 
 if TYPE_CHECKING:
@@ -25,26 +27,24 @@ __all__ = [
     "log_call",
     "log_stream_usage",
     "get_session_summary",
-    "_clear_project_cache",
 ]
 
-_write_queue: WriteQueue | None = None
 _session_stats: dict[str, Any] = {}
 _stats_lock = threading.Lock()
 _cached_project: dict | None = None
 _project_cache_set = False
+_project_cache_time: float = 0.0
+_PROJECT_CACHE_TTL = 300.0  # 5 minutes
 
 
-def _get_queue() -> WriteQueue:
-    global _write_queue
-    if _write_queue is None:
-        _write_queue = WriteQueue()
-    return _write_queue
+def _get_queue():
+    """Reuse the interceptor module's WriteQueue (single shared queue)."""
+    return interceptor._get_queue()
 
 
 def _find_project() -> dict | None:
-    global _cached_project, _project_cache_set
-    if _project_cache_set:
+    global _cached_project, _project_cache_set, _project_cache_time
+    if _project_cache_set and (time.monotonic() - _project_cache_time) < _PROJECT_CACHE_TTL:
         return _cached_project
 
     cwd = Path.cwd()
@@ -61,6 +61,7 @@ def _find_project() -> dict | None:
             except Exception:
                 _cached_project = None
                 _project_cache_set = True
+                _project_cache_time = time.monotonic()
                 return None
             toml_dir = str(toml_path.parent)
             path = data.get("path", ".")
@@ -68,29 +69,32 @@ def _find_project() -> dict | None:
                 project_path = toml_dir
             else:
                 resolved = (Path(toml_dir) / path).resolve()
-                # Reject traversal outside the toml directory
                 try:
                     resolved.relative_to(Path(toml_dir).resolve())
                 except ValueError:
                     _cached_project = None
                     _project_cache_set = True
+                    _project_cache_time = time.monotonic()
                     return None
                 project_path = str(resolved)
             result = get_project_by_path(os.path.abspath(project_path))
             _cached_project = result
             _project_cache_set = True
+            _project_cache_time = time.monotonic()
             return result
 
     _cached_project = None
     _project_cache_set = True
+    _project_cache_time = time.monotonic()
     return None
 
 
 def _clear_project_cache() -> None:
     """Reset the cached project lookup. Used in tests."""
-    global _cached_project, _project_cache_set
+    global _cached_project, _project_cache_set, _project_cache_time
     _cached_project = None
     _project_cache_set = False
+    _project_cache_time = 0.0
 
 
 def _record_usage(model: str, tokens_in: int, tokens_out: int, cost: float) -> None:
@@ -121,6 +125,7 @@ def auto_track() -> None:
     proj = _find_project()
     if proj:
         interceptor.set_project_id(proj["id"])
+        interceptor.install(on_usage=_record_usage)
     else:
         import sys
 
@@ -129,7 +134,6 @@ def auto_track() -> None:
             "Tracking disabled. Run 'forecost init' in your project root.",
             file=sys.stderr,
         )
-    interceptor.install(on_usage=_record_usage)
 
 
 def log_stream_usage(response_data: dict) -> None:
@@ -138,31 +142,44 @@ def log_stream_usage(response_data: dict) -> None:
 
 
 def track_cost(provider: str = "openai"):
+    def _process_result(result):
+        if isinstance(result, dict) and "usage" in result:
+            usage = result["usage"]
+            if isinstance(usage, dict):
+                tokens_in = int(usage.get("prompt_tokens", usage.get("input_tokens", 0)))
+                tokens_out = int(usage.get("completion_tokens", usage.get("output_tokens", 0)))
+                model = result.get("model", result.get("id", "unknown"))
+                cost = calculate_cost(model, tokens_in, tokens_out)
+                _record_usage(model, tokens_in, tokens_out, cost)
+                proj = _find_project()
+                if proj:
+                    ts = datetime.now(timezone.utc).isoformat()
+                    _get_queue().put(
+                        proj["id"],
+                        ts,
+                        model,
+                        get_provider(model),
+                        tokens_in,
+                        tokens_out,
+                        cost,
+                        None,
+                    )
+
     def decorator(fn: Callable):
+        if asyncio.iscoroutinefunction(fn):
+
+            @functools.wraps(fn)
+            async def async_wrapper(*args, **kwargs):
+                result = await fn(*args, **kwargs)
+                _process_result(result)
+                return result
+
+            return async_wrapper
+
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             result = fn(*args, **kwargs)
-            if isinstance(result, dict) and "usage" in result:
-                usage = result["usage"]
-                if isinstance(usage, dict):
-                    tokens_in = int(usage.get("prompt_tokens", usage.get("input_tokens", 0)))
-                    tokens_out = int(usage.get("completion_tokens", usage.get("output_tokens", 0)))
-                    model = result.get("model", result.get("id", "unknown"))
-                    cost = calculate_cost(model, tokens_in, tokens_out)
-                    _record_usage(model, tokens_in, tokens_out, cost)
-                    proj = _find_project()
-                    if proj:
-                        ts = datetime.now(timezone.utc).isoformat()
-                        _get_queue().put(
-                            proj["id"],
-                            ts,
-                            model,
-                            get_provider(model),
-                            tokens_in,
-                            tokens_out,
-                            cost,
-                            None,
-                        )
+            _process_result(result)
             return result
 
         return wrapper

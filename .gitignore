@@ -33,11 +33,6 @@ env/
 .DS_Store
 Thumbs.db
 
-# Node.js / Frontend
-node_modules/
-.next/
-out/
-
 # Test
 .pytest_cache/
 htmlcov/

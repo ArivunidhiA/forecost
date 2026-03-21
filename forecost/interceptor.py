@@ -23,6 +23,7 @@ _original_async_send = None
 _current_project_id: int | None = None
 _on_usage: Callable[..., None] | None = None
 _write_queue: WriteQueue | None = None
+_queue_lock = threading.Lock()
 _calls_tracked: int = 0
 _calls_skipped_streaming: int = 0
 _errors_count: int = 0
@@ -31,9 +32,12 @@ _stats_lock = threading.Lock()
 
 def _get_queue() -> WriteQueue:
     global _write_queue
-    if _write_queue is None:
-        _write_queue = WriteQueue()
-    return _write_queue
+    if _write_queue is not None:
+        return _write_queue
+    with _queue_lock:
+        if _write_queue is None:
+            _write_queue = WriteQueue()
+        return _write_queue
 
 
 def _log_internal_error(e: Exception) -> None:

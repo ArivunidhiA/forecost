@@ -297,9 +297,8 @@ class ProjectForecaster:
         recent = history_totals[-5:]
         if len(recent) >= 2:
             changes = [
-                abs(recent[i] - recent[i - 1]) / recent[i] * 100
+                abs(recent[i] - recent[i - 1]) / max(recent[i], 0.001) * 100
                 for i in range(1, len(recent))
-                if recent[i] > 0
             ]
             if changes:
                 stability = sum(changes) / len(changes)
@@ -321,7 +320,7 @@ class ProjectForecaster:
                 smoothed_ratio,
                 confidence,
                 n_days,
-                stability,
+                mase,
             )
 
         return {
