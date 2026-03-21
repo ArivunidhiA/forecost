@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from llmcast import db, interceptor
+from forecost import db, interceptor
 
 
 @pytest.fixture
@@ -146,7 +146,7 @@ def test_interceptor_disabled_via_env_var(monkeypatch):
     import httpx
 
     interceptor.uninstall()
-    monkeypatch.setenv("LLMLAB_DISABLED", "1")
+    monkeypatch.setenv("FORECOST_DISABLED", "1")
     original_send = httpx.Client.send
     interceptor.install()
     assert httpx.Client.send is original_send

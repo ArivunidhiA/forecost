@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 
-from llmcast.pricing import calculate_cost
+from forecost.pricing import calculate_cost
 
 __all__ = ["analyze_heuristic", "analyze_with_llm"]
 

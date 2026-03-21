@@ -1,13 +1,13 @@
-# llmcast Development Guide
+# forecost Development Guide
 
 ## What This Project Is
-llmcast is a local-first Python CLI tool that forecasts LLM API costs.
+forecost is a local-first Python CLI tool that forecasts LLM API costs.
 It uses adaptive exponential smoothing (upgrading to a 3-model ensemble)
 on daily spend data to predict total project cost.
 
 ## Architecture Rules
-- All source code lives in llmcast/ (flat layout, not src/)
-- CLI commands are in llmcast/commands/ — each is a thin wrapper calling core logic
+- All source code lives in forecost/ (flat layout, not src/)
+- CLI commands are in forecost/commands/ — each is a thin wrapper calling core logic
 - Core modules: db.py (SQLite), pricing.py (static prices), forecaster.py (ensemble),
   interceptor.py (httpx patching), tracker.py (public API), scope.py (heuristic analyzer)
 - Tests live in tests/ and tests/benchmarks/
@@ -20,7 +20,7 @@ on daily spend data to predict total project cost.
    Status, serve, and JSON output do NOT save forecast rows.
 3. No network calls for pricing data. All prices are hardcoded in FALLBACK_PRICING dict.
 4. The WriteQueue worker thread has its OWN SQLite connection. Never share connections across threads.
-5. .llmcast.toml uses relative paths (path = "."). Never write absolute paths to config files.
+5. .forecost.toml uses relative paths (path = "."). Never write absolute paths to config files.
 
 ## Testing Rules
 - Run pytest tests/ -v after every change
@@ -35,12 +35,12 @@ on daily spend data to predict total project cost.
 - Don't add authentication or multi-user support
 - Don't add real-time pricing fetches from the internet
 - Don't add heavy ML dependencies (statsmodels is the ceiling)
-- Don't use except Exception: pass — always log errors to ~/.llmcast/error.log
+- Don't use except Exception: pass — always log errors to ~/.forecost/error.log
 
 ## Key Commands
 pip install -e ".[dev,forecast]"   # Install for development
 pytest tests/ -v                    # Run all tests
 pytest tests/benchmarks/ -v         # Run accuracy benchmarks
-ruff check llmcast/ tests/           # Lint
-llmcast demo                         # See it working with sample data
+ruff check forecost/ tests/           # Lint
+forecost demo                         # See it working with sample data
 python -m build                     # Build for PyPI

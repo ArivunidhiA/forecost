@@ -1,12 +1,12 @@
-# Contributing to llmcast
+# Contributing to forecost
 
-Thanks for your interest in contributing to llmcast.
+Thanks for your interest in contributing to forecost.
 
 ## Development Setup
 
 ```bash
-git clone https://github.com/ArivunidhiA/llmcast.git
-cd llmcast
+git clone https://github.com/ArivunidhiA/forecost.git
+cd forecost
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -23,8 +23,8 @@ pytest tests/ -v
 We use ruff for linting and formatting:
 
 ```bash
-ruff check llmcast/ tests/
-ruff format llmcast/ tests/
+ruff check forecost/ tests/
+ruff format forecost/ tests/
 ```
 
 ## Pull Request Process

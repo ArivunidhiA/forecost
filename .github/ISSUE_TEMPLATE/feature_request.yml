@@ -1,5 +1,5 @@
 name: Feature Request
-description: Suggest a new feature for llmcast
+description: Suggest a new feature for forecost
 labels: [enhancement]
 body:
   - type: textarea

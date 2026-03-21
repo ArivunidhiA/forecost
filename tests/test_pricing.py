@@ -1,4 +1,4 @@
-from llmcast.pricing import DEFAULT_COST, calculate_cost, get_provider
+from forecost.pricing import DEFAULT_COST, calculate_cost, get_provider
 
 
 def test_calculate_cost_gpt4o():

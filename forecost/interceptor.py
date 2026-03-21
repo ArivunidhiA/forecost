@@ -6,8 +6,8 @@ import threading
 from datetime import datetime, timezone
 from typing import Callable
 
-from llmcast.db import WriteQueue
-from llmcast.pricing import calculate_cost, get_provider
+from forecost.db import WriteQueue
+from forecost.pricing import calculate_cost, get_provider
 
 __all__ = [
     "install",
@@ -37,7 +37,7 @@ def _get_queue() -> WriteQueue:
 
 
 def _log_internal_error(e: Exception) -> None:
-    log_dir = os.path.expanduser("~/.llmcast")
+    log_dir = os.path.expanduser("~/.forecost")
     log_path = os.path.join(log_dir, "error.log")
     try:
         os.makedirs(log_dir, exist_ok=True)
@@ -206,7 +206,7 @@ def set_on_usage(callback: Callable[..., None] | None) -> None:
 
 def install(on_usage: Callable[..., None] | None = None) -> None:
     global _original_send, _original_async_send, _on_usage
-    if os.environ.get("LLMLAB_DISABLED", "").lower() in ("1", "true", "yes"):
+    if os.environ.get("FORECOST_DISABLED", "").lower() in ("1", "true", "yes"):
         return
     import httpx
 

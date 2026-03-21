@@ -110,7 +110,7 @@ _DATE_SUFFIX_RE = re.compile(r"-\d{4}(-\d{2}-\d{2}|\d{4})?$")
 
 
 def _log_unknown_model(model: str) -> None:
-    log_dir = os.path.expanduser("~/.llmcast")
+    log_dir = os.path.expanduser("~/.forecost")
     log_path = os.path.join(log_dir, "error.log")
     try:
         os.makedirs(log_dir, exist_ok=True)

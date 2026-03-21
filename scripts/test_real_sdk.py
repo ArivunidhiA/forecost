@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manual validation script for testing llmcast with real LLM SDKs.
+"""Manual validation script for testing forecost with real LLM SDKs.
 
 Run this script with an API key to verify interceptor works with real SDKs.
 NOT run in CI -- this makes actual API calls that cost money (~$0.001 per run).
@@ -25,8 +25,8 @@ def test_openai():
         print("SKIP: OPENAI_API_KEY not set")
         return False
 
-    import llmcast
-    llmcast.auto_track()
+    import forecost
+    forecost.auto_track()
 
     client = openai.OpenAI(api_key=key)
     response = client.chat.completions.create(
@@ -35,8 +35,8 @@ def test_openai():
         max_tokens=5,
     )
 
-    summary = llmcast.get_session_summary()
-    stats = llmcast.get_interceptor_stats()
+    summary = forecost.get_session_summary()
+    stats = forecost.get_interceptor_stats()
 
     print(f"  Response: {response.choices[0].message.content}")
     print(f"  Session: {summary}")
@@ -63,8 +63,8 @@ def test_anthropic():
         print("SKIP: ANTHROPIC_API_KEY not set")
         return False
 
-    import llmcast
-    llmcast.auto_track()
+    import forecost
+    forecost.auto_track()
 
     client = anthropic.Anthropic(api_key=key)
     response = client.messages.create(
@@ -73,7 +73,7 @@ def test_anthropic():
         messages=[{"role": "user", "content": "Say 'test' and nothing else."}],
     )
 
-    summary = llmcast.get_session_summary()
+    summary = forecost.get_session_summary()
     print(f"  Response: {response.content[0].text}")
     print(f"  Session: {summary}")
 
@@ -86,7 +86,7 @@ def test_anthropic():
 
 
 if __name__ == "__main__":
-    print("llmcast SDK Validation (makes real API calls ~$0.001)")
+    print("forecost SDK Validation (makes real API calls ~$0.001)")
     print("=" * 50)
 
     results = []

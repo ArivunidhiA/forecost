@@ -4,8 +4,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import click
 
-from llmcast.db import get_active_days, get_daily_costs, get_project_by_path, get_recent_usage_logs
-from llmcast.forecaster import ProjectForecaster
+from forecost.db import get_active_days, get_daily_costs, get_project_by_path, get_recent_usage_logs
+from forecost.forecaster import ProjectForecaster
 
 CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
@@ -40,7 +40,7 @@ def _send_404(handler):
     handler.wfile.write(json.dumps({"error": "Not found"}).encode())
 
 
-class LLMLabHandler(BaseHTTPRequestHandler):
+class ForecostHandler(BaseHTTPRequestHandler):
     def _send_cors_preflight(self):
         self.send_response(204)
         for k, v in CORS_HEADERS.items():
@@ -106,8 +106,8 @@ class LLMLabHandler(BaseHTTPRequestHandler):
 @click.option("--port", default=8787, help="Port to listen on")
 def serve(port):
     """Start a local API server for programmatic access."""
-    server = HTTPServer(("127.0.0.1", port), LLMLabHandler)
-    print(f"llmcast server running on http://localhost:{port}")
+    server = HTTPServer(("127.0.0.1", port), ForecostHandler)
+    print(f"forecost server running on http://localhost:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

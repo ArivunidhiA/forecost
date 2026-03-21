@@ -1,11 +1,11 @@
 name: Bug Report
-description: Report a bug in llmcast
+description: Report a bug in forecost
 labels: [bug]
 body:
   - type: input
     id: version
     attributes:
-      label: llmcast version
+      label: forecost version
       placeholder: "0.1.0"
     validations:
       required: true

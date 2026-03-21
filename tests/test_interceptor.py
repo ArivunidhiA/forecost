@@ -1,6 +1,6 @@
 import pytest
 
-from llmcast import interceptor
+from forecost import interceptor
 
 
 @pytest.fixture(autouse=True)

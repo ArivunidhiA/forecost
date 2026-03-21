@@ -32,15 +32,15 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install dist/*.whl
-      - run: llmcast --version
-      - run: llmcast demo
+      - run: forecost --version
+      - run: forecost demo
 
   publish:
     needs: [build, test-install]
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/llmcast
+      url: https://pypi.org/p/forecost
     permissions:
       id-token: write
     steps:

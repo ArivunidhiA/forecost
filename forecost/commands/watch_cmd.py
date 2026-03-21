@@ -8,7 +8,12 @@ from rich.live import Live
 from rich.table import Table
 from rich.text import Text
 
-from llmcast.db import get_daily_costs, get_or_create_db, get_project_by_path, get_recent_usage_logs
+from forecost.db import (
+    get_daily_costs,
+    get_or_create_db,
+    get_project_by_path,
+    get_recent_usage_logs,
+)
 
 console = Console()
 
@@ -65,12 +70,12 @@ def watch(interval):
     project = get_project_by_path(project_path)
     if project is None:
         console.print(
-            f"[red]No llmcast project found in {project_path}[/red]\n\n"
-            "  Run [bold]llmcast init[/bold] first."
+            f"[red]No forecost project found in {project_path}[/red]\n\n"
+            "  Run [bold]forecost init[/bold] first."
         )
         raise SystemExit(1)
 
-    console.print("[bold]llmcast watch[/bold] — Live Cost Dashboard (Ctrl+C to stop)\n")
+    console.print("[bold]forecost watch[/bold] — Live Cost Dashboard (Ctrl+C to stop)\n")
     try:
         with Live(console=console, refresh_per_second=1) as live:
             while True:

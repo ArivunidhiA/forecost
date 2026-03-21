@@ -19,8 +19,8 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e ".[dev]"
-      - run: ruff check llmcast/ tests/
-      - run: ruff format --check llmcast/ tests/
+      - run: ruff check forecost/ tests/
+      - run: ruff format --check forecost/ tests/
 
   test:
     runs-on: ${{ matrix.os }}
@@ -47,6 +47,6 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install .
-      - run: llmcast --version
-      - run: llmcast --help
-      - run: llmcast demo
+      - run: forecost --version
+      - run: forecost --help
+      - run: forecost demo

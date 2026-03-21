@@ -3,8 +3,8 @@ import os
 import click
 from rich.console import Console
 
-from llmcast.db import get_project_by_path
-from llmcast.forecaster import ProjectForecaster
+from forecost.db import get_project_by_path
+from forecost.forecaster import ProjectForecaster
 
 console = Console()
 
@@ -27,11 +27,11 @@ def status():
 
     if project is None:
         console.print(
-            f"[red]No llmcast project found in {project_path}[/red]\n\n"
+            f"[red]No forecost project found in {project_path}[/red]\n\n"
             "  To get started:\n"
             f"    cd {project_path}\n"
-            "    llmcast init\n\n"
-            "  llmcast looks for a .llmcast.toml file in the current directory."
+            "    forecost init\n\n"
+            "  forecost looks for a .forecost.toml file in the current directory."
         )
         raise SystemExit(1)
 

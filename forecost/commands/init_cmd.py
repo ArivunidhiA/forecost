@@ -6,20 +6,20 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from llmcast.db import create_project, get_or_create_db, get_project_by_path
-from llmcast.scope import analyze_heuristic, analyze_with_llm
+from forecost.db import create_project, get_or_create_db, get_project_by_path
+from forecost.scope import analyze_heuristic, analyze_with_llm
 
 console = Console()
 
 
 @click.command()
 @click.option(
-    "--smart", is_flag=True, help="Use LLM to analyze project scope (requires llmcast[llm])"
+    "--smart", is_flag=True, help="Use LLM to analyze project scope (requires forecost[llm])"
 )
 @click.option("--days", type=int, default=None, help="Override estimated project duration")
 @click.option("--budget", type=float, default=None, help="Set a budget cap in USD")
 def init(smart, days, budget):
-    """Initialize llmcast for the current project."""
+    """Initialize forecost for the current project."""
     project_path = os.path.abspath(os.getcwd())
     project_name = os.path.basename(project_path)
 
@@ -28,8 +28,8 @@ def init(smart, days, budget):
         if not click.confirm("Re-initialize?"):
             console.print(
                 f"[yellow]Project already initialized at {project_path}[/yellow]\n\n"
-                "  To reset: delete .llmcast.toml and run llmcast init again\n"
-                "  Your usage history in ~/.llmcast/costs.db is preserved."
+                "  To reset: delete .forecost.toml and run forecost init again\n"
+                "  Your usage history in ~/.forecost/costs.db is preserved."
             )
             raise SystemExit(1)
         conn = get_or_create_db()
@@ -38,7 +38,7 @@ def init(smart, days, budget):
         conn.execute("DELETE FROM usage_logs WHERE project_id = ?", (pid,))
         conn.execute("DELETE FROM projects WHERE id = ?", (pid,))
         conn.commit()
-        toml_path = os.path.join(project_path, ".llmcast.toml")
+        toml_path = os.path.join(project_path, ".forecost.toml")
         if os.path.exists(toml_path):
             os.remove(toml_path)
 
@@ -78,7 +78,7 @@ def init(smart, days, budget):
         console.print(f"[red]Failed to create project: {e}[/red]")
         raise SystemExit(1)
 
-    config_path = os.path.join(project_path, ".llmcast.toml")
+    config_path = os.path.join(project_path, ".forecost.toml")
     created_at = datetime.now(timezone.utc).isoformat()
     config_content = f'''project_name = "{project_name}"
 path = "."
@@ -88,14 +88,14 @@ created_at = "{created_at}"
         with open(config_path, "w") as f:
             f.write(config_content)
     except OSError as e:
-        console.print(f"[yellow]Could not write .llmcast.toml: {e}[/yellow]")
+        console.print(f"[yellow]Could not write .forecost.toml: {e}[/yellow]")
     else:
         gitignore_path = os.path.join(project_path, ".gitignore")
         if os.path.isfile(gitignore_path):
             with open(gitignore_path, "r") as f:
                 gitignore_content = f.read()
-            if ".llmcast.toml" not in gitignore_content:
-                console.print("[dim]Tip: Add .llmcast.toml to your .gitignore[/dim]")
+            if ".forecost.toml" not in gitignore_content:
+                console.print("[dim]Tip: Add .forecost.toml to your .gitignore[/dim]")
 
     table = Table(show_header=False)
     table.add_column("", style="dim")
@@ -113,8 +113,8 @@ created_at = "{created_at}"
         table.add_row("Budget", f"${budget:.2f} ({status})")
 
     content = table
-    console.print(Panel(content, title="[bold]llmcast initialized[/bold]", border_style="green"))
+    console.print(Panel(content, title="[bold]forecost initialized[/bold]", border_style="green"))
     if result["project_type"] == "default":
         console.print(
-            "[dim]Using default estimates. Override with: llmcast init --days 14 --budget 50[/dim]"
+            "[dim]Using default estimates. Override with: forecost init --days 14 --budget 50[/dim]"
         )

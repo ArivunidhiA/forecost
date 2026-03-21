@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 import warnings
 
-from llmcast.db import get_daily_costs, get_forecast_history, get_or_create_db, save_forecast
+from forecost.db import get_daily_costs, get_forecast_history, get_or_create_db, save_forecast
 
 __all__ = ["ProjectForecaster"]
 

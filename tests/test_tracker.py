@@ -1,11 +1,11 @@
 import pytest
 
-from llmcast.tracker import get_session_summary, log_call
+from forecost.tracker import get_session_summary, log_call
 
 
 @pytest.fixture(autouse=True)
 def reset_session():
-    import llmcast.tracker as mod
+    import forecost.tracker as mod
 
     mod._session_stats = {}
     yield
@@ -13,7 +13,7 @@ def reset_session():
 
 
 def test_log_call_adds_to_session(monkeypatch):
-    monkeypatch.setattr("llmcast.tracker._find_project", lambda: None)
+    monkeypatch.setattr("forecost.tracker._find_project", lambda: None)
     log_call("gpt-4o", 1000, 500, provider="openai")
     log_call("gpt-4o-mini", 500, 200, provider="openai")
     summary = get_session_summary()
@@ -25,7 +25,7 @@ def test_log_call_adds_to_session(monkeypatch):
 
 
 def test_get_session_summary_returns_correct_totals(monkeypatch):
-    monkeypatch.setattr("llmcast.tracker._find_project", lambda: None)
+    monkeypatch.setattr("forecost.tracker._find_project", lambda: None)
     log_call("gpt-4o-mini", 1_000_000, 500_000, provider="openai")
     summary = get_session_summary()
     assert summary["calls"] == 1

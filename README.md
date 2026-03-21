@@ -1,57 +1,57 @@
-# llmcast
+# forecost
 
 **Know what your AI project will cost. Before you build it.**
 
-[![PyPI version](https://img.shields.io/pypi/v/llmcast.svg)](https://pypi.org/project/llmcast/)
+[![PyPI version](https://img.shields.io/pypi/v/forecost.svg)](https://pypi.org/project/forecost/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Python 3.10+ required. llmcast is in Alpha: APIs may change and some features are experimental.
+Python 3.10+ required. forecost is in Alpha: APIs may change and some features are experimental.
 
-See `llmcast demo` for a live preview.
+See `forecost demo` for a live preview.
 
 ## The Problem
 
-LLM API costs are unpredictable. You prototype with GPT-4, ship to production, and the first month's bill arrives as a surprise. Most teams have no way to forecast spend until it's too late. llmcast fixes this by learning from your actual usage and giving you accurate cost projections before you scale.
+LLM API costs are unpredictable. You prototype with GPT-4, ship to production, and the first month's bill arrives as a surprise. Most teams have no way to forecast spend until it's too late. forecost fixes this by learning from your actual usage and giving you accurate cost projections before you scale.
 
 ## Quick Start
 
 Full walkthrough from install to forecast:
 
 ```bash
-pip install llmcast
+pip install forecost
 cd your-project
-llmcast init
+forecost init
 ```
 
 Add to your app's entry point (before any LLM calls):
 
 ```python
-import llmcast
-llmcast.auto_track()
+import forecost
+forecost.auto_track()
 ```
 
-Call `auto_track()` early, before any httpx usage. If your app imports httpx before llmcast, the interceptor may not attach correctly.
+Call `auto_track()` early, before any httpx usage. If your app imports httpx before forecost, the interceptor may not attach correctly.
 
 Run your app as usual. After building usage for a few days:
 
 ```bash
-llmcast forecast
+forecost forecast
 ```
 
 ## See It in Action
 
-`llmcast demo` runs a forecast with sample data and no setup. Use it to see the full output before tracking your own project.
+`forecost demo` runs a forecast with sample data and no setup. Use it to see the full output before tracking your own project.
 
 ## Auto-Tracking
 
 Non-streaming calls are tracked automatically. No decorators, no manual logging.
 
-**Streaming limitation:** llmcast cannot intercept streaming responses automatically. You must call `log_stream_usage` after consuming the stream. Pass the accumulated response dict containing a `usage` key (and optionally `model` for identification):
+**Streaming limitation:** forecost cannot intercept streaming responses automatically. You must call `log_stream_usage` after consuming the stream. Pass the accumulated response dict containing a `usage` key (and optionally `model` for identification):
 
 ```python
-import llmcast
-llmcast.auto_track()
+import forecost
+forecost.auto_track()
 
 # Example: OpenAI streaming
 response = client.chat.completions.create(model="gpt-4", messages=[...], stream=True)
@@ -62,7 +62,7 @@ for chunk in response:
                                "completion_tokens": chunk.usage.completion_tokens}
     if chunk.model:
         accumulated["model"] = chunk.model
-llmcast.log_stream_usage(accumulated)
+forecost.log_stream_usage(accumulated)
 ```
 
 For Anthropic, use `input_tokens` and `output_tokens` instead of `prompt_tokens` and `completion_tokens`.
@@ -72,38 +72,38 @@ For Anthropic, use `input_tokens` and `output_tokens` instead of `prompt_tokens`
 For fine-grained control, use the `@track_cost` decorator or `log_call`:
 
 ```python
-import llmcast
+import forecost
 
-@llmcast.track_cost(provider="openai")
+@forecost.track_cost(provider="openai")
 def call_gpt(prompt: str):
     return openai.chat.completions.create(model="gpt-4", messages=[{"role": "user", "content": prompt}])
 
 # Or log calls manually
-llmcast.log_call(model="gpt-4", tokens_in=500, tokens_out=200, provider="openai")
+forecost.log_call(model="gpt-4", tokens_in=500, tokens_out=200, provider="openai")
 ```
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `llmcast init` | Initialize project and create `.llmcast.toml` config |
-| `llmcast init --budget X` | Set a budget cap in USD |
-| `llmcast forecast` | Show cost forecast in terminal |
-| `llmcast forecast --output markdown` | Output forecast as Markdown |
-| `llmcast forecast --output csv` | Output forecast as CSV |
-| `llmcast forecast --tui` | Interactive TUI dashboard (requires `pip install llmcast[tui]`) |
-| `llmcast forecast --json` | JSON output for CI/scripts |
-| `llmcast forecast --brief` | One-line summary (same format as `status`) |
-| `llmcast forecast --exit-code` | Exit 1 if projected over budget, 2 if actual over budget (for CI) |
-| `llmcast status` | One-line summary: spend, projected total, day count, drift status |
-| `llmcast track` | View recent tracked LLM calls |
-| `llmcast watch` | Live cost dashboard; updates as your app makes calls |
-| `llmcast export --format csv` | Export usage data as CSV |
-| `llmcast export --format json` | Export usage data as JSON |
-| `llmcast demo` | Run forecast with sample data, no setup needed |
-| `llmcast optimize` | Suggest cost optimizations based on usage |
-| `llmcast reset` | Reset the current project (optionally keep usage logs) |
-| `llmcast serve` | Run local API server for programmatic access |
+| `forecost init` | Initialize project and create `.forecost.toml` config |
+| `forecost init --budget X` | Set a budget cap in USD |
+| `forecost forecast` | Show cost forecast in terminal |
+| `forecost forecast --output markdown` | Output forecast as Markdown |
+| `forecost forecast --output csv` | Output forecast as CSV |
+| `forecost forecast --tui` | Interactive TUI dashboard (requires `pip install forecost[tui]`) |
+| `forecost forecast --json` | JSON output for CI/scripts |
+| `forecost forecast --brief` | One-line summary (same format as `status`) |
+| `forecost forecast --exit-code` | Exit 1 if projected over budget, 2 if actual over budget (for CI) |
+| `forecost status` | One-line summary: spend, projected total, day count, drift status |
+| `forecost track` | View recent tracked LLM calls |
+| `forecost watch` | Live cost dashboard; updates as your app makes calls |
+| `forecost export --format csv` | Export usage data as CSV |
+| `forecost export --format json` | Export usage data as JSON |
+| `forecost demo` | Run forecast with sample data, no setup needed |
+| `forecost optimize` | Suggest cost optimizations based on usage |
+| `forecost reset` | Reset the current project (optionally keep usage logs) |
+| `forecost serve` | Run local API server for programmatic access |
 
 `status` and `forecast --brief` both show the same one-line summary. Use `status` when you only need a quick check; use `forecast --brief` when you want that format in a script or CI pipeline.
 
@@ -112,7 +112,7 @@ llmcast.log_call(model="gpt-4", tokens_in=500, tokens_out=200, provider="openai"
 Set a budget at init with `--budget`:
 
 ```bash
-llmcast init --budget 100
+forecost init --budget 100
 ```
 
 Use `--exit-code` on forecast to fail CI when over budget:
@@ -120,8 +120,8 @@ Use `--exit-code` on forecast to fail CI when over budget:
 ```yaml
 - name: Check LLM Budget
   run: |
-    pip install llmcast
-    llmcast forecast --exit-code
+    pip install forecost
+    forecost forecast --exit-code
 ```
 
 Exit codes: 0 = on track, 1 = projected over budget, 2 = actual spend over budget.
@@ -129,18 +129,18 @@ Exit codes: 0 = on track, 1 = projected over budget, 2 = actual spend over budge
 ## Disabling in Tests
 
 ```bash
-LLMLAB_DISABLED=1 pytest
+FORECOST_DISABLED=1 pytest
 ```
 
 Or in code:
 
 ```python
-llmcast.disable()
+forecost.disable()
 ```
 
 ## Forecasting Accuracy
 
-llmcast uses an ensemble of three statistical forecasting methods (Simple Exponential Smoothing, Damped Trend, and Linear Regression) inspired by the M4 Forecasting Competition, where simple combinations beat complex ML models across 100,000 time series.
+forecost uses an ensemble of three statistical forecasting methods (Simple Exponential Smoothing, Damped Trend, and Linear Regression) inspired by the M4 Forecasting Competition, where simple combinations beat complex ML models across 100,000 time series.
 
 | Metric | What it means | Typical result |
 |--------|---------------|----------------|
@@ -149,13 +149,13 @@ llmcast uses an ensemble of three statistical forecasting methods (Simple Expone
 | 80% interval | Will the real cost land here? | ~80% of the time |
 | 95% interval | Conservative budget range | ~95% of the time |
 
-Install the ensemble engine for best results: `pip install llmcast[forecast]`
+Install the ensemble engine for best results: `pip install forecost[forecast]`
 
 The base install uses a simpler exponential moving average that works without additional dependencies.
 
-## Why llmcast?
+## Why forecost?
 
-| Feature | llmcast | LiteLLM | Helicone | LangSmith |
+| Feature | forecost | LiteLLM | Helicone | LangSmith |
 |---------|--------|---------|----------|-----------|
 | Cost tracking | Yes | Yes | Yes | Yes |
 | Cost forecasting | Yes | No | No | No |
@@ -170,8 +170,8 @@ Minimal footprint: 3 runtime dependencies (click, rich, httpx), under 3MB.
 
 ## Data Storage
 
-- **Usage and forecasts:** `~/.llmcast/costs.db` (SQLite). All projects share this database.
-- **Project config:** `.llmcast.toml` in your project root. Contains project name, baseline days, and optional budget.
+- **Usage and forecasts:** `~/.forecost/costs.db` (SQLite). All projects share this database.
+- **Project config:** `.forecost.toml` in your project root. Contains project name, baseline days, and optional budget.
 
 ## Glossary
 
@@ -185,16 +185,16 @@ Minimal footprint: 3 runtime dependencies (click, rich, httpx), under 3MB.
 
 ## Local API Server
 
-`llmcast serve` starts a local HTTP server (default port 8787) for programmatic access:
+`forecost serve` starts a local HTTP server (default port 8787) for programmatic access:
 
 | Endpoint | Description |
 |----------|-------------|
 | `GET /api/health` | Health check. Returns `{"status": "ok"}`. |
-| `GET /api/forecast` | Full forecast result (same as `llmcast forecast --json`). |
+| `GET /api/forecast` | Full forecast result (same as `forecost forecast --json`). |
 | `GET /api/status` | Project status: active days, actual spend, baseline info. |
 | `GET /api/costs` | Recent usage logs. |
 
-Run from your project directory so llmcast can find `.llmcast.toml`.
+Run from your project directory so forecost can find `.forecost.toml`.
 
 ## Contributing
 
