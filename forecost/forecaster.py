@@ -13,7 +13,13 @@ from __future__ import annotations
 import math
 import warnings
 
-from forecost.db import get_daily_costs, get_forecast_history, get_or_create_db, save_forecast
+from forecost.db import (
+    get_bucketed_costs,
+    get_daily_costs,
+    get_forecast_history,
+    get_or_create_db,
+    save_forecast,
+)
 
 __all__ = ["ProjectForecaster"]
 
@@ -105,37 +111,55 @@ class ProjectForecaster:
         self._baseline_total_days = int(self._project["baseline_total_days"])
         self._baseline_total_cost = float(self._project["baseline_total_cost"])
         self._daily_costs = get_daily_costs(project_id)
+        self._bucketed_costs = get_bucketed_costs(project_id, bucket_minutes=15)
         self._forecast_history = get_forecast_history(project_id)
 
     def calculate_forecast(self, *, save: bool = False) -> dict:
         active_days_data = [(day, cost) for day, cost in self._daily_costs if cost > 0]
-        n = len(active_days_data)
+        n_days = len(active_days_data)
         daily_costs = [c for _, c in active_days_data]
+
+        bucket_costs_raw = [(b, cost) for b, cost in self._bucketed_costs if cost > 0]
+        n_buckets = len(bucket_costs_raw)
+        bucket_costs = [c for _, c in bucket_costs_raw]
+
+        # Prefer buckets when they give the ensemble more data points.
+        # Fall back to daily when bucket data is too sparse (< 3 buckets).
+        use_buckets = n_buckets >= 3 and n_buckets > n_days
+        series = bucket_costs if use_buckets else daily_costs
+        n = len(series)
 
         baseline_daily = self._baseline_daily_cost if self._baseline_daily_cost > 0 else 1.0
         actual_spend = sum(daily_costs)
-        remaining_days = max(1, self._baseline_total_days - n)
+        remaining_days = max(1, self._baseline_total_days - n_days)
 
-        # Run forecasting models
+        # Run forecasting models on the chosen series
         global _STATSMODELS_WARNING_SHOWN
         models_used: list[str] = []
         all_forecasts: list[list[float]] = []
         ses_residuals: list[float] | None = None
 
+        if use_buckets:
+            active_days_for_rate = max(1, n_days) if n_days > 0 else 1
+            buckets_per_day = n_buckets / active_days_for_rate
+            forecast_horizon = n_buckets  # forecast same number of future buckets
+        else:
+            forecast_horizon = remaining_days
+
         if n >= 2 and _HAS_STATSMODELS:
             try:
-                ses_fcast, ses_residuals = _ses_forecast(daily_costs, remaining_days)
+                ses_fcast, ses_residuals = _ses_forecast(series, forecast_horizon)
                 all_forecasts.append(ses_fcast)
                 models_used.append("ses")
             except Exception:
                 pass
 
-            dt_fcast = _damped_trend_forecast(daily_costs, remaining_days)
+            dt_fcast = _damped_trend_forecast(series, forecast_horizon)
             if dt_fcast is not None:
                 all_forecasts.append(dt_fcast)
                 models_used.append("damped_trend")
 
-            lr_fcast = _linear_forecast(daily_costs, remaining_days)
+            lr_fcast = _linear_forecast(series, forecast_horizon)
             if lr_fcast is not None:
                 all_forecasts.append(lr_fcast)
                 models_used.append("linear")
@@ -143,19 +167,30 @@ class ProjectForecaster:
         if not all_forecasts:
             if not _STATSMODELS_WARNING_SHOWN and not _HAS_STATSMODELS and n >= 2:
                 _STATSMODELS_WARNING_SHOWN = True
-            smoothed_ratio, daily_forecasts, models_used = _fallback_forecast(
+            smoothed_ratio, period_forecasts, models_used = _fallback_forecast(
                 daily_costs, baseline_daily, self._baseline_total_days
             )
+            projected_remaining = sum(period_forecasts)
         else:
             # Equal-weight ensemble (M4 "Comb" method)
-            daily_forecasts = []
-            for h in range(remaining_days):
+            period_forecasts = []
+            for h in range(forecast_horizon):
                 vals = [f[h] for f in all_forecasts if h < len(f)]
-                daily_forecasts.append(sum(vals) / len(vals) if vals else 0.0)
-            avg_daily = sum(daily_forecasts) / len(daily_forecasts) if daily_forecasts else 0.0
+                period_forecasts.append(sum(vals) / len(vals) if vals else 0.0)
+
+            if use_buckets:
+                # Convert bucket forecasts → daily → remaining project cost
+                avg_forecast_per_bucket = (
+                    sum(period_forecasts) / len(period_forecasts) if period_forecasts else 0.0
+                )
+                projected_daily = avg_forecast_per_bucket * buckets_per_day
+                projected_remaining = projected_daily * remaining_days
+            else:
+                projected_remaining = sum(period_forecasts)
+
+            avg_daily = projected_remaining / remaining_days if remaining_days > 0 else 0.0
             smoothed_ratio = avg_daily / baseline_daily if baseline_daily > 0 else 1.0
 
-        projected_remaining = sum(daily_forecasts)
         projected_total = actual_spend + projected_remaining
 
         # Prediction intervals from residuals
@@ -164,21 +199,26 @@ class ProjectForecaster:
         if ses_residuals and len(ses_residuals) >= 2:
             sigma = (sum(r**2 for r in ses_residuals) / len(ses_residuals)) ** 0.5
             if sigma > 0:
+                if use_buckets:
+                    # Scale bucket-level sigma to daily level
+                    daily_sigma = sigma * math.sqrt(buckets_per_day)
+                else:
+                    daily_sigma = sigma
+
+                dm = projected_remaining / remaining_days
                 lower_80 = [
-                    max(0.0, daily_forecasts[h] - 1.28 * sigma * math.sqrt(h + 1))
+                    max(0.0, dm - 1.28 * daily_sigma * math.sqrt(h + 1))
                     for h in range(remaining_days)
                 ]
                 upper_80 = [
-                    daily_forecasts[h] + 1.28 * sigma * math.sqrt(h + 1)
-                    for h in range(remaining_days)
+                    dm + 1.28 * daily_sigma * math.sqrt(h + 1) for h in range(remaining_days)
                 ]
                 lower_95 = [
-                    max(0.0, daily_forecasts[h] - 1.96 * sigma * math.sqrt(h + 1))
+                    max(0.0, dm - 1.96 * daily_sigma * math.sqrt(h + 1))
                     for h in range(remaining_days)
                 ]
                 upper_95 = [
-                    daily_forecasts[h] + 1.96 * sigma * math.sqrt(h + 1)
-                    for h in range(remaining_days)
+                    dm + 1.96 * daily_sigma * math.sqrt(h + 1) for h in range(remaining_days)
                 ]
                 pi_80 = {
                     "lower": actual_spend + sum(lower_80),
@@ -192,7 +232,7 @@ class ProjectForecaster:
             # MASE: compare model MAE to naive (random walk) MAE
             model_mae = sum(abs(r) for r in ses_residuals) / len(ses_residuals)
             if n >= 3:
-                naive_errors = [abs(daily_costs[i] - daily_costs[i - 1]) for i in range(1, n)]
+                naive_errors = [abs(series[i] - series[i - 1]) for i in range(1, n)]
                 naive_mae = sum(naive_errors) / len(naive_errors) if naive_errors else 1.0
                 mase = model_mae / naive_mae if naive_mae > 0 else None
 
@@ -238,14 +278,14 @@ class ProjectForecaster:
         else:
             drift_status = "on_track"
 
-        # Confidence
-        if n == 0:
+        # Confidence (based on calendar days, not bucket count)
+        if n_days == 0:
             confidence = "low"
-        elif n <= 3:
+        elif n_days <= 3:
             confidence = "medium-low"
-        elif n <= 7:
+        elif n_days <= 7:
             confidence = "medium"
-        elif n <= 14:
+        elif n_days <= 14:
             confidence = "high"
         else:
             confidence = "very-high"
@@ -280,7 +320,7 @@ class ProjectForecaster:
                 remaining_days,
                 smoothed_ratio,
                 confidence,
-                n,
+                n_days,
                 stability,
             )
 
@@ -291,7 +331,9 @@ class ProjectForecaster:
             "projected_total": projected_total,
             "projected_remaining": projected_remaining,
             "remaining_days": remaining_days,
-            "active_days": n,
+            "active_days": n_days,
+            "data_points": n,
+            "data_granularity": "15min_buckets" if use_buckets else "daily",
             "total_days": self._baseline_total_days,
             "smoothed_burn_ratio": smoothed_ratio,
             "drift_status": drift_status,

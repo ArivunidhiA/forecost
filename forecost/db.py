@@ -17,6 +17,7 @@ __all__ = [
     "create_project",
     "get_project_by_path",
     "get_daily_costs",
+    "get_bucketed_costs",
     "get_recent_usage_logs",
     "get_active_days",
     "save_forecast",
@@ -145,6 +146,30 @@ def get_daily_costs(project_id: int) -> list[tuple[str, float]]:
         (project_id,),
     ).fetchall()
     return [(r["day"], r["cost"]) for r in rows]
+
+
+def get_bucketed_costs(project_id: int, bucket_minutes: int = 15) -> list[tuple[str, float]]:
+    """Aggregate costs into fixed time buckets.
+
+    Only returns buckets that have actual costs (no zero-fill).
+    Default 15-minute buckets give 16 data points per 4-hour session.
+    """
+    conn = get_or_create_db()
+    rows = conn.execute(
+        """
+        SELECT
+            strftime('%Y-%m-%d %H:', timestamp) ||
+            printf('%02d', (CAST(strftime('%M', timestamp) AS INTEGER) / ?) * ?)
+            AS bucket,
+            SUM(cost_usd) AS cost
+        FROM usage_logs
+        WHERE project_id = ?
+        GROUP BY bucket
+        ORDER BY bucket
+        """,
+        (bucket_minutes, bucket_minutes, project_id),
+    ).fetchall()
+    return [(r["bucket"], r["cost"]) for r in rows]
 
 
 def get_recent_usage_logs(project_id: int, limit: int = 20) -> list[dict]:

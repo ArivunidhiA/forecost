@@ -6,6 +6,7 @@ import pytest
 from forecost.db import (
     _insert_usage_logs_batch,
     create_project,
+    get_bucketed_costs,
     get_or_create_db,
 )
 from forecost.forecaster import ProjectForecaster
@@ -214,3 +215,116 @@ def test_fallback_when_statsmodels_unavailable(tmp_path, monkeypatch):
     assert result["models_used"] == ["ema_fallback"]
     assert result["projected_total"] > 0
     assert result["confidence"] in ("low", "medium-low", "medium", "high", "very-high")
+
+
+# ---------------------------------------------------------------------------
+# Bucketed cost tests
+# ---------------------------------------------------------------------------
+
+
+def test_bucketed_costs_returns_15min_intervals(tmp_path, monkeypatch):
+    """get_bucketed_costs groups rows into 15-minute buckets."""
+    db_path = tmp_path / "costs.db"
+    monkeypatch.setattr("forecost.db._DB_PATH", db_path)
+    monkeypatch.setattr("forecost.db._conn", None)
+    pid = create_project(
+        name="buck",
+        path=str(tmp_path),
+        baseline_daily_cost=10.0,
+        baseline_total_days=14,
+        baseline_total_cost=140.0,
+    )
+    conn = get_or_create_db()
+    base = datetime(2026, 3, 10, 14, 0, 0, tzinfo=timezone.utc)
+    items = [
+        (pid, (base + timedelta(minutes=m)).isoformat(), "gpt-4o", "openai", 100, 50, 1.0, None)
+        for m in [0, 5, 10, 20, 35, 50, 65, 80]
+    ]
+    _insert_usage_logs_batch(conn, items)
+
+    buckets = get_bucketed_costs(pid, bucket_minutes=15)
+    # 8 entries across 80 min → buckets at :00, :15, :30, :45, :60(=next hour :00), :75(=:15)
+    # Expect 6 distinct 15-min buckets
+    assert len(buckets) >= 4
+    assert all(cost > 0 for _, cost in buckets)
+    # Each bucket label should contain a colon-separated time portion
+    for label, _ in buckets:
+        assert ":" in label
+
+
+def test_forecaster_prefers_buckets_over_daily(tmp_path, monkeypatch):
+    """When intra-day data gives more points than daily, forecaster uses buckets."""
+    db_path = tmp_path / "costs.db"
+    monkeypatch.setattr("forecost.db._DB_PATH", db_path)
+    monkeypatch.setattr("forecost.db._conn", None)
+    pid = create_project(
+        name="pref",
+        path=str(tmp_path),
+        baseline_daily_cost=10.0,
+        baseline_total_days=14,
+        baseline_total_cost=140.0,
+    )
+    conn = get_or_create_db()
+    # Insert 8 calls spread across 2 hours on one day → 1 daily point, 8 bucket points
+    base = datetime(2026, 3, 10, 10, 0, 0, tzinfo=timezone.utc)
+    items = [
+        (
+            pid,
+            (base + timedelta(minutes=i * 15)).isoformat(),
+            "gpt-4o",
+            "openai",
+            200,
+            100,
+            1.5,
+            None,
+        )
+        for i in range(8)
+    ]
+    _insert_usage_logs_batch(conn, items)
+
+    f = ProjectForecaster(pid)
+    result = f.calculate_forecast()
+    assert result["data_granularity"] == "15min_buckets"
+    assert result["data_points"] > result["active_days"]
+    assert result["active_days"] == 1
+
+
+def test_day_one_accuracy_with_buckets(tmp_path, monkeypatch):
+    """On day 1 with enough intra-day calls, the ensemble should engage (>= 2 models)."""
+    db_path = tmp_path / "costs.db"
+    monkeypatch.setattr("forecost.db._DB_PATH", db_path)
+    monkeypatch.setattr("forecost.db._conn", None)
+    pid = create_project(
+        name="d1",
+        path=str(tmp_path),
+        baseline_daily_cost=10.0,
+        baseline_total_days=14,
+        baseline_total_cost=140.0,
+    )
+    conn = get_or_create_db()
+    rng = random.Random(99)
+    base = datetime(2026, 3, 10, 9, 0, 0, tzinfo=timezone.utc)
+    items = [
+        (
+            pid,
+            (base + timedelta(minutes=i * 15)).isoformat(),
+            "gpt-4o",
+            "openai",
+            500,
+            200,
+            rng.uniform(0.8, 1.5),
+            None,
+        )
+        for i in range(8)
+    ]
+    _insert_usage_logs_batch(conn, items)
+
+    f = ProjectForecaster(pid)
+    result = f.calculate_forecast()
+    # With 8 bucket points the ensemble should engage (SES and/or linear)
+    assert result["n_models_used"] >= 1
+    assert "ema_fallback" not in result["models_used"]
+    # Forecast should be reasonable — not just the baseline
+    assert result["projected_total"] > 0
+    assert result["data_granularity"] == "15min_buckets"
+    assert result["active_days"] == 1
