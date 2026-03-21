@@ -49,7 +49,7 @@ def _plotext_bar_chart(daily_costs: list[tuple[str, float]]) -> str:
 if HAS_TEXTUAL:
 
     class ForecastDashboard(App):
-        TITLE = "llmlab -- Cost Forecast Dashboard"
+        TITLE = "llmcast -- Cost Forecast Dashboard"
         BINDINGS = [
             ("q", "quit", "Quit"),
             ("r", "refresh", "Refresh"),
@@ -89,7 +89,7 @@ if HAS_TEXTUAL:
                 f"[bold cyan]Projected Total:[/] [bold green]${total:.2f}[/]"
             )
 
-            from llmlab.db import get_daily_costs, get_forecast_history
+            from llmcast.db import get_daily_costs, get_forecast_history
 
             daily_costs = get_daily_costs(self._project_id)
             chart_content = (
@@ -143,7 +143,7 @@ if HAS_TEXTUAL:
 
 def launch(forecast_result: dict, project_id: int, on_refresh=None):
     if not HAS_TEXTUAL:
-        print("TUI requires Textual. Install with: pip install llmlab[tui]")
+        print("TUI requires Textual. Install with: pip install llmcast[tui]")
         return
     app = ForecastDashboard(forecast_result, project_id, on_refresh)
     app.run()

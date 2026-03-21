@@ -8,15 +8,15 @@ from http.server import HTTPServer
 import pytest
 from click.testing import CliRunner
 
-from llmlab.cli import main
-from llmlab.commands.serve_cmd import LLMLabHandler
-from llmlab.db import (
+from llmcast.cli import main
+from llmcast.commands.serve_cmd import LLMLabHandler
+from llmcast.db import (
     _insert_usage_logs_batch,
     create_project,
     get_or_create_db,
     get_project_by_path,
 )
-from llmlab.interceptor import log_stream_usage, set_project_id
+from llmcast.interceptor import log_stream_usage, set_project_id
 
 
 @pytest.fixture
@@ -28,8 +28,8 @@ def _init_project(cli_runner, tmp_path, db_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "main.py").write_text("import openai\n")
     (tmp_path / "README.md").write_text("chatbot\n")
-    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
-    monkeypatch.setattr("llmlab.db._conn", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmcast.db._conn", None)
     result = cli_runner.invoke(main, ["init"])
     assert result.exit_code == 0
     return result
@@ -87,8 +87,8 @@ def test_forecast_exit_code_on_budget(cli_runner, tmp_path, db_path, monkeypatch
     monkeypatch.chdir(tmp_path)
     (tmp_path / "main.py").write_text("import openai\n")
     (tmp_path / "README.md").write_text("chatbot\n")
-    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
-    monkeypatch.setattr("llmlab.db._conn", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmcast.db._conn", None)
     result = cli_runner.invoke(main, ["init", "--budget", "1000"])
     assert result.exit_code == 0
     _insert_test_data(tmp_path, db_path)
@@ -100,8 +100,8 @@ def test_forecast_exit_code_over_budget(cli_runner, tmp_path, db_path, monkeypat
     monkeypatch.chdir(tmp_path)
     (tmp_path / "main.py").write_text("import openai\n")
     (tmp_path / "README.md").write_text("chatbot\n")
-    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
-    monkeypatch.setattr("llmlab.db._conn", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmcast.db._conn", None)
     result = cli_runner.invoke(main, ["init", "--budget", "1"])
     assert result.exit_code == 0
     conn = get_or_create_db()
@@ -144,8 +144,8 @@ def test_reset_full(cli_runner, tmp_path, db_path, monkeypatch):
 
 
 def test_serve_health(db_path, monkeypatch):
-    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
-    monkeypatch.setattr("llmlab.db._conn", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmcast.db._conn", None)
     server = HTTPServer(("127.0.0.1", 0), LLMLabHandler)
     port = server.server_address[1]
     done = threading.Event()
@@ -165,9 +165,9 @@ def test_serve_health(db_path, monkeypatch):
 
 
 def test_log_stream_usage_openai_format(db_path, monkeypatch):
-    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
-    monkeypatch.setattr("llmlab.db._conn", None)
-    monkeypatch.setattr("llmlab.interceptor._write_queue", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmcast.db._conn", None)
+    monkeypatch.setattr("llmcast.interceptor._write_queue", None)
     project_id = create_project(
         name="test",
         path="/tmp/test",
@@ -192,9 +192,9 @@ def test_log_stream_usage_openai_format(db_path, monkeypatch):
 
 
 def test_log_stream_usage_anthropic_format(db_path, monkeypatch):
-    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
-    monkeypatch.setattr("llmlab.db._conn", None)
-    monkeypatch.setattr("llmlab.interceptor._write_queue", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmcast.db._conn", None)
+    monkeypatch.setattr("llmcast.interceptor._write_queue", None)
     project_id = create_project(
         name="test2",
         path="/tmp/test2",

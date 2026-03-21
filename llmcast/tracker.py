@@ -11,9 +11,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from llmlab import interceptor
-from llmlab.db import WriteQueue, get_project_by_path
-from llmlab.pricing import calculate_cost, get_provider
+from llmcast import interceptor
+from llmcast.db import WriteQueue, get_project_by_path
+from llmcast.pricing import calculate_cost, get_provider
 
 if TYPE_CHECKING:
     pass
@@ -49,7 +49,7 @@ def _find_project() -> dict | None:
 
     cwd = Path.cwd()
     for parent in [cwd, *cwd.parents]:
-        toml_path = parent / ".llmlab.toml"
+        toml_path = parent / ".llmcast.toml"
         if toml_path.is_file():
             try:
                 try:
@@ -125,8 +125,8 @@ def auto_track() -> None:
         import sys
 
         print(
-            "llmlab: no .llmlab.toml found in current or parent directories. "
-            "Tracking disabled. Run 'llmlab init' in your project root.",
+            "llmcast: no .llmcast.toml found in current or parent directories. "
+            "Tracking disabled. Run 'llmcast init' in your project root.",
             file=sys.stderr,
         )
     interceptor.install(on_usage=_record_usage)

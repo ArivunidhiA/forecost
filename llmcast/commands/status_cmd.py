@@ -3,8 +3,8 @@ import os
 import click
 from rich.console import Console
 
-from llmlab.db import get_project_by_path
-from llmlab.forecaster import ProjectForecaster
+from llmcast.db import get_project_by_path
+from llmcast.forecaster import ProjectForecaster
 
 console = Console()
 
@@ -27,11 +27,11 @@ def status():
 
     if project is None:
         console.print(
-            f"[red]No llmlab project found in {project_path}[/red]\n\n"
+            f"[red]No llmcast project found in {project_path}[/red]\n\n"
             "  To get started:\n"
             f"    cd {project_path}\n"
-            "    llmlab init\n\n"
-            "  llmlab looks for a .llmlab.toml file in the current directory."
+            "    llmcast init\n\n"
+            "  llmcast looks for a .llmcast.toml file in the current directory."
         )
         raise SystemExit(1)
 

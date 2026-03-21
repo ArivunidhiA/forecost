@@ -3,7 +3,7 @@ import os
 import click
 from rich.console import Console
 
-from llmlab.db import get_or_create_db, get_project_by_path
+from llmcast.db import get_or_create_db, get_project_by_path
 
 console = Console()
 
@@ -18,8 +18,8 @@ def reset(keep_data):
 
     if project is None:
         console.print(
-            f"[red]No llmlab project found in {project_path}[/red]\n\n"
-            "  Nothing to reset. Run [bold]llmlab init[/bold] to start."
+            f"[red]No llmcast project found in {project_path}[/red]\n\n"
+            "  Nothing to reset. Run [bold]llmcast init[/bold] to start."
         )
         raise SystemExit(1)
 
@@ -32,16 +32,16 @@ def reset(keep_data):
         conn.commit()
         console.print(
             "[green]Project baseline reset.[/green] Usage logs preserved.\n"
-            "  Run [bold]llmlab init[/bold] to re-initialize."
+            "  Run [bold]llmcast init[/bold] to re-initialize."
         )
     else:
         conn.execute("DELETE FROM forecasts WHERE project_id = ?", (pid,))
         conn.execute("DELETE FROM usage_logs WHERE project_id = ?", (pid,))
         conn.execute("DELETE FROM projects WHERE id = ?", (pid,))
         conn.commit()
-        toml_path = os.path.join(project_path, ".llmlab.toml")
+        toml_path = os.path.join(project_path, ".llmcast.toml")
         if os.path.exists(toml_path):
             os.remove(toml_path)
         console.print(
-            "[green]Project fully reset.[/green]\n  Run [bold]llmlab init[/bold] to start fresh."
+            "[green]Project fully reset.[/green]\n  Run [bold]llmcast init[/bold] to start fresh."
         )

@@ -4,8 +4,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import click
 
-from llmlab.db import get_active_days, get_daily_costs, get_project_by_path, get_recent_usage_logs
-from llmlab.forecaster import ProjectForecaster
+from llmcast.db import get_active_days, get_daily_costs, get_project_by_path, get_recent_usage_logs
+from llmcast.forecaster import ProjectForecaster
 
 CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
@@ -107,7 +107,7 @@ class LLMLabHandler(BaseHTTPRequestHandler):
 def serve(port):
     """Start a local API server for programmatic access."""
     server = HTTPServer(("127.0.0.1", port), LLMLabHandler)
-    print(f"llmlab server running on http://localhost:{port}")
+    print(f"llmcast server running on http://localhost:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

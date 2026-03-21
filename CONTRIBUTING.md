@@ -1,12 +1,12 @@
-# Contributing to llmlab
+# Contributing to llmcast
 
-Thanks for your interest in contributing to llmlab.
+Thanks for your interest in contributing to llmcast.
 
 ## Development Setup
 
 ```bash
-git clone https://github.com/ArivunidhiA/llmlab.git
-cd llmlab
+git clone https://github.com/ArivunidhiA/llmcast.git
+cd llmcast
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -23,8 +23,8 @@ pytest tests/ -v
 We use ruff for linting and formatting:
 
 ```bash
-ruff check llmlab/ tests/
-ruff format llmlab/ tests/
+ruff check llmcast/ tests/
+ruff format llmcast/ tests/
 ```
 
 ## Pull Request Process

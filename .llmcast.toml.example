@@ -1,5 +1,5 @@
-# This file is created by `llmlab init`
-# Add .llmlab.toml to your .gitignore
+# This file is created by `llmcast init`
+# Add .llmcast.toml to your .gitignore
 project_name = "your-project"
 path = "."
 created_at = "2026-01-01T00:00:00+00:00"

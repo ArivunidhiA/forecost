@@ -1,11 +1,11 @@
 name: Bug Report
-description: Report a bug in llmlab
+description: Report a bug in llmcast
 labels: [bug]
 body:
   - type: input
     id: version
     attributes:
-      label: llmlab version
+      label: llmcast version
       placeholder: "0.1.0"
     validations:
       required: true

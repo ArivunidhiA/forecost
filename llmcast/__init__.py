@@ -1,4 +1,4 @@
-"""llmlab - Know exactly what your AI project will cost."""
+"""llmcast - Know exactly what your AI project will cost."""
 
 from __future__ import annotations
 
@@ -8,23 +8,23 @@ from typing import TYPE_CHECKING
 __version__ = "0.1.0"
 
 if TYPE_CHECKING:
-    from llmlab.interceptor import get_interceptor_stats as get_interceptor_stats
-    from llmlab.tracker import (
+    from llmcast.interceptor import get_interceptor_stats as get_interceptor_stats
+    from llmcast.tracker import (
         auto_track as auto_track,
     )
-    from llmlab.tracker import (
+    from llmcast.tracker import (
         get_session_summary as get_session_summary,
     )
-    from llmlab.tracker import (
+    from llmcast.tracker import (
         log_call as log_call,
     )
-    from llmlab.tracker import (
+    from llmcast.tracker import (
         log_stream_usage as log_stream_usage,
     )
-    from llmlab.tracker import (
+    from llmcast.tracker import (
         track as track,
     )
-    from llmlab.tracker import (
+    from llmcast.tracker import (
         track_cost as track_cost,
     )
 
@@ -50,19 +50,19 @@ def __getattr__(name: str):
         "log_stream_usage",
         "get_session_summary",
     ):
-        import llmlab.tracker as _tracker
+        import llmcast.tracker as _tracker
 
         return getattr(_tracker, name)
     if name == "get_interceptor_stats":
-        from llmlab.interceptor import get_interceptor_stats
+        from llmcast.interceptor import get_interceptor_stats
 
         return get_interceptor_stats
     if name == "disable":
-        from llmlab.interceptor import uninstall
+        from llmcast.interceptor import uninstall
 
         def _disable() -> None:
             uninstall()
             os.environ["LLMLAB_DISABLED"] = "1"
 
         return _disable
-    raise AttributeError(f"module 'llmlab' has no attribute {name}")
+    raise AttributeError(f"module 'llmcast' has no attribute {name}")

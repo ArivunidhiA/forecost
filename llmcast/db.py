@@ -1,5 +1,5 @@
 """
-Zero-maintenance SQLite database module for llmlab cost tracking.
+Zero-maintenance SQLite database module for llmcast cost tracking.
 """
 
 import atexit
@@ -24,7 +24,7 @@ __all__ = [
     "WriteQueue",
 ]
 
-_DB_PATH = Path.home() / ".llmlab" / "costs.db"
+_DB_PATH = Path.home() / ".llmcast" / "costs.db"
 _BATCH_SIZE = 100
 _FLUSH_INTERVAL = 2.0
 _EXIT_TIMEOUT = 1.0
@@ -294,8 +294,8 @@ class WriteQueue:
     def _flush(self, batch: list[tuple], conn: sqlite3.Connection) -> None:
         if not batch:
             return
-        log_path = Path.home() / ".llmlab" / "error.log"
-        recovery_path = Path.home() / ".llmlab" / "recovery.jsonl"
+        log_path = Path.home() / ".llmcast" / "error.log"
+        recovery_path = Path.home() / ".llmcast" / "recovery.jsonl"
         try:
             _insert_usage_logs_batch(conn, batch)
         except Exception as e:

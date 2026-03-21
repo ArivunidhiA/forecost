@@ -1,5 +1,5 @@
 name: Feature Request
-description: Suggest a new feature for llmlab
+description: Suggest a new feature for llmcast
 labels: [enhancement]
 body:
   - type: textarea

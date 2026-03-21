@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from llmlab import db, interceptor
+from llmcast import db, interceptor
 
 
 @pytest.fixture

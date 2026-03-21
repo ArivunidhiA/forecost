@@ -1,57 +1,57 @@
-# llmlab
+# llmcast
 
 **Know what your AI project will cost. Before you build it.**
 
-[![PyPI version](https://img.shields.io/pypi/v/llmlab.svg)](https://pypi.org/project/llmlab/)
+[![PyPI version](https://img.shields.io/pypi/v/llmcast.svg)](https://pypi.org/project/llmcast/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Python 3.10+ required. llmlab is in Alpha: APIs may change and some features are experimental.
+Python 3.10+ required. llmcast is in Alpha: APIs may change and some features are experimental.
 
-See `llmlab demo` for a live preview.
+See `llmcast demo` for a live preview.
 
 ## The Problem
 
-LLM API costs are unpredictable. You prototype with GPT-4, ship to production, and the first month's bill arrives as a surprise. Most teams have no way to forecast spend until it's too late. llmlab fixes this by learning from your actual usage and giving you accurate cost projections before you scale.
+LLM API costs are unpredictable. You prototype with GPT-4, ship to production, and the first month's bill arrives as a surprise. Most teams have no way to forecast spend until it's too late. llmcast fixes this by learning from your actual usage and giving you accurate cost projections before you scale.
 
 ## Quick Start
 
 Full walkthrough from install to forecast:
 
 ```bash
-pip install llmlab
+pip install llmcast
 cd your-project
-llmlab init
+llmcast init
 ```
 
 Add to your app's entry point (before any LLM calls):
 
 ```python
-import llmlab
-llmlab.auto_track()
+import llmcast
+llmcast.auto_track()
 ```
 
-Call `auto_track()` early, before any httpx usage. If your app imports httpx before llmlab, the interceptor may not attach correctly.
+Call `auto_track()` early, before any httpx usage. If your app imports httpx before llmcast, the interceptor may not attach correctly.
 
 Run your app as usual. After building usage for a few days:
 
 ```bash
-llmlab forecast
+llmcast forecast
 ```
 
 ## See It in Action
 
-`llmlab demo` runs a forecast with sample data and no setup. Use it to see the full output before tracking your own project.
+`llmcast demo` runs a forecast with sample data and no setup. Use it to see the full output before tracking your own project.
 
 ## Auto-Tracking
 
 Non-streaming calls are tracked automatically. No decorators, no manual logging.
 
-**Streaming limitation:** llmlab cannot intercept streaming responses automatically. You must call `log_stream_usage` after consuming the stream. Pass the accumulated response dict containing a `usage` key (and optionally `model` for identification):
+**Streaming limitation:** llmcast cannot intercept streaming responses automatically. You must call `log_stream_usage` after consuming the stream. Pass the accumulated response dict containing a `usage` key (and optionally `model` for identification):
 
 ```python
-import llmlab
-llmlab.auto_track()
+import llmcast
+llmcast.auto_track()
 
 # Example: OpenAI streaming
 response = client.chat.completions.create(model="gpt-4", messages=[...], stream=True)
@@ -62,7 +62,7 @@ for chunk in response:
                                "completion_tokens": chunk.usage.completion_tokens}
     if chunk.model:
         accumulated["model"] = chunk.model
-llmlab.log_stream_usage(accumulated)
+llmcast.log_stream_usage(accumulated)
 ```
 
 For Anthropic, use `input_tokens` and `output_tokens` instead of `prompt_tokens` and `completion_tokens`.
@@ -72,38 +72,38 @@ For Anthropic, use `input_tokens` and `output_tokens` instead of `prompt_tokens`
 For fine-grained control, use the `@track_cost` decorator or `log_call`:
 
 ```python
-import llmlab
+import llmcast
 
-@llmlab.track_cost(provider="openai")
+@llmcast.track_cost(provider="openai")
 def call_gpt(prompt: str):
     return openai.chat.completions.create(model="gpt-4", messages=[{"role": "user", "content": prompt}])
 
 # Or log calls manually
-llmlab.log_call(model="gpt-4", tokens_in=500, tokens_out=200, provider="openai")
+llmcast.log_call(model="gpt-4", tokens_in=500, tokens_out=200, provider="openai")
 ```
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `llmlab init` | Initialize project and create `.llmlab.toml` config |
-| `llmlab init --budget X` | Set a budget cap in USD |
-| `llmlab forecast` | Show cost forecast in terminal |
-| `llmlab forecast --output markdown` | Output forecast as Markdown |
-| `llmlab forecast --output csv` | Output forecast as CSV |
-| `llmlab forecast --tui` | Interactive TUI dashboard (requires `pip install llmlab[tui]`) |
-| `llmlab forecast --json` | JSON output for CI/scripts |
-| `llmlab forecast --brief` | One-line summary (same format as `status`) |
-| `llmlab forecast --exit-code` | Exit 1 if projected over budget, 2 if actual over budget (for CI) |
-| `llmlab status` | One-line summary: spend, projected total, day count, drift status |
-| `llmlab track` | View recent tracked LLM calls |
-| `llmlab watch` | Live cost dashboard; updates as your app makes calls |
-| `llmlab export --format csv` | Export usage data as CSV |
-| `llmlab export --format json` | Export usage data as JSON |
-| `llmlab demo` | Run forecast with sample data, no setup needed |
-| `llmlab optimize` | Suggest cost optimizations based on usage |
-| `llmlab reset` | Reset the current project (optionally keep usage logs) |
-| `llmlab serve` | Run local API server for programmatic access |
+| `llmcast init` | Initialize project and create `.llmcast.toml` config |
+| `llmcast init --budget X` | Set a budget cap in USD |
+| `llmcast forecast` | Show cost forecast in terminal |
+| `llmcast forecast --output markdown` | Output forecast as Markdown |
+| `llmcast forecast --output csv` | Output forecast as CSV |
+| `llmcast forecast --tui` | Interactive TUI dashboard (requires `pip install llmcast[tui]`) |
+| `llmcast forecast --json` | JSON output for CI/scripts |
+| `llmcast forecast --brief` | One-line summary (same format as `status`) |
+| `llmcast forecast --exit-code` | Exit 1 if projected over budget, 2 if actual over budget (for CI) |
+| `llmcast status` | One-line summary: spend, projected total, day count, drift status |
+| `llmcast track` | View recent tracked LLM calls |
+| `llmcast watch` | Live cost dashboard; updates as your app makes calls |
+| `llmcast export --format csv` | Export usage data as CSV |
+| `llmcast export --format json` | Export usage data as JSON |
+| `llmcast demo` | Run forecast with sample data, no setup needed |
+| `llmcast optimize` | Suggest cost optimizations based on usage |
+| `llmcast reset` | Reset the current project (optionally keep usage logs) |
+| `llmcast serve` | Run local API server for programmatic access |
 
 `status` and `forecast --brief` both show the same one-line summary. Use `status` when you only need a quick check; use `forecast --brief` when you want that format in a script or CI pipeline.
 
@@ -112,7 +112,7 @@ llmlab.log_call(model="gpt-4", tokens_in=500, tokens_out=200, provider="openai")
 Set a budget at init with `--budget`:
 
 ```bash
-llmlab init --budget 100
+llmcast init --budget 100
 ```
 
 Use `--exit-code` on forecast to fail CI when over budget:
@@ -120,8 +120,8 @@ Use `--exit-code` on forecast to fail CI when over budget:
 ```yaml
 - name: Check LLM Budget
   run: |
-    pip install llmlab
-    llmlab forecast --exit-code
+    pip install llmcast
+    llmcast forecast --exit-code
 ```
 
 Exit codes: 0 = on track, 1 = projected over budget, 2 = actual spend over budget.
@@ -135,12 +135,12 @@ LLMLAB_DISABLED=1 pytest
 Or in code:
 
 ```python
-llmlab.disable()
+llmcast.disable()
 ```
 
 ## Forecasting Accuracy
 
-llmlab uses an ensemble of three statistical forecasting methods (Simple Exponential Smoothing, Damped Trend, and Linear Regression) inspired by the M4 Forecasting Competition, where simple combinations beat complex ML models across 100,000 time series.
+llmcast uses an ensemble of three statistical forecasting methods (Simple Exponential Smoothing, Damped Trend, and Linear Regression) inspired by the M4 Forecasting Competition, where simple combinations beat complex ML models across 100,000 time series.
 
 | Metric | What it means | Typical result |
 |--------|---------------|----------------|
@@ -149,13 +149,13 @@ llmlab uses an ensemble of three statistical forecasting methods (Simple Exponen
 | 80% interval | Will the real cost land here? | ~80% of the time |
 | 95% interval | Conservative budget range | ~95% of the time |
 
-Install the ensemble engine for best results: `pip install llmlab[forecast]`
+Install the ensemble engine for best results: `pip install llmcast[forecast]`
 
 The base install uses a simpler exponential moving average that works without additional dependencies.
 
-## Why llmlab?
+## Why llmcast?
 
-| Feature | llmlab | LiteLLM | Helicone | LangSmith |
+| Feature | llmcast | LiteLLM | Helicone | LangSmith |
 |---------|--------|---------|----------|-----------|
 | Cost tracking | Yes | Yes | Yes | Yes |
 | Cost forecasting | Yes | No | No | No |
@@ -170,8 +170,8 @@ Minimal footprint: 3 runtime dependencies (click, rich, httpx), under 3MB.
 
 ## Data Storage
 
-- **Usage and forecasts:** `~/.llmlab/costs.db` (SQLite). All projects share this database.
-- **Project config:** `.llmlab.toml` in your project root. Contains project name, baseline days, and optional budget.
+- **Usage and forecasts:** `~/.llmcast/costs.db` (SQLite). All projects share this database.
+- **Project config:** `.llmcast.toml` in your project root. Contains project name, baseline days, and optional budget.
 
 ## Glossary
 
@@ -185,16 +185,16 @@ Minimal footprint: 3 runtime dependencies (click, rich, httpx), under 3MB.
 
 ## Local API Server
 
-`llmlab serve` starts a local HTTP server (default port 8787) for programmatic access:
+`llmcast serve` starts a local HTTP server (default port 8787) for programmatic access:
 
 | Endpoint | Description |
 |----------|-------------|
 | `GET /api/health` | Health check. Returns `{"status": "ok"}`. |
-| `GET /api/forecast` | Full forecast result (same as `llmlab forecast --json`). |
+| `GET /api/forecast` | Full forecast result (same as `llmcast forecast --json`). |
 | `GET /api/status` | Project status: active days, actual spend, baseline info. |
 | `GET /api/costs` | Recent usage logs. |
 
-Run from your project directory so llmlab can find `.llmlab.toml`.
+Run from your project directory so llmcast can find `.llmcast.toml`.
 
 ## Contributing
 

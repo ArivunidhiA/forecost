@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from llmlab.db import (
+from llmcast.db import (
     WriteQueue,
     create_project,
     get_active_days,
@@ -17,8 +17,8 @@ from llmlab.db import (
 @pytest.fixture
 def db_path(tmp_path, monkeypatch):
     path = tmp_path / "costs.db"
-    monkeypatch.setattr("llmlab.db._DB_PATH", path)
-    monkeypatch.setattr("llmlab.db._conn", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", path)
+    monkeypatch.setattr("llmcast.db._conn", None)
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 

@@ -6,8 +6,8 @@ import threading
 from datetime import datetime, timezone
 from typing import Callable
 
-from llmlab.db import WriteQueue
-from llmlab.pricing import calculate_cost, get_provider
+from llmcast.db import WriteQueue
+from llmcast.pricing import calculate_cost, get_provider
 
 __all__ = [
     "install",
@@ -37,7 +37,7 @@ def _get_queue() -> WriteQueue:
 
 
 def _log_internal_error(e: Exception) -> None:
-    log_dir = os.path.expanduser("~/.llmlab")
+    log_dir = os.path.expanduser("~/.llmcast")
     log_path = os.path.join(log_dir, "error.log")
     try:
         os.makedirs(log_dir, exist_ok=True)

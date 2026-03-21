@@ -1,6 +1,6 @@
 import pytest
 
-from llmlab import interceptor
+from llmcast import interceptor
 
 
 @pytest.fixture(autouse=True)

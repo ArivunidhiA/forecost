@@ -3,19 +3,19 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from llmlab.db import (
+from llmcast.db import (
     _insert_usage_logs_batch,
     create_project,
     get_or_create_db,
 )
-from llmlab.forecaster import ProjectForecaster
+from llmcast.forecaster import ProjectForecaster
 
 
 @pytest.fixture
 def synthetic_project(tmp_path, monkeypatch):
     db_path = tmp_path / "costs.db"
-    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
-    monkeypatch.setattr("llmlab.db._conn", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmcast.db._conn", None)
     pid = create_project(
         name="fc",
         path=str(tmp_path),
@@ -55,8 +55,8 @@ def test_project_forecaster_with_synthetic_data(synthetic_project):
 
 def test_confidence_scoring_at_different_day_counts(tmp_path, monkeypatch):
     db_path = tmp_path / "costs.db"
-    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
-    monkeypatch.setattr("llmlab.db._conn", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmcast.db._conn", None)
     pid = create_project(
         name="conf",
         path=str(tmp_path),
@@ -98,8 +98,8 @@ def test_confidence_scoring_at_different_day_counts(tmp_path, monkeypatch):
 
 def test_drift_detection_over_budget(tmp_path, monkeypatch):
     db_path = tmp_path / "costs.db"
-    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
-    monkeypatch.setattr("llmlab.db._conn", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmcast.db._conn", None)
     pid = create_project(
         name="drift",
         path=str(tmp_path),
@@ -132,8 +132,8 @@ def test_drift_detection_over_budget(tmp_path, monkeypatch):
 def _make_project(tmp_path, monkeypatch, n_days, baseline_days=21, base_cost=10.0):
     """Helper to create a project with n_days of usage data."""
     db_path = tmp_path / "costs.db"
-    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
-    monkeypatch.setattr("llmlab.db._conn", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmcast.db._conn", None)
     pid = create_project(
         name="ens",
         path=str(tmp_path / f"proj{n_days}"),
@@ -208,7 +208,7 @@ def test_mase_below_one_for_stable_data(tmp_path, monkeypatch):
 
 def test_fallback_when_statsmodels_unavailable(tmp_path, monkeypatch):
     pid = _make_project(tmp_path, monkeypatch, n_days=5)
-    monkeypatch.setattr("llmlab.forecaster._HAS_STATSMODELS", False)
+    monkeypatch.setattr("llmcast.forecaster._HAS_STATSMODELS", False)
     f = ProjectForecaster(pid)
     result = f.calculate_forecast()
     assert result["models_used"] == ["ema_fallback"]

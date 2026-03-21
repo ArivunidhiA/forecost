@@ -6,7 +6,7 @@ import sys
 import click
 from rich.console import Console
 
-from llmlab.db import get_project_by_path, get_recent_usage_logs
+from llmcast.db import get_project_by_path, get_recent_usage_logs
 
 console = Console()
 
@@ -22,8 +22,8 @@ def export_data(fmt, limit):
     project = get_project_by_path(project_path)
     if project is None:
         console.print(
-            f"[red]No llmlab project found in {project_path}[/red]\n\n"
-            "  Run [bold]llmlab init[/bold] first."
+            f"[red]No llmcast project found in {project_path}[/red]\n\n"
+            "  Run [bold]llmcast init[/bold] first."
         )
         raise SystemExit(1)
 

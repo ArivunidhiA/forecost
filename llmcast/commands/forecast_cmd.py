@@ -10,9 +10,9 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from llmlab.db import get_forecast_history, get_project_by_path
-from llmlab.forecaster import _HAS_STATSMODELS as _HAS_STATSMODELS_FLAG
-from llmlab.forecaster import ProjectForecaster
+from llmcast.db import get_forecast_history, get_project_by_path
+from llmcast.forecaster import _HAS_STATSMODELS as _HAS_STATSMODELS_FLAG
+from llmcast.forecaster import ProjectForecaster
 
 console = Console()
 
@@ -31,7 +31,7 @@ def _check_budget_exit(project: dict, result: dict) -> None:
     """Exit with CI-friendly code based on budget. Never returns."""
     budget = (project.get("metadata") or {}).get("budget")
     if budget is None:
-        console.print("[dim]No budget set. Use llmlab init --budget X to set one.[/dim]")
+        console.print("[dim]No budget set. Use llmcast init --budget X to set one.[/dim]")
         raise SystemExit(0)
     actual = result["actual_spend"]
     projected = result["projected_total"]
@@ -148,7 +148,7 @@ def _build_premium_output(result: dict, project: dict) -> None:
 
     if not _HAS_STATSMODELS_FLAG and result.get("models_used") == ["ema_fallback"]:
         console.print(
-            "\n[dim]Tip: pip install llmlab[forecast] for research-grade forecasting[/dim]"
+            "\n[dim]Tip: pip install llmcast[forecast] for research-grade forecasting[/dim]"
         )
 
 
@@ -171,11 +171,11 @@ def forecast(output_fmt, as_json, tui, brief, exit_code):
 
     if project is None:
         console.print(
-            f"[red]No llmlab project found in {project_path}[/red]\n\n"
+            f"[red]No llmcast project found in {project_path}[/red]\n\n"
             "  To get started:\n"
             f"    cd {project_path}\n"
-            "    llmlab init\n\n"
-            "  llmlab looks for a .llmlab.toml file in the current directory."
+            "    llmcast init\n\n"
+            "  llmcast looks for a .llmcast.toml file in the current directory."
         )
         raise SystemExit(1)
 
@@ -239,7 +239,7 @@ def forecast(output_fmt, as_json, tui, brief, exit_code):
         return
 
     if tui:
-        from llmlab.tui import launch
+        from llmcast.tui import launch
 
         def on_refresh():
             return ProjectForecaster(project["id"]).calculate_forecast()
@@ -267,7 +267,7 @@ def forecast(output_fmt, as_json, tui, brief, exit_code):
     if result["active_days"] == 0:
         console.print(
             "[dim]No usage data yet. Forecast is based on the initial estimate.\n"
-            "  To start tracking: add 'import llmlab; llmlab.auto_track()' to your app.[/dim]"
+            "  To start tracking: add 'import llmcast; llmcast.auto_track()' to your app.[/dim]"
         )
     if exit_code:
         _check_budget_exit(project, result)

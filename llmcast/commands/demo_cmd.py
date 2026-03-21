@@ -5,17 +5,17 @@ from datetime import datetime, timedelta, timezone
 import click
 from rich.console import Console
 
-from llmlab.db import create_project, get_or_create_db, get_project_by_path
-from llmlab.forecaster import ProjectForecaster
-from llmlab.pricing import calculate_cost
+from llmcast.db import create_project, get_or_create_db, get_project_by_path
+from llmcast.forecaster import ProjectForecaster
+from llmcast.pricing import calculate_cost
 
 console = Console()
 
 
 @click.command()
 def demo():
-    """See llmlab in action with sample data."""
-    demo_dir = os.path.join(tempfile.gettempdir(), "llmlab-demo")
+    """See llmcast in action with sample data."""
+    demo_dir = os.path.join(tempfile.gettempdir(), "llmcast-demo")
     os.makedirs(demo_dir, exist_ok=True)
 
     existing = get_project_by_path(demo_dir)
@@ -95,7 +95,7 @@ def demo():
         )
 
     console.print(
-        Panel(summary, title="[bold]llmlab demo -- Cost Forecast[/bold]", border_style="blue")
+        Panel(summary, title="[bold]llmcast demo -- Cost Forecast[/bold]", border_style="blue")
     )
     if result.get("model_breakdown"):
         console.print(model_table)
@@ -103,7 +103,7 @@ def demo():
     console.print()
     console.print("[dim]This is sample data. To track your real project:[/dim]")
     console.print("  cd your-project/")
-    console.print("  llmlab init")
+    console.print("  llmcast init")
     console.print()
 
     # Clean up demo data from DB

@@ -4,7 +4,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from llmlab.db import get_project_by_path, get_recent_usage_logs
+from llmcast.db import get_project_by_path, get_recent_usage_logs
 
 console = Console()
 
@@ -18,11 +18,11 @@ def track(limit):
 
     if project is None:
         console.print(
-            f"[red]No llmlab project found in {project_path}[/red]\n\n"
+            f"[red]No llmcast project found in {project_path}[/red]\n\n"
             "  To get started:\n"
             f"    cd {project_path}\n"
-            "    llmlab init\n\n"
-            "  llmlab looks for a .llmlab.toml file in the current directory."
+            "    llmcast init\n\n"
+            "  llmcast looks for a .llmcast.toml file in the current directory."
         )
         raise SystemExit(1)
 
@@ -32,10 +32,10 @@ def track(limit):
         console.print(
             "[yellow]No tracked calls yet.[/yellow]\n\n"
             "  Quick start:\n"
-            "    import llmlab\n"
-            "    llmlab.auto_track()  # Add to your app\n\n"
+            "    import llmcast\n"
+            "    llmcast.auto_track()  # Add to your app\n\n"
             "  Or track manually:\n"
-            "    llmlab.log_call(model='gpt-4o', tokens_in=500, tokens_out=200)"
+            "    llmcast.log_call(model='gpt-4o', tokens_in=500, tokens_out=200)"
         )
         return
 

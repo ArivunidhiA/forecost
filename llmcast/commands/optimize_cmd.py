@@ -4,7 +4,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from llmlab.db import get_or_create_db, get_project_by_path
+from llmcast.db import get_or_create_db, get_project_by_path
 
 console = Console()
 
@@ -29,8 +29,8 @@ def optimize():
     project = get_project_by_path(project_path)
     if project is None:
         console.print(
-            f"[red]No llmlab project found in {project_path}[/red]\n\n"
-            "  Run [bold]llmlab init[/bold] first."
+            f"[red]No llmcast project found in {project_path}[/red]\n\n"
+            "  Run [bold]llmcast init[/bold] first."
         )
         raise SystemExit(1)
 
@@ -45,7 +45,7 @@ def optimize():
         console.print(
             "[yellow]No usage data yet.[/yellow]\n\n"
             "  Start tracking to get optimization suggestions:\n"
-            "    import llmlab; llmlab.auto_track()"
+            "    import llmcast; llmcast.auto_track()"
         )
         return
 

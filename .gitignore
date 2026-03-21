@@ -50,6 +50,6 @@ coverage.xml
 # Cursor
 .cursor/
 
-# llmlab
-.llmlab.toml
-.llmlab/
+# llmcast
+.llmcast.toml
+.llmcast/

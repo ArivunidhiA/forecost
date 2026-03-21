@@ -3,8 +3,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from llmlab.db import _insert_usage_logs_batch, create_project, get_or_create_db
-from llmlab.forecaster import ProjectForecaster
+from llmcast.db import _insert_usage_logs_batch, create_project, get_or_create_db
+from llmcast.forecaster import ProjectForecaster
 
 
 def generate_synthetic_project(
@@ -19,8 +19,8 @@ def generate_synthetic_project(
 ):
     rng = random.Random(seed)
     db_path = tmp_path / "costs.db"
-    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
-    monkeypatch.setattr("llmlab.db._conn", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmcast.db._conn", None)
     project_id = create_project(
         name="bench",
         path=str(tmp_path),
@@ -47,8 +47,8 @@ def generate_synthetic_project(
 
 @pytest.mark.benchmark
 def test_ensemble_beats_naive_baseline(tmp_path, monkeypatch, db_path):
-    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
-    monkeypatch.setattr("llmlab.db._conn", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmcast.db._conn", None)
     project_id, _, _ = generate_synthetic_project(
         tmp_path, monkeypatch, days=14, base_cost=10.0, noise=0.15, seed=42
     )
@@ -60,8 +60,8 @@ def test_ensemble_beats_naive_baseline(tmp_path, monkeypatch, db_path):
 
 @pytest.mark.benchmark
 def test_accuracy_improves_with_data(tmp_path, monkeypatch, db_path):
-    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
-    monkeypatch.setattr("llmlab.db._conn", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmcast.db._conn", None)
     project_id, actual_costs, _ = generate_synthetic_project(
         tmp_path, monkeypatch, days=14, base_cost=10.0, noise=0.15, seed=42
     )
@@ -93,8 +93,8 @@ def test_accuracy_improves_with_data(tmp_path, monkeypatch, db_path):
 
 @pytest.mark.benchmark
 def test_handles_model_switch(tmp_path, monkeypatch, db_path):
-    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
-    monkeypatch.setattr("llmlab.db._conn", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmcast.db._conn", None)
     project_id, _, _ = generate_synthetic_project(
         tmp_path, monkeypatch, days=14, base_cost=10.0, seed=42
     )
@@ -126,8 +126,8 @@ def test_handles_model_switch(tmp_path, monkeypatch, db_path):
 
 @pytest.mark.benchmark
 def test_handles_weekend_gaps(tmp_path, monkeypatch, db_path):
-    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
-    monkeypatch.setattr("llmlab.db._conn", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmcast.db._conn", None)
     project_id, _, _ = generate_synthetic_project(
         tmp_path, monkeypatch, days=14, base_cost=10.0, weekend_gaps=True, seed=42
     )
@@ -138,8 +138,8 @@ def test_handles_weekend_gaps(tmp_path, monkeypatch, db_path):
 
 @pytest.mark.benchmark
 def test_handles_cost_spike(tmp_path, monkeypatch, db_path):
-    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
-    monkeypatch.setattr("llmlab.db._conn", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmcast.db._conn", None)
     project_id, _, _ = generate_synthetic_project(
         tmp_path, monkeypatch, days=14, base_cost=10.0, seed=42
     )
@@ -165,8 +165,8 @@ def test_handles_cost_spike(tmp_path, monkeypatch, db_path):
 
 @pytest.mark.benchmark
 def test_drift_detection(tmp_path, monkeypatch, db_path):
-    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
-    monkeypatch.setattr("llmlab.db._conn", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmcast.db._conn", None)
     project_id, _, _ = generate_synthetic_project(
         tmp_path, monkeypatch, days=14, base_cost=10.0, drift=2.0, seed=42
     )
@@ -177,8 +177,8 @@ def test_drift_detection(tmp_path, monkeypatch, db_path):
 
 @pytest.mark.benchmark
 def test_flat_cost_high_accuracy(tmp_path, monkeypatch, db_path):
-    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
-    monkeypatch.setattr("llmlab.db._conn", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmcast.db._conn", None)
     project_id, _, _ = generate_synthetic_project(
         tmp_path, monkeypatch, days=14, base_cost=10.0, noise=0.0, seed=42
     )
@@ -190,8 +190,8 @@ def test_flat_cost_high_accuracy(tmp_path, monkeypatch, db_path):
 
 @pytest.mark.benchmark
 def test_zero_data_graceful(tmp_path, monkeypatch, db_path):
-    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
-    monkeypatch.setattr("llmlab.db._conn", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmcast.db._conn", None)
     project_id = create_project(
         name="empty",
         path=str(tmp_path),
@@ -208,8 +208,8 @@ def test_zero_data_graceful(tmp_path, monkeypatch, db_path):
 
 @pytest.mark.benchmark
 def test_single_day_graceful(tmp_path, monkeypatch, db_path):
-    monkeypatch.setattr("llmlab.db._DB_PATH", db_path)
-    monkeypatch.setattr("llmlab.db._conn", None)
+    monkeypatch.setattr("llmcast.db._DB_PATH", db_path)
+    monkeypatch.setattr("llmcast.db._conn", None)
     project_id, _, _ = generate_synthetic_project(
         tmp_path, monkeypatch, days=1, base_cost=10.0, seed=42
     )
