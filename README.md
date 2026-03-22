@@ -1,6 +1,6 @@
 # forecost
 
-**Know what your AI project will cost. Before you build it.**
+**The Swiss army knife for LLM costs. Local-first, zero infra.**
 
 [![PyPI version](https://img.shields.io/pypi/v/forecost.svg)](https://pypi.org/project/forecost/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -8,11 +8,34 @@
 
 Python 3.10+ required. forecost is in Alpha: APIs may change and some features are experimental.
 
-See `forecost demo` for a live preview.
+## Instant Value — No Setup Required
 
-## The Problem
+### Compare costs across models instantly
 
-LLM API costs are unpredictable. You prototype with GPT-4, ship to production, and the first month's bill arrives as a surprise. Most teams have no way to forecast spend until it's too late. forecost fixes this by learning from your actual usage and giving you accurate cost projections before you scale.
+```bash
+$ forecost calc "Explain quantum computing in simple terms"
+
+┌─────────────────────────────────────────────────────────────┐
+│                     Cost Comparison                         │
+├──────────────────────────┬──────────┬──────────┬────────────┤
+│ Model                    │ Tier     │ Tokens   │ Cost/call  │
+├──────────────────────────┼──────────┼──────────┼────────────┤
+│ gpt-4o                   │ Tier 1   │ 8 / 500  │ $0.005020  │
+│ gpt-4o-mini              │ Tier 2   │ 8 / 500  │ $0.000301  │
+│ claude-3-5-sonnet-latest │ Tier 1   │ 8 / 500  │ $0.007524  │
+│ claude-3-5-haiku-latest  │ Tier 2   │ 8 / 500  │ $0.002006  │
+│ gemini-2.5-pro           │ Tier 1   │ 8 / 500  │ $0.005010  │
+│ gemini-2.5-flash         │ Tier 2   │ 8 / 500  │ $0.000301  │
+└──────────────────────────┴──────────┴──────────┴────────────┘
+```
+
+### Browse all LLM pricing
+
+```bash
+forecost price               # Rich table of all 80+ models
+forecost price --json        # Programmatic JSON output
+forecost price --tier 1      # Filter by capability tier
+```
 
 ## Quick Start
 
@@ -42,6 +65,14 @@ forecost forecast
 ## See It in Action
 
 `forecost demo` runs a forecast with sample data and no setup. Use it to see the full output before tracking your own project.
+
+## Dual-Mode Tracking: Tokens + Dollars
+
+forecost v0.2.0 tracks both **token burn** and **dollar cost** side by side:
+
+- **API users** see dollar projections and cost optimization suggestions
+- **Subscription users** (Cursor, Claude Code) see token burn rates and remaining capacity
+- All CLI commands (`status`, `forecast`, `optimize`) display both metrics
 
 ## Auto-Tracking
 
@@ -86,6 +117,10 @@ forecost.log_call(model="gpt-4", tokens_in=500, tokens_out=200, provider="openai
 
 | Command | Description |
 |---------|-------------|
+| `forecost calc "prompt"` | Instant cost comparison across models |
+| `forecost calc --file prompt.txt` | Cost estimate from a file |
+| `forecost price` | Browse LLM pricing for all 80+ models |
+| `forecost price --json` | Programmatic pricing data |
 | `forecost init` | Initialize project and create `.forecost.toml` config |
 | `forecost init --budget X` | Set a budget cap in USD |
 | `forecost forecast` | Show cost forecast in terminal |
@@ -95,13 +130,13 @@ forecost.log_call(model="gpt-4", tokens_in=500, tokens_out=200, provider="openai
 | `forecost forecast --json` | JSON output for CI/scripts |
 | `forecost forecast --brief` | One-line summary (same format as `status`) |
 | `forecost forecast --exit-code` | Exit 1 if projected over budget, 2 if actual over budget (for CI) |
-| `forecost status` | One-line summary: spend, projected total, day count, drift status |
+| `forecost status` | One-line summary: tokens, spend, projected total, drift status |
 | `forecost track` | View recent tracked LLM calls |
 | `forecost watch` | Live cost dashboard; updates as your app makes calls |
 | `forecost export --format csv` | Export usage data as CSV |
 | `forecost export --format json` | Export usage data as JSON |
 | `forecost demo` | Run forecast with sample data, no setup needed |
-| `forecost optimize` | Suggest cost optimizations based on usage |
+| `forecost optimize` | Tier-aware cost optimization suggestions |
 | `forecost reset` | Reset the current project (optionally keep usage logs) |
 | `forecost serve` | Run local API server for programmatic access |
 
@@ -159,6 +194,8 @@ The base install uses a simpler exponential moving average that works without ad
 |---------|--------|---------|----------|-----------|
 | Cost tracking | Yes | Yes | Yes | Yes |
 | Cost forecasting | Yes | No | No | No |
+| Instant cost calc | Yes | No | No | No |
+| LLM pricing database | Yes | Partial | No | No |
 | Prediction intervals | Yes | No | No | No |
 | Zero infrastructure | Yes | No (proxy) | No (cloud) | No (cloud) |
 | Zero overhead on requests | Yes (post-response) | No (proxy latency) | No (proxy latency) | No (SDK wrapper) |
@@ -182,6 +219,7 @@ Minimal footprint: 3 runtime dependencies (click, rich, httpx; plus tomli on Pyt
 | **MASE** | Mean Absolute Scaled Error. Compares forecast accuracy to a naive "yesterday = tomorrow" guess. MASE < 1.0 means the forecast beats the naive baseline. |
 | **Stability** | How much the forecast changes between runs: `converged` (< 5% change), `stabilizing` (5-15%), or `adjusting` (> 15%). |
 | **Prediction intervals** | 80% and 95% ranges around the projected total. The real cost will fall within the 80% interval about 80% of the time. |
+| **Model Tiers** | Capability classification: Tier 1 (Heavy) for complex tasks, Tier 2 (Standard) for routine work, Tier 3 (Economy) for simple tasks. Used by `optimize` for intelligent suggestions. |
 
 ## Local API Server
 

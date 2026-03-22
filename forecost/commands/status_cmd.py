@@ -47,7 +47,9 @@ def status():
     day = result["active_days"]
     total = result["total_days"]
     drift = _format_drift(result["drift_status"])
+    tokens = result.get("total_tokens", 0)
+    name = result["project_name"]
     console.print(
-        f"{result['project_name']} | ${spent:.2f} spent | ${proj:.2f} projected | "
-        f"Day {day}/{total} | {drift}"
+        f"{name} | {tokens:,} tokens | ${spent:.2f} spent | "
+        f"${proj:.2f} projected | Day {day}/{total} | {drift}"
     )

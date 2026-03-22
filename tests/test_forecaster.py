@@ -246,9 +246,8 @@ def test_bucketed_costs_returns_15min_intervals(tmp_path, monkeypatch):
     # 8 entries across 80 min → buckets at :00, :15, :30, :45, :60(=next hour :00), :75(=:15)
     # Expect 6 distinct 15-min buckets
     assert len(buckets) >= 4
-    assert all(cost > 0 for _, cost in buckets)
-    # Each bucket label should contain a colon-separated time portion
-    for label, _ in buckets:
+    assert all(cost > 0 for _, cost, *_ in buckets)
+    for label, _, *_ in buckets:
         assert ":" in label
 
 
@@ -365,3 +364,10 @@ def test_day_one_accuracy_with_buckets(tmp_path, monkeypatch):
     assert result["projected_total"] > 0
     assert result["data_granularity"] == "15min_buckets"
     assert result["active_days"] == 1
+
+
+def test_forecast_includes_total_tokens(synthetic_project):
+    f = ProjectForecaster(synthetic_project)
+    result = f.calculate_forecast()
+    assert "total_tokens" in result
+    assert result["total_tokens"] > 0

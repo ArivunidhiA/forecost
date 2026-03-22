@@ -45,3 +45,22 @@ def test_get_provider_mistral():
 
 def test_get_provider_unknown():
     assert get_provider("custom-model") == "unknown"
+
+
+def test_model_tiers_coverage():
+    from forecost.pricing import MODEL_TIERS, get_tier
+
+    all_tiered = []
+    for models in MODEL_TIERS.values():
+        all_tiered.extend(models)
+    assert len(all_tiered) >= 30
+    assert get_tier("gpt-4o") == "Tier 1 (Heavy)"
+    assert get_tier("gpt-4o-mini") == "Tier 2 (Standard)"
+    assert get_tier("gpt-3.5-turbo") == "Tier 3 (Economy)"
+    assert get_tier("nonexistent-model") == "Unknown"
+
+
+def test_get_tier_strips_date_suffix():
+    from forecost.pricing import get_tier
+
+    assert get_tier("gpt-4o-2024-08-06") == "Tier 1 (Heavy)"

@@ -215,3 +215,67 @@ def test_disabled_env_var(monkeypatch):
     original_send = httpx.Client.send
     auto_track()
     assert httpx.Client.send is original_send
+
+
+def test_forecast_json_includes_total_tokens(cli_runner, tmp_path, db_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "main.py").write_text("import openai\n")
+    (tmp_path / "README.md").write_text("chatbot\n")
+    monkeypatch.setattr("forecost.db._DB_PATH", db_path)
+    monkeypatch.setattr("forecost.db._conn", None)
+    result = cli_runner.invoke(main, ["init"])
+    assert result.exit_code == 0
+    conn = get_or_create_db()
+    proj = conn.execute("SELECT id FROM projects WHERE path = ?", (str(tmp_path),)).fetchone()
+    from datetime import datetime, timezone
+
+    base = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+    _insert_usage_logs_batch(
+        conn,
+        [
+            (proj["id"], base.isoformat(), "gpt-4o-mini", "openai", 1000, 500, 0.50, None),
+        ],
+    )
+    result = cli_runner.invoke(main, ["forecast", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert "total_tokens" in data
+    assert data["total_tokens"] == 1500
+
+
+def test_status_shows_tokens(cli_runner, tmp_path, db_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "main.py").write_text("import openai\n")
+    (tmp_path / "README.md").write_text("chatbot\n")
+    monkeypatch.setattr("forecost.db._DB_PATH", db_path)
+    monkeypatch.setattr("forecost.db._conn", None)
+    result = cli_runner.invoke(main, ["init"])
+    assert result.exit_code == 0
+    conn = get_or_create_db()
+    proj = conn.execute("SELECT id FROM projects WHERE path = ?", (str(tmp_path),)).fetchone()
+    from datetime import datetime, timezone
+
+    base = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+    _insert_usage_logs_batch(
+        conn,
+        [
+            (proj["id"], base.isoformat(), "gpt-4o-mini", "openai", 1000, 500, 0.50, None),
+        ],
+    )
+    result = cli_runner.invoke(main, ["status"])
+    assert result.exit_code == 0
+    assert "tokens" in result.output
+
+
+def test_full_v020_workflow(cli_runner, tmp_path, db_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "main.py").write_text("import openai\n")
+    (tmp_path / "README.md").write_text("chatbot\n")
+    monkeypatch.setattr("forecost.db._DB_PATH", db_path)
+    monkeypatch.setattr("forecost.db._conn", None)
+    assert cli_runner.invoke(main, ["init"]).exit_code == 0
+    assert cli_runner.invoke(main, ["calc", "Hello"]).exit_code == 0
+    assert cli_runner.invoke(main, ["price"]).exit_code == 0
+    assert cli_runner.invoke(main, ["forecast"]).exit_code == 0
+    assert cli_runner.invoke(main, ["optimize"]).exit_code == 0
+    assert cli_runner.invoke(main, ["status"]).exit_code == 0

@@ -59,7 +59,7 @@ def test_write_queue_puts_and_flushes(db_path):
     q._thread.join(timeout=3.0)
     costs = get_daily_costs(pid)
     assert len(costs) >= 1
-    total = sum(c for _, c in costs)
+    total = sum(c for _, c, *_ in costs)
     assert total > 0
 
 
@@ -89,10 +89,10 @@ def test_get_daily_costs_and_get_active_days(db_path):
     conn.commit()
     costs = get_daily_costs(pid)
     assert len(costs) == 2
-    days = {d for d, _ in costs}
+    days = {d for d, _, *_ in costs}
     assert "2024-01-01" in days
     assert "2024-01-02" in days
-    assert sum(c for _, c in costs) == 7.5
+    assert sum(c for _, c, *_ in costs) == 7.5
     assert get_active_days(pid) == 2
 
 
@@ -178,3 +178,43 @@ def test_forecaster_nonexistent_project_raises(db_path):
 
     with pytest.raises(ValueError, match="Project 99999 not found"):
         ProjectForecaster(99999)
+
+
+def test_daily_costs_include_tokens(db_path):
+    pid = create_project(
+        name="tok",
+        path="/tmp/tok",
+        baseline_daily_cost=1.0,
+        baseline_total_days=7,
+        baseline_total_cost=7.0,
+    )
+    conn = get_or_create_db()
+    conn.execute(
+        "INSERT INTO usage_logs (project_id, timestamp, model, provider, "
+        "tokens_in, tokens_out, cost_usd) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (pid, "2024-01-01T12:00:00Z", "gpt-4o", "openai", 1000, 500, 1.0),
+    )
+    conn.commit()
+    costs = get_daily_costs(pid)
+    assert len(costs) == 1
+    day, cost, tokens = costs[0]
+    assert tokens == 1500
+
+
+def test_source_column_default(db_path):
+    pid = create_project(
+        name="src",
+        path="/tmp/src",
+        baseline_daily_cost=1.0,
+        baseline_total_days=7,
+        baseline_total_cost=7.0,
+    )
+    conn = get_or_create_db()
+    conn.execute(
+        "INSERT INTO usage_logs (project_id, timestamp, model, provider, "
+        "tokens_in, tokens_out, cost_usd) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (pid, "2024-01-01T12:00:00Z", "gpt-4o", "openai", 100, 50, 0.5),
+    )
+    conn.commit()
+    row = conn.execute("SELECT source FROM usage_logs WHERE project_id = ?", (pid,)).fetchone()
+    assert row["source"] == "api"

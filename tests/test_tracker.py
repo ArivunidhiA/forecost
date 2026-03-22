@@ -64,7 +64,7 @@ def test_track_cost_decorator_async(monkeypatch):
             "usage": {"prompt_tokens": 200, "completion_tokens": 100},
         }
 
-    result = asyncio.get_event_loop().run_until_complete(fake_async_call())
+    result = asyncio.run(fake_async_call())
     assert result["model"] == "gpt-4o-mini"
     summary = get_session_summary()
     assert summary["calls"] == 1

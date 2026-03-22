@@ -4,7 +4,14 @@ import os
 import re
 from typing import Optional
 
-__all__ = ["calculate_cost", "get_provider", "FALLBACK_PRICING", "DEFAULT_COST"]
+__all__ = [
+    "calculate_cost",
+    "get_provider",
+    "FALLBACK_PRICING",
+    "DEFAULT_COST",
+    "MODEL_TIERS",
+    "get_tier",
+]
 
 # Last verified: March 2026
 FALLBACK_PRICING: dict[str, dict[str, float]] = {
@@ -106,6 +113,66 @@ FALLBACK_PRICING: dict[str, dict[str, float]] = {
 
 DEFAULT_COST = {"input": 5.0, "output": 15.0}
 
+MODEL_TIERS: dict[str, list[str]] = {
+    "Tier 1 (Heavy)": [
+        "gpt-4o",
+        "gpt-4-turbo",
+        "gpt-4",
+        "gpt-4.5-preview",
+        "o1",
+        "o1-preview",
+        "o3",
+        "o3-pro",
+        "claude-3-5-sonnet-latest",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-5-sonnet-20240620",
+        "claude-3-opus-20240229",
+        "claude-3-opus-latest",
+        "claude-sonnet-4-20250514",
+        "claude-opus-4-20250514",
+        "gemini-2.5-pro",
+        "gemini-1.5-pro",
+        "grok-3",
+        "mistral-large-latest",
+        "llama-3.1-405b",
+        "deepseek-reasoner",
+    ],
+    "Tier 2 (Standard)": [
+        "gpt-4o-mini",
+        "o1-mini",
+        "o3-mini",
+        "claude-3-5-haiku-latest",
+        "claude-3-5-haiku-20241022",
+        "claude-haiku-4-5-20251001",
+        "claude-3-sonnet-20240229",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "grok-2",
+        "mistral-medium-latest",
+        "llama-3.1-70b",
+        "llama-3.3-70b",
+        "deepseek-chat",
+        "command-r-plus",
+    ],
+    "Tier 3 (Economy)": [
+        "gpt-3.5-turbo",
+        "gpt-3.5-turbo-instruct",
+        "claude-3-haiku-20240307",
+        "claude-2.1",
+        "claude-2.0",
+        "claude-instant-1.2",
+        "gemini-1.5-flash-8b",
+        "gemini-1.0-pro",
+        "gemini-pro",
+        "grok-2-mini",
+        "mistral-small-latest",
+        "open-mistral-nemo",
+        "codestral-latest",
+        "command-r",
+    ],
+}
+
 _DATE_SUFFIX_RE = re.compile(r"-\d{4}(-\d{2}-\d{2}|\d{4})?$")
 
 
@@ -141,6 +208,18 @@ def calculate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
     input_cost = (tokens_in / 1_000_000) * cost["input"]
     output_cost = (tokens_out / 1_000_000) * cost["output"]
     return input_cost + output_cost
+
+
+def get_tier(model: str) -> str:
+    """Return the capability tier for a model, e.g. 'Tier 1 (Heavy)'."""
+    for tier, models in MODEL_TIERS.items():
+        if model in models:
+            return tier
+    stripped = _DATE_SUFFIX_RE.sub("", model)
+    for tier, models in MODEL_TIERS.items():
+        if stripped in models:
+            return tier
+    return "Unknown"
 
 
 def get_provider(model: str) -> str:

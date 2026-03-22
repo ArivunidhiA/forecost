@@ -119,17 +119,17 @@ class ProjectForecaster:
         """Try progressively finer bucket granularity until we get >= 3 data points."""
         for minutes in (15, 5, 1):
             buckets = get_bucketed_costs(project_id, bucket_minutes=minutes)
-            active = [(b, c) for b, c in buckets if c > 0]
+            active = [(b, c) for b, c, _t in buckets if c > 0]
             if len(active) >= 3:
                 return buckets, minutes
         return buckets, minutes
 
     def calculate_forecast(self, *, save: bool = False) -> dict:
-        active_days_data = [(day, cost) for day, cost in self._daily_costs if cost > 0]
+        active_days_data = [(day, cost) for day, cost, _tokens in self._daily_costs if cost > 0]
         n_days = len(active_days_data)
         daily_costs = [c for _, c in active_days_data]
 
-        bucket_costs_raw = [(b, cost) for b, cost in self._bucketed_costs if cost > 0]
+        bucket_costs_raw = [(b, cost) for b, cost, _tokens in self._bucketed_costs if cost > 0]
         n_buckets = len(bucket_costs_raw)
         bucket_costs = [c for _, c in bucket_costs_raw]
 
@@ -141,6 +141,7 @@ class ProjectForecaster:
 
         baseline_daily = self._baseline_daily_cost if self._baseline_daily_cost > 0 else 1.0
         actual_spend = sum(daily_costs)
+        total_tokens = sum(tokens for _, _, tokens in self._daily_costs)
         remaining_days = max(1, self._baseline_total_days - n_days)
 
         # Run forecasting models on the chosen series
@@ -337,6 +338,7 @@ class ProjectForecaster:
             "project_id": self._project_id,
             "project_name": self._project_name,
             "actual_spend": actual_spend,
+            "total_tokens": total_tokens,
             "projected_total": projected_total,
             "projected_remaining": projected_remaining,
             "remaining_days": remaining_days,

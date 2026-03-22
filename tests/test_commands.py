@@ -216,3 +216,43 @@ def test_log_stream_usage_anthropic_format(db_path, monkeypatch):
     assert "claude" in rows[0]["model"].lower()
     assert rows[0]["tokens_in"] == 200
     assert rows[0]["tokens_out"] == 80
+
+
+def test_calc_command_basic(cli_runner):
+    result = cli_runner.invoke(main, ["calc", "Hello world"])
+    assert result.exit_code == 0
+    assert "Cost Comparison" in result.output
+
+
+def test_calc_command_json(cli_runner):
+    result = cli_runner.invoke(main, ["calc", "Hello world", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert "input_tokens" in data
+    assert "models" in data
+
+
+def test_calc_no_prompt_fails(cli_runner):
+    result = cli_runner.invoke(main, ["calc"])
+    assert result.exit_code != 0
+
+
+def test_price_command_table(cli_runner):
+    result = cli_runner.invoke(main, ["price"])
+    assert result.exit_code == 0
+    assert "LLM Pricing" in result.output
+
+
+def test_price_command_json(cli_runner):
+    result = cli_runner.invoke(main, ["price", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert isinstance(data, list)
+    assert len(data) >= 10
+
+
+def test_price_filter_tier(cli_runner):
+    result = cli_runner.invoke(main, ["price", "--tier", "1", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert all(e["tier_num"] == "1" for e in data)

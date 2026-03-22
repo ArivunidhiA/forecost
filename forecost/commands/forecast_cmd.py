@@ -51,6 +51,8 @@ def _confidence_dots(confidence: str) -> str:
 
 
 def _build_premium_output(result: dict, project: dict) -> None:
+    from forecost.db import get_or_create_db
+
     spent = result["actual_spend"]
     proj = result["projected_total"]
     remaining = result["projected_remaining"]
@@ -70,6 +72,7 @@ def _build_premium_output(result: dict, project: dict) -> None:
             Text.from_markup(f"[dim]Day {day} of {total}[/dim]"),
             Text.from_markup(f"[dim]Confidence[/dim] {conf_dots}"),
             Text.from_markup(f"[dim]Burn rate[/dim] {burn:.2f}x"),
+            Text.from_markup(f"[dim]Tokens[/dim] {result.get('total_tokens', 0):,}"),
             drift,
         ],
         expand=True,
@@ -82,6 +85,9 @@ def _build_premium_output(result: dict, project: dict) -> None:
     panel_content.append(bar, style="cyan")
     panel_content.append(f"  {pct:.0f}%\n", style="dim")
     panel_content.append(f"Remaining ${remaining:.2f}\n\n", style="dim")
+    tokens = result.get("total_tokens", 0)
+    if tokens > 0:
+        panel_content.append(f"Tokens Used: {tokens:,}\n", style="dim")
 
     console.print(
         Panel(
@@ -96,6 +102,19 @@ def _build_premium_output(result: dict, project: dict) -> None:
     model_table.add_column("Spent", justify="right")
     model_table.add_column("Projected", justify="right")
     model_table.add_column("Share", justify="right")
+    model_table.add_column("Tokens", justify="right")
+
+    conn = get_or_create_db()
+    token_by_model = {}
+    if result.get("model_breakdown"):
+        for m in result["model_breakdown"]:
+            row = conn.execute(
+                "SELECT SUM(tokens_in + tokens_out) AS total "
+                "FROM usage_logs WHERE project_id = ? AND model = ?",
+                (result["project_id"], m["model"]),
+            ).fetchone()
+            token_by_model[m["model"]] = row["total"] if row and row["total"] else 0
+
     for m in result.get("model_breakdown", []):
         share_pct = (m.get("share", 0) or 0) * 100
         model_table.add_row(
@@ -103,9 +122,13 @@ def _build_premium_output(result: dict, project: dict) -> None:
             f"${m['spent']:.2f}",
             f"${m['projected']:.2f}",
             f"{share_pct:.1f}%",
+            f"{token_by_model.get(m['model'], 0):,}",
         )
     if result.get("model_breakdown"):
         console.print(model_table)
+
+    if result.get("actual_spend", 0) == 0.0 and result.get("total_tokens", 0) > 0:
+        console.print("[dim]Subscription Mode Active: Tracking token burn rate.[/dim]")
 
     history = get_forecast_history(project["id"])
     if len(history) >= 2:

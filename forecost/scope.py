@@ -14,8 +14,12 @@ _SDK_PATTERNS = [
     (r"from\s+openai\b", "openai"),
     (r"import\s+anthropic\b", "anthropic"),
     (r"from\s+anthropic\b", "anthropic"),
+    (r"require\(['\"]openai['\"]\)", "openai"),
+    (r"from\s+['\"]openai['\"]", "openai"),
+    (r"require\(['\"]@anthropic-ai/sdk['\"]\)", "anthropic"),
+    (r"from\s+['\"]@anthropic-ai/sdk['\"]", "anthropic"),
 ]
-_README_NAMES = ("README.md", "readme.md", "Readme.md")
+_README_NAMES = ("README.md", "readme.md", "Readme.md", "spec.md", "CLAUDE.md", ".cursorrules")
 
 
 def _count_files_by_extension(project_path: str) -> dict[str, int]:
@@ -28,6 +32,10 @@ def _count_files_by_extension(project_path: str) -> dict[str, int]:
             continue
         ext = p.suffix or "(no ext)"
         ext_counts[ext] = ext_counts.get(ext, 0) + 1
+    manifests = ("package.json", "go.mod", "Cargo.toml", "tsconfig.json", "pom.xml")
+    for manifest in manifests:
+        if (root / manifest).is_file():
+            ext_counts[manifest] = ext_counts.get(manifest, 0) + 1
     return ext_counts
 
 
@@ -68,8 +76,11 @@ def _has_keyword(text: str, keywords: tuple[str, ...]) -> bool:
 def _detect_sdk_imports(project_path: str) -> set[str]:
     found: set[str] = set()
     root = Path(project_path)
-    py_files = list(root.rglob("*.py"))[:100]
-    for p in py_files:
+    files: list[Path] = []
+    for ext in ("*.py", "*.js", "*.ts", "*.tsx", "*.jsx"):
+        files.extend(list(root.rglob(ext))[:50])
+    files = files[:100]
+    for p in files:
         if p.is_symlink() or not p.is_file() or _is_ignored(p, root):
             continue
         try:
@@ -159,8 +170,21 @@ def _gather_llm_context(project_path: str) -> str:
                 pass
             break
 
-    py_files = sorted(root.rglob("*.py"))[:50]
-    for p in py_files:
+    for name in (".cursorrules", "CLAUDE.md", ".github/copilot-instructions.md"):
+        p = root / name
+        if p.is_file():
+            try:
+                parts.append(
+                    f"--- {name} ---\n{p.read_text(encoding='utf-8', errors='replace')[:2000]}"
+                )
+            except OSError:
+                pass
+
+    code_files: list[Path] = []
+    for ext in ("*.py", "*.js", "*.ts", "*.tsx"):
+        code_files.extend(sorted(root.rglob(ext))[:25])
+    code_files = code_files[:50]
+    for p in code_files:
         if not p.is_file() or _is_ignored(p, root):
             continue
         try:

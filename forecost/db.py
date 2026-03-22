@@ -65,7 +65,8 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             tokens_in INTEGER NOT NULL,
             tokens_out INTEGER NOT NULL,
             cost_usd REAL NOT NULL,
-            metadata TEXT
+            metadata TEXT,
+            source TEXT DEFAULT 'api'
         );
         CREATE TABLE IF NOT EXISTS forecasts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,6 +97,10 @@ def get_or_create_db() -> sqlite3.Connection:
         _conn.row_factory = sqlite3.Row
         _apply_pragmas(_conn)
         _init_schema(_conn)
+        cols = [r[1] for r in _conn.execute("PRAGMA table_info(usage_logs)").fetchall()]
+        if "source" not in cols:
+            _conn.execute("ALTER TABLE usage_logs ADD COLUMN source TEXT DEFAULT 'api'")
+            _conn.commit()
         return _conn
 
 
@@ -133,11 +138,12 @@ def get_project_by_path(path: str) -> dict | None:
     return d
 
 
-def get_daily_costs(project_id: int) -> list[tuple[str, float]]:
+def get_daily_costs(project_id: int) -> list[tuple[str, float, int]]:
     conn = get_or_create_db()
     rows = conn.execute(
         """
-        SELECT date(timestamp) AS day, SUM(cost_usd) AS cost
+        SELECT date(timestamp) AS day, SUM(cost_usd) AS cost,
+               SUM(tokens_in + tokens_out) AS total_tokens
         FROM usage_logs
         WHERE project_id = ?
         GROUP BY day
@@ -145,10 +151,10 @@ def get_daily_costs(project_id: int) -> list[tuple[str, float]]:
         """,
         (project_id,),
     ).fetchall()
-    return [(r["day"], r["cost"]) for r in rows]
+    return [(r["day"], r["cost"], r["total_tokens"]) for r in rows]
 
 
-def get_bucketed_costs(project_id: int, bucket_minutes: int = 15) -> list[tuple[str, float]]:
+def get_bucketed_costs(project_id: int, bucket_minutes: int = 15) -> list[tuple[str, float, int]]:
     """Aggregate costs into fixed time buckets.
 
     Only returns buckets that have actual costs (no zero-fill).
@@ -163,7 +169,8 @@ def get_bucketed_costs(project_id: int, bucket_minutes: int = 15) -> list[tuple[
             strftime('%Y-%m-%d %H:', timestamp) ||
             printf('%02d', (CAST(strftime('%M', timestamp) AS INTEGER) / ?) * ?)
             AS bucket,
-            SUM(cost_usd) AS cost
+            SUM(cost_usd) AS cost,
+            SUM(tokens_in + tokens_out) AS total_tokens
         FROM usage_logs
         WHERE project_id = ?
         GROUP BY bucket
@@ -171,7 +178,7 @@ def get_bucketed_costs(project_id: int, bucket_minutes: int = 15) -> list[tuple[
         """,
         (bucket_minutes, bucket_minutes, project_id),
     ).fetchall()
-    return [(r["bucket"], r["cost"]) for r in rows]
+    return [(r["bucket"], r["cost"], r["total_tokens"]) for r in rows]
 
 
 def get_recent_usage_logs(project_id: int, limit: int = 20) -> list[dict]:
@@ -250,13 +257,14 @@ def get_forecast_history(project_id: int) -> list[dict]:
 def _insert_usage_logs_batch(conn: sqlite3.Connection, items: list[tuple]) -> None:
     if not items:
         return
+    normalized = [item if len(item) >= 9 else (*item, "api") for item in items]
     conn.executemany(
         """
         INSERT INTO usage_logs (project_id, timestamp, model, provider,
-            tokens_in, tokens_out, cost_usd, metadata)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            tokens_in, tokens_out, cost_usd, metadata, source)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        items,
+        normalized,
     )
     conn.commit()
 
@@ -283,11 +291,21 @@ class WriteQueue:
         tokens_out: int,
         cost_usd: float,
         metadata: str | None = None,
+        source: str = "api",
     ) -> None:
         try:
-            self._queue.put_nowait(
-                (project_id, timestamp, model, provider, tokens_in, tokens_out, cost_usd, metadata)
+            item = (
+                project_id,
+                timestamp,
+                model,
+                provider,
+                tokens_in,
+                tokens_out,
+                cost_usd,
+                metadata,
+                source,
             )
+            self._queue.put_nowait(item)
         except Exception:
             pass  # Drop item if queue is full — never block the caller
 
@@ -356,6 +374,7 @@ class WriteQueue:
                                 "tokens_out": item[5],
                                 "cost_usd": item[6],
                                 "metadata": item[7],
+                                "source": item[8] if len(item) > 8 else "api",
                             }
                             f.write(json.dumps(d) + "\n")
                 except OSError:

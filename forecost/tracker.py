@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import functools
+import inspect
 import json
 import os
 import threading
@@ -166,7 +166,7 @@ def track_cost(provider: str = "openai"):
                     )
 
     def decorator(fn: Callable):
-        if asyncio.iscoroutinefunction(fn):
+        if inspect.iscoroutinefunction(fn):
 
             @functools.wraps(fn)
             async def async_wrapper(*args, **kwargs):

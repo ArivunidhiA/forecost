@@ -18,26 +18,27 @@ if HAS_TEXTUAL:
         pass
 
 
-def _text_bar_chart(daily_costs: list[tuple[str, float]], width: int = 40) -> str:
+def _text_bar_chart(daily_costs: list[tuple], width: int = 40) -> str:
     if not daily_costs:
         return "No daily data yet"
-    max_cost = max(c for _, c in daily_costs)
+    max_cost = max(c for _, c, *_ in daily_costs)
     if max_cost <= 0:
         return "No costs recorded"
     lines = []
-    for day, cost in daily_costs[-14:]:
+    for entry in daily_costs[-14:]:
+        day, cost = entry[0], entry[1]
         bar_len = int((cost / max_cost) * width) if max_cost > 0 else 0
         bar = "█" * bar_len
         lines.append(f"{day[:10]:<12} {bar} ${cost:.2f}")
     return "\n".join(lines)
 
 
-def _plotext_bar_chart(daily_costs: list[tuple[str, float]]) -> str:
+def _plotext_bar_chart(daily_costs: list[tuple]) -> str:
     if not daily_costs or not HAS_PLOTEXT:
         return _text_bar_chart(daily_costs)
     try:
         plt.clf()
-        costs = [c for _, c in daily_costs[-14:]]
+        costs = [entry[1] for entry in daily_costs[-14:]]
         if not costs:
             return _text_bar_chart(daily_costs)
         plt.simple_bar(range(len(costs)), costs, width=0.5)
@@ -104,9 +105,11 @@ if HAS_TEXTUAL:
             burn = f.get("smoothed_burn_ratio", 0)
             conf = f.get("confidence", "—")
             drift = f.get("drift_status", "—")
+            tokens = f.get("total_tokens", 0)
             stats = (
                 f"Actual Spend: ${actual:.2f}\n"
                 f"Remaining: ${remaining:.2f}\n"
+                f"Tokens Burned: {tokens:,}\n"
                 f"Burn Ratio: {burn:.2f}x\n"
                 f"Confidence: {conf}\n"
                 f"Drift: {drift}"
