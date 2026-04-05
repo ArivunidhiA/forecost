@@ -10,7 +10,7 @@
 
 <!-- TODO: Replace with demo GIF showing: forecost calc → forecost forecast → TUI dashboard -->
 <p align="center">
-  <img src="https://via.placeholder.com/800x400?text=Demo+GIF+Coming+Soon" alt="forecost demo" width="800">
+  <img src="assets/demo.gif" alt="forecost demo" width="800">
 </p>
 
 ## The Problem

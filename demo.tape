@@ -1,24 +1,36 @@
-Output demo.gif
+Output assets/demo.gif
 
-Set FontSize 14
-Set Width 900
-Set Height 500
-Set Theme "Catppuccin Mocha"
+Require forecost
 
-Type "pip install forecost" Enter
-Sleep 2s
+Set Shell "bash"
+Set FontSize 16
+Set Width 1200
+Set Height 600
+Set Padding 20
+Set Margin 20
+Set MarginFill "#1a1b26"
+Set BorderRadius 8
+Set WindowBar Colorful
+Set WindowBarSize 40
+Set TypingSpeed 50ms
+Set Theme "Dracula"
 
-Type "cd ~/my-rag-project" Enter
+Type "forecost calc 'Explain quantum computing in simple terms'"
 Sleep 500ms
+Enter
+Sleep 4s
 
-Type "forecost init" Enter
-Sleep 2s
+Type "forecost demo"
+Sleep 500ms
+Enter
+Sleep 5s
 
-Type "# ... after a few days of building ..." Enter
-Sleep 1s
-
-Type "forecost forecast" Enter
+Type "forecost status"
+Sleep 500ms
+Enter
 Sleep 3s
 
-Type "forecost forecast --brief" Enter
-Sleep 2s
+Type "forecost price --tier 1"
+Sleep 500ms
+Enter
+Sleep 4s
