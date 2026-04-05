@@ -10,8 +10,9 @@ build/
 .eggs/
 
 # Virtual environments
-venv/
 .venv/
+.venv312/
+venv/
 env/
 
 # Environment variables
@@ -22,29 +23,60 @@ env/
 *.db
 *.sqlite3
 
-# IDE
+# IDE / editor
+.cursor/
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS
+# OS files
 .DS_Store
 Thumbs.db
 
-# Test
-.pytest_cache/
-htmlcov/
+# Testing & quality tools
+.hypothesis/
+.mutmut-cache/
+.mutmut-html/
+mutants/
 .coverage
 coverage.xml
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
 
 # Logs
 *.log
 
-# Cursor
-.cursor/
-
-# forecost
+# ForeCost runtime data
 .forecost.toml
 .forecost/
+
+# AI assistant configs
+.claude/
+.cursorrules
+.windsurfrules
+.opencode.json
+.mcp.json
+AGENTS.md
+GEMINI.md
+
+# Research docs (generated)
+.research-docs/
+
+# Code review graph (generated)
+.code-review-graph/
+
+# Benchmarks cache
+.benchmarks/
+
+# Misc generated
+item1_coverage_output.txt
+demo.tape
+forecost-social-preview.png
+
+# Node
+node_modules/
