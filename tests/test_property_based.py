@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -124,8 +125,6 @@ def test_active_days_never_exceeds_inserted_distinct_days(n_days: int, costs: li
             import forecost.db as db_mod
 
             if hasattr(db_mod, "_conn") and db_mod._conn is not None:
-                try:
+                with suppress(Exception):
                     db_mod._conn.close()
-                except Exception:
-                    pass
                 db_mod._conn = None
