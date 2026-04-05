@@ -10,8 +10,9 @@ from hypothesis import given
 import pytest
 
 from forecost.db import _insert_usage_logs_batch, create_project, get_active_days, get_or_create_db
-from forecost.pricing import DEFAULT_COST, calculate_cost
-from forecost.tracker import get_session_summary, log_call
+from forecost.forecaster import _drift_status
+from forecost.pricing import DEFAULT_COST, MODEL_TIERS, calculate_cost, get_tier
+from forecost.tracker import get_session_summary, log_call, track, track_cost
 
 
 @given(
@@ -57,6 +58,32 @@ def test_unknown_model_uses_default_rate(
 
 
 @given(
+    model=st.text(min_size=1, max_size=64),
+    tokens_in=st.integers(min_value=-10_000_000, max_value=1_000_000_000),
+    tokens_out=st.integers(min_value=-10_000_000, max_value=1_000_000_000),
+)
+def test_calculate_cost_handles_negative_and_huge_tokens(
+    model: str, tokens_in: int, tokens_out: int
+) -> None:
+    cost = calculate_cost(model, tokens_in, tokens_out)
+    assert isinstance(cost, float)
+    assert cost == cost
+
+
+@st.composite
+def tier_and_model(draw):
+    tier = draw(st.sampled_from(list(MODEL_TIERS.keys())))
+    model = draw(st.sampled_from(MODEL_TIERS[tier]))
+    return tier, model
+
+
+@given(pair=tier_and_model())
+def test_get_tier_matches_membership_for_random_tier_model(pair: tuple[str, str]) -> None:
+    tier, model = pair
+    assert get_tier(model) == tier
+
+
+@given(
     calls=st.lists(
         st.tuples(
             st.integers(min_value=0, max_value=20_000),
@@ -81,6 +108,111 @@ def test_log_call_accumulates_consistent_session_totals(calls: list[tuple[int, i
         expected_tokens = sum(tokens_in + tokens_out for tokens_in, tokens_out in calls)
         assert summary["total_tokens"] == expected_tokens
         assert summary["total_cost"] >= 0.0
+
+
+@given(
+    model=st.sampled_from(["gpt-4o", "gpt-4o-mini", "claude-3-5-sonnet-latest", "gemini-2.5-pro"]),
+    tokens_in=st.integers(min_value=-500_000, max_value=5_000_000),
+    tokens_out=st.integers(min_value=-500_000, max_value=5_000_000),
+)
+def test_log_call_matches_calculate_cost_for_any_tokens(
+    model: str, tokens_in: int, tokens_out: int
+) -> None:
+    import forecost.tracker as tracker_mod
+
+    with pytest.MonkeyPatch.context() as patch:
+        tracker_mod._session_stats = {}
+        patch.setattr("forecost.tracker._find_project", lambda: None)
+        log_call(model, tokens_in, tokens_out)
+        summary = get_session_summary()
+        assert summary["calls"] == 1
+        assert summary["total_tokens"] == tokens_in + tokens_out
+        assert summary["total_cost"] == calculate_cost(model, tokens_in, tokens_out)
+
+
+@given(
+    trailing=st.lists(
+        st.floats(min_value=1.6, max_value=10.0, allow_nan=False, allow_infinity=False),
+        min_size=3,
+        max_size=8,
+    ),
+    prefix=st.lists(
+        st.floats(min_value=0.0, max_value=1.5, allow_nan=False, allow_infinity=False),
+        min_size=0,
+        max_size=8,
+    ),
+)
+def test_drift_status_flags_over_budget_with_three_trailing_spikes(
+    trailing: list[float], prefix: list[float]
+) -> None:
+    series = [10.0 * v for v in [*prefix, *trailing]]
+    smoothed_ratio = max(1.6, sum(v for v in trailing[-3:]) / 3)
+    assert _drift_status(series, baseline_daily=10.0, smoothed_ratio=smoothed_ratio) == "over_budget"
+
+
+@given(
+    trailing=st.lists(
+        st.floats(min_value=0.0, max_value=0.4, allow_nan=False, allow_infinity=False),
+        min_size=3,
+        max_size=8,
+    ),
+    prefix=st.lists(
+        st.floats(min_value=0.5, max_value=3.0, allow_nan=False, allow_infinity=False),
+        min_size=0,
+        max_size=8,
+    ),
+)
+def test_drift_status_flags_under_budget_with_three_trailing_drops(
+    trailing: list[float], prefix: list[float]
+) -> None:
+    series = [10.0 * v for v in [*prefix, *trailing]]
+    smoothed_ratio = min(0.4, sum(v for v in trailing[-3:]) / 3)
+    assert _drift_status(series, baseline_daily=10.0, smoothed_ratio=smoothed_ratio) == "under_budget"
+
+
+@given(
+    actions=st.lists(
+        st.tuples(
+            st.sampled_from(["log", "ctx", "decorated"]),
+            st.integers(min_value=0, max_value=50_000),
+            st.integers(min_value=0, max_value=50_000),
+        ),
+        min_size=1,
+        max_size=20,
+    )
+)
+def test_tracker_action_sequences_preserve_call_and_token_totals(
+    actions: list[tuple[str, int, int]]
+) -> None:
+    import forecost.tracker as tracker_mod
+
+    with pytest.MonkeyPatch.context() as patch:
+        tracker_mod._session_stats = {}
+        patch.setattr("forecost.tracker._find_project", lambda: None)
+
+        @track_cost(provider="openai")
+        def _decorated_call(tokens_in: int, tokens_out: int):
+            return {
+                "model": "gpt-4o-mini",
+                "usage": {"prompt_tokens": tokens_in, "completion_tokens": tokens_out},
+            }
+
+        expected_calls = 0
+        expected_tokens = 0
+        for action, tokens_in, tokens_out in actions:
+            if action == "log":
+                log_call("gpt-4o-mini", tokens_in, tokens_out)
+            elif action == "ctx":
+                with track() as t:
+                    t.log_call("gpt-4o-mini", tokens_in, tokens_out)
+            else:
+                _decorated_call(tokens_in, tokens_out)
+            expected_calls += 1
+            expected_tokens += tokens_in + tokens_out
+
+        summary = get_session_summary()
+        assert summary["calls"] == expected_calls
+        assert summary["total_tokens"] == expected_tokens
 
 
 @given(
