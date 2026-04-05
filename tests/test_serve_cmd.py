@@ -3,6 +3,7 @@
 import json
 import socket
 import threading
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import HTTPServer
