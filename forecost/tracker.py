@@ -157,6 +157,7 @@ def track_cost(provider: str = "openai"):
     Returns:
         Callable: Decorator wrapping sync or async call sites.
     """
+
     def _process_result(result):
         if isinstance(result, dict) and "usage" in result:
             usage = result["usage"]
@@ -209,6 +210,7 @@ def track():
     Yields:
         Tracker: Object exposing ``log_call`` for direct usage accounting.
     """
+
     class Tracker:
         def log_call(
             self,

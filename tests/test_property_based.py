@@ -93,25 +93,39 @@ def test_log_call_accumulates_consistent_session_totals(calls: list[tuple[int, i
 def test_active_days_never_exceeds_inserted_distinct_days(n_days: int, costs: list[float]) -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         db_path = Path(tmp_dir) / "costs.db"
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr("forecost.db._DB_PATH", db_path)
-            patch.setattr("forecost.db._conn", None)
+        conn = None
+        try:
+            with pytest.MonkeyPatch.context() as patch:
+                patch.setattr("forecost.db._DB_PATH", db_path)
+                patch.setattr("forecost.db._conn", None)
 
-            pid = create_project(
-                name="prop-db",
-                path=str(Path(tmp_dir) / f"proj-{n_days}"),
-                baseline_daily_cost=5.0,
-                baseline_total_days=14,
-                baseline_total_cost=70.0,
-            )
-            conn = get_or_create_db()
-            base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+                pid = create_project(
+                    name="prop-db",
+                    path=str(Path(tmp_dir) / f"proj-{n_days}"),
+                    baseline_daily_cost=5.0,
+                    baseline_total_days=14,
+                    baseline_total_cost=70.0,
+                )
+                conn = get_or_create_db()
+                base = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
-            items = []
-            for i in range(n_days):
-                day_ts = (base + timedelta(days=i)).isoformat()
-                cost = float(costs[i % len(costs)])
-                items.append((pid, day_ts, "gpt-4o-mini", "openai", 100, 50, cost, None))
+                items = []
+                for i in range(n_days):
+                    day_ts = (base + timedelta(days=i)).isoformat()
+                    cost = float(costs[i % len(costs)])
+                    items.append((pid, day_ts, "gpt-4o-mini", "openai", 100, 50, cost, None))
 
-            _insert_usage_logs_batch(conn, items)
-            assert get_active_days(pid) <= n_days
+                _insert_usage_logs_batch(conn, items)
+                assert get_active_days(pid) <= n_days
+        finally:
+            if conn is not None:
+                conn.close()
+
+            import forecost.db as db_mod
+
+            if hasattr(db_mod, "_conn") and db_mod._conn is not None:
+                try:
+                    db_mod._conn.close()
+                except Exception:
+                    pass
+                db_mod._conn = None
