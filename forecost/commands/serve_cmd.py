@@ -8,7 +8,7 @@ from forecost.db import get_active_days, get_daily_costs, get_project_by_path, g
 from forecost.forecaster import ProjectForecaster
 
 CORS_HEADERS = {
-    "Access-Control-Allow-Origin": "http://localhost",
+    "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
 }
@@ -63,7 +63,13 @@ class ForecostHandler(BaseHTTPRequestHandler):
             _send_404(self)
             return
 
-        assert project is not None
+        if project is None:
+            _send_json(
+                self,
+                {"error": "No ForeCost project found. Run 'forecost init' first."},
+                500,
+            )
+            return
 
         if self.path == "/api/forecast":
             try:

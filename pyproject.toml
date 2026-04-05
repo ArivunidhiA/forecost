@@ -33,7 +33,8 @@ dependencies = [
 forecast = ["statsmodels>=0.14", "numpy>=1.24"]
 tui = ["textual>=0.50", "plotext>=5.0"]
 llm = ["litellm>=1.0"]
-all = ["forecost[forecast,tui,llm]"]
+mcp = ["mcp[cli]>=1.0"]
+all = ["forecost[forecast,tui,llm,mcp]"]
 dev = [
     "pytest>=7.0",
     "pytest-cov",
@@ -51,10 +52,12 @@ dev = [
     "mypy",
     "statsmodels>=0.14",
     "numpy>=1.24",
+    "mcp[cli]>=1.0",
 ]
 
 [project.scripts]
 forecost = "forecost.cli:main"
+forecost-mcp = "forecost.mcp.server:main"
 
 [project.entry-points.pytest11]
 forecost = "forecost.pytest_plugin"

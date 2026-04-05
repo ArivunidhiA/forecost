@@ -182,9 +182,16 @@ def test_log_stream_usage_openai_format(db_path, monkeypatch):
             "usage": {"prompt_tokens": 100, "completion_tokens": 50},
         }
     )
-    time.sleep(2.5)
-    conn = get_or_create_db()
-    rows = conn.execute("SELECT * FROM usage_logs WHERE project_id = ?", (project_id,)).fetchall()
+    deadline = time.monotonic() + 5.0
+    rows = []
+    while time.monotonic() < deadline:
+        conn = get_or_create_db()
+        rows = conn.execute(
+            "SELECT * FROM usage_logs WHERE project_id = ?", (project_id,)
+        ).fetchall()
+        if len(rows) > 0:
+            break
+        time.sleep(0.1)
     assert len(rows) == 1
     assert rows[0]["model"] == "gpt-4o-mini"
     assert rows[0]["tokens_in"] == 100
@@ -209,9 +216,16 @@ def test_log_stream_usage_anthropic_format(db_path, monkeypatch):
             "usage": {"input_tokens": 200, "output_tokens": 80},
         }
     )
-    time.sleep(2.5)
-    conn = get_or_create_db()
-    rows = conn.execute("SELECT * FROM usage_logs WHERE project_id = ?", (project_id,)).fetchall()
+    deadline = time.monotonic() + 5.0
+    rows = []
+    while time.monotonic() < deadline:
+        conn = get_or_create_db()
+        rows = conn.execute(
+            "SELECT * FROM usage_logs WHERE project_id = ?", (project_id,)
+        ).fetchall()
+        if len(rows) > 0:
+            break
+        time.sleep(0.1)
     assert len(rows) == 1
     assert "claude" in rows[0]["model"].lower()
     assert rows[0]["tokens_in"] == 200

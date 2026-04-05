@@ -10,21 +10,12 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from forecost.db import get_forecast_history, get_project_by_path
+from forecost.db import get_forecast_history, get_or_create_db, get_project_by_path
 from forecost.forecaster import _HAS_STATSMODELS as _HAS_STATSMODELS_FLAG
 from forecost.forecaster import ProjectForecaster
+from forecost.formatting import format_drift_text as _format_drift
 
 console = Console()
-
-
-def _format_drift(status: str) -> Text:
-    if status == "on_track":
-        return Text("On Track", style="green")
-    if status == "over_budget":
-        return Text("Over Budget", style="red bold")
-    if status == "under_budget":
-        return Text("Under Budget", style="yellow")
-    return Text(status, style="dim")
 
 
 def _check_budget_exit(project: dict, result: dict) -> None:
@@ -51,8 +42,6 @@ def _confidence_dots(confidence: str) -> str:
 
 
 def _build_model_table(result: dict) -> Table:
-    from forecost.db import get_or_create_db
-
     model_table = Table(title="Model breakdown")
     model_table.add_column("Model", style="cyan")
     model_table.add_column("Spent", justify="right")

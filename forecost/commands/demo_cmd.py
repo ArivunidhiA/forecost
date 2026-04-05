@@ -43,13 +43,17 @@ def _seed_demo_usage(pid: int) -> None:
     ]
 
     for day_offset, model, num_calls, avg_in, avg_out in day_configs:
-        ts = (base - timedelta(days=10 - day_offset)).isoformat()
-        cost = num_calls * calculate_cost(model, avg_in, avg_out)
-        conn.execute(
-            "INSERT INTO usage_logs (project_id, timestamp, model, provider, "
-            "tokens_in, tokens_out, cost_usd, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (pid, ts, model, "openai", avg_in * num_calls, avg_out * num_calls, cost, None),
-        )
+        base_ts = base - timedelta(days=10 - day_offset)
+        rep_calls = min(num_calls, 10)
+        scale = num_calls / rep_calls
+        for call_idx in range(rep_calls):
+            ts = (base_ts + timedelta(minutes=call_idx * (1440 // max(rep_calls, 1)))).isoformat()
+            cost = scale * calculate_cost(model, avg_in, avg_out)
+            conn.execute(
+                "INSERT INTO usage_logs (project_id, timestamp, model, provider, "
+                "tokens_in, tokens_out, cost_usd, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (pid, ts, model, "openai", int(avg_in * scale), int(avg_out * scale), cost, None),
+            )
     conn.commit()
 
 

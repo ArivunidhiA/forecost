@@ -1,6 +1,7 @@
 import pytest
 from click.testing import CliRunner
 
+from forecost import __version__
 from forecost.cli import main
 
 
@@ -22,7 +23,7 @@ def test_cli_commands_exist(cli_runner):
 def test_forecost_version(cli_runner):
     result = cli_runner.invoke(main, ["--version"])
     assert result.exit_code == 0
-    assert "0.1.0" in result.output or "forecost" in result.output.lower()
+    assert __version__ in result.output
 
 
 def test_forecost_init_in_temp_directory(cli_runner, tmp_path, monkeypatch):

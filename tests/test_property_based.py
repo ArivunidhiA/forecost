@@ -147,7 +147,8 @@ def test_drift_status_flags_over_budget_with_three_trailing_spikes(
 ) -> None:
     series = [10.0 * v for v in [*prefix, *trailing]]
     smoothed_ratio = max(1.6, sum(v for v in trailing[-3:]) / 3)
-    assert _drift_status(series, baseline_daily=10.0, smoothed_ratio=smoothed_ratio) == "over_budget"
+    result = _drift_status(series, baseline_daily=10.0, smoothed_ratio=smoothed_ratio)
+    assert result == "over_budget"
 
 
 @given(
@@ -167,7 +168,8 @@ def test_drift_status_flags_under_budget_with_three_trailing_drops(
 ) -> None:
     series = [10.0 * v for v in [*prefix, *trailing]]
     smoothed_ratio = min(0.4, sum(v for v in trailing[-3:]) / 3)
-    assert _drift_status(series, baseline_daily=10.0, smoothed_ratio=smoothed_ratio) == "under_budget"
+    result = _drift_status(series, baseline_daily=10.0, smoothed_ratio=smoothed_ratio)
+    assert result == "under_budget"
 
 
 @given(

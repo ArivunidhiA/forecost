@@ -34,7 +34,10 @@ def _build_display(project):
             "FROM usage_logs WHERE project_id = ?",
             (pid,),
         ).fetchone()["tok"]
-    except Exception:
+    except Exception as e:
+        import logging
+
+        logging.getLogger("forecost").debug("Watch refresh error: %s", e)
         daily_costs = []
         total = 0.0
         logs = []

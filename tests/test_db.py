@@ -15,15 +15,6 @@ from forecost.db import (
 )
 
 
-@pytest.fixture
-def db_path(tmp_path, monkeypatch):
-    path = tmp_path / "costs.db"
-    monkeypatch.setattr("forecost.db._DB_PATH", path)
-    monkeypatch.setattr("forecost.db._conn", None)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path
-
-
 def test_create_project_and_get_project_by_path(db_path):
     pid = create_project(
         name="foo",

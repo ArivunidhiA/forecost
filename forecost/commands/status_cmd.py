@@ -5,18 +5,9 @@ from rich.console import Console
 
 from forecost.db import get_project_by_path
 from forecost.forecaster import ProjectForecaster
+from forecost.formatting import format_drift_plain as _format_drift
 
 console = Console()
-
-
-def _format_drift(status: str) -> str:
-    if status == "on_track":
-        return "On Track"
-    if status == "over_budget":
-        return "Over Budget"
-    if status == "under_budget":
-        return "Under Budget"
-    return status
 
 
 @click.command()

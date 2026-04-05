@@ -211,6 +211,8 @@ def calculate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
     Returns:
         float: Estimated total call cost in USD.
     """
+    tokens_in = max(0, tokens_in)
+    tokens_out = max(0, tokens_out)
     cost = _resolve_model(model)
     if cost is None:
         _log_unknown_model(model)
