@@ -117,8 +117,12 @@ MODEL_TIERS: dict[str, list[str]] = {
     "Tier 1 (Heavy)": [
         "gpt-4o",
         "gpt-4-turbo",
+        "gpt-4-turbo-preview",
         "gpt-4",
+        "gpt-4-32k",
         "gpt-4.5-preview",
+        "gpt-4o-audio-preview",
+        "gpt-4o-realtime",
         "o1",
         "o1-preview",
         "o3",
@@ -131,7 +135,10 @@ MODEL_TIERS: dict[str, list[str]] = {
         "claude-sonnet-4-20250514",
         "claude-opus-4-20250514",
         "gemini-2.5-pro",
+        "gemini-2.5-pro-preview-05-06",
         "gemini-1.5-pro",
+        "gemini-1.5-pro-001",
+        "gemini-1.5-pro-002",
         "grok-3",
         "mistral-large-latest",
         "llama-3.1-405b",
@@ -146,8 +153,12 @@ MODEL_TIERS: dict[str, list[str]] = {
         "claude-haiku-4-5-20251001",
         "claude-3-sonnet-20240229",
         "gemini-2.5-flash",
+        "gemini-2.5-flash-preview-04-17",
         "gemini-2.0-flash",
+        "gemini-2.0-flash-001",
         "gemini-1.5-flash",
+        "gemini-1.5-flash-001",
+        "gemini-1.5-flash-002",
         "grok-2",
         "mistral-medium-latest",
         "llama-3.1-70b",
@@ -163,6 +174,7 @@ MODEL_TIERS: dict[str, list[str]] = {
         "claude-2.0",
         "claude-instant-1.2",
         "gemini-1.5-flash-8b",
+        "gemini-1.5-flash-8b-001",
         "gemini-1.0-pro",
         "gemini-pro",
         "grok-2-mini",
@@ -170,6 +182,12 @@ MODEL_TIERS: dict[str, list[str]] = {
         "open-mistral-nemo",
         "codestral-latest",
         "command-r",
+    ],
+    "Embedding": [
+        "text-embedding-3-small",
+        "text-embedding-3-large",
+        "text-embedding-ada-002",
+        "text-embedding-004",
     ],
 }
 
@@ -238,6 +256,12 @@ def get_tier(model: str) -> str:
     for tier, models in MODEL_TIERS.items():
         if stripped in models:
             return tier
+    # Progressive suffix stripping (matches _resolve_model behaviour)
+    while "-" in stripped:
+        stripped = stripped.rsplit("-", 1)[0]
+        for tier, models in MODEL_TIERS.items():
+            if stripped in models:
+                return tier
     return "Unknown"
 
 
