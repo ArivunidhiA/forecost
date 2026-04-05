@@ -63,6 +63,8 @@ class ForecostHandler(BaseHTTPRequestHandler):
             _send_404(self)
             return
 
+        assert project is not None
+
         if self.path == "/api/forecast":
             try:
                 forecaster = ProjectForecaster(project["id"])
@@ -75,7 +77,7 @@ class ForecostHandler(BaseHTTPRequestHandler):
         if self.path == "/api/status":
             active_days = get_active_days(project["id"])
             daily_costs = get_daily_costs(project["id"])
-            actual_spend = sum(c for _, c in daily_costs)
+            actual_spend = sum(c for _, c, *_ in daily_costs)
             out = {
                 "project": {
                     "id": project["id"],

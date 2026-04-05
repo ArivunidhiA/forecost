@@ -1,3 +1,8 @@
+# Core Source: forecost/db.py
+
+Zero-maintenance SQLite database module with async batch writing.
+
+```python
 """
 Zero-maintenance SQLite database module for forecost cost tracking.
 """
@@ -124,7 +129,7 @@ def create_project(
         (name, path, baseline_daily_cost, baseline_total_days, baseline_total_cost, meta_json, now),
     )
     conn.commit()
-    return cur.lastrowid or 0
+    return cur.lastrowid
 
 
 def get_project_by_path(path: str) -> dict | None:
@@ -236,7 +241,7 @@ def save_forecast(
         ),
     )
     conn.commit()
-    return cur.lastrowid or 0
+    return cur.lastrowid
 
 
 def get_forecast_history(project_id: int) -> list[dict]:
@@ -306,8 +311,8 @@ class WriteQueue:
                 source,
             )
             self._queue.put_nowait(item)
-        except Exception:  # nosec B110 - Intentional: drop item if queue is full, never block the caller
-            pass
+        except Exception:
+            pass  # Drop item if queue is full — never block the caller
 
     def _worker(self) -> None:
         _ensure_dir()
@@ -386,3 +391,85 @@ class WriteQueue:
         except Exception:
             return
         self._thread.join(timeout=_EXIT_TIMEOUT)
+```
+
+---
+
+## Schema
+
+### projects
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER PK | Auto-increment |
+| name | TEXT | Project name |
+| path | TEXT UNIQUE | Absolute path to project |
+| baseline_daily_cost | REAL | Estimated daily spend |
+| baseline_total_days | INTEGER | Estimated project duration |
+| baseline_total_cost | REAL | baseline_daily × baseline_days |
+| metadata | TEXT (JSON) | Extra project info |
+| created_at | TEXT | ISO8601 timestamp |
+
+### usage_logs
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER PK | Auto-increment |
+| project_id | INTEGER FK | References projects.id |
+| timestamp | TEXT | ISO8601 |
+| model | TEXT | Model name (e.g., "gpt-4o") |
+| provider | TEXT | Provider (openai, anthropic, etc.) |
+| tokens_in | INTEGER | Input tokens |
+| tokens_out | INTEGER | Output tokens |
+| cost_usd | REAL | Calculated cost |
+| metadata | TEXT (JSON) | Optional extra data |
+| source | TEXT | 'api', 'cursor', 'claude' |
+
+### forecasts
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER PK | Auto-increment |
+| project_id | INTEGER FK | References projects.id |
+| iteration | INTEGER | Forecast run number |
+| projected_total | REAL | Predicted final cost |
+| projected_remaining_days | INTEGER | Days left |
+| smoothed_burn_ratio | REAL | Current vs baseline ratio |
+| confidence | TEXT | low/medium-low/medium/high/very-high |
+| active_days_count | INTEGER | Days with usage data |
+| mape | REAL | Mean Absolute Percentage Error |
+| created_at | TEXT | ISO8601 |
+
+---
+
+## Optimization
+
+**SQLite Pragmas:**
+- `journal_mode=WAL`: Write-ahead logging for read concurrency
+- `busy_timeout=5000`: Wait up to 5 seconds on lock
+- `synchronous=NORMAL`: Balance durability/performance
+
+**Indexes:**
+- `idx_usage_project_ts`: Fast date aggregation by project
+- `idx_forecast_project_iter`: Forecast history lookup
+
+---
+
+## WriteQueue Design
+
+**Backpressure handling:**
+- Queue maxsize: 10,000 items
+- Drops on full (put_nowait + try/except)
+- Never blocks caller thread
+
+**Batching strategy:**
+- Size trigger: 100 items
+- Time trigger: 2 seconds
+- Whichever comes first
+
+**Error recovery:**
+- Retry once after 500ms delay
+- On second failure: write to recovery.jsonl
+- Recovery file rotated at 1MB (keeps last 100 lines)
+
+**Graceful shutdown:**
+- atexit handler: sends sentinel (None) to queue
+- 1-second timeout for thread join
+- Unflushed items may be lost (acceptable for monitoring)

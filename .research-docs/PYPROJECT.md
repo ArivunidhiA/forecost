@@ -1,0 +1,117 @@
+# pyproject.toml Configuration
+
+```toml
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "forecost"
+version = "0.2.0"
+description = "Know exactly what your AI project will cost. Local-first LLM cost forecasting that learns from your usage."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Arivunidhi A" }]
+keywords = ["llm", "cost", "forecast", "openai", "anthropic", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "click>=8.0",
+    "rich>=13.0",
+    "httpx>=0.25.0",
+    "tomli>=2.0.0; python_version < \"3.11\"",
+]
+
+[project.optional-dependencies]
+forecast = ["statsmodels>=0.14", "numpy>=1.24"]
+tui = ["textual>=0.50", "plotext>=5.0"]
+llm = ["litellm>=1.0"]
+all = ["forecost[forecast,tui,llm]"]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "pytest-asyncio>=0.23",
+    "ruff",
+    "mypy",
+    "statsmodels>=0.14",
+    "numpy>=1.24",
+]
+
+[project.scripts]
+forecost = "forecost.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ArivunidhiA/forecost"
+Changelog = "https://github.com/ArivunidhiA/forecost/blob/main/CHANGELOG.md"
+Issues = "https://github.com/ArivunidhiA/forecost/issues"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = ["benchmark: marks tests as benchmark/accuracy tests"]
+```
+
+---
+
+## Key Configuration Details
+
+### Build System
+- **Build backend:** hatchling (modern Python packaging)
+- **Entry point:** `forecost` command maps to `forecost.cli:main`
+
+### Dependencies
+
+**Core Runtime (always installed):**
+| Package | Version | Purpose |
+|---------|---------|---------|
+| click | >=8.0 | CLI framework |
+| rich | >=13.0 | Terminal formatting, tables |
+| httpx | >=0.25.0 | HTTP interception target |
+| tomli | >=2.0.0 | TOML parsing (Python 3.10 only) |
+
+**Optional Extras:**
+| Extra | Dependencies | Purpose |
+|-------|-------------|---------|
+| forecast | statsmodels>=0.14, numpy>=1.24 | Ensemble forecasting engine |
+| tui | textual>=0.50, plotext>=5.0 | Interactive dashboard |
+| llm | litellm>=1.0 | LLM-powered scope analysis |
+| all | All of above | Convenience install |
+| dev | pytest, ruff, mypy, etc. | Development tools |
+
+### Tool Configuration
+
+**Ruff (Linting/Formatting):**
+- Target: Python 3.10+
+- Line length: 100 characters
+- Enabled rules: E (pycodestyle), F (Pyflakes), I (isort), W (pydocstyle warnings)
+
+**MyPy (Type Checking):**
+- Target: Python 3.10
+- Strict warnings: return_any, unused_configs
+
+**Pytest:**
+- Test directory: `tests/`
+- Async mode: auto (pytest-asyncio)
+- Custom marker: `benchmark` for accuracy tests

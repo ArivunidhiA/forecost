@@ -1,3 +1,4 @@
+import logging
 import os
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -10,6 +11,7 @@ from forecost.forecaster import ProjectForecaster
 from forecost.pricing import calculate_cost
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 @click.command()
@@ -62,6 +64,7 @@ def demo():
     conn.commit()
 
     # Run forecaster and build 3 iterations to show convergence
+    result: dict = {}
     for i in range(3):
         f = ProjectForecaster(pid)
         result = f.calculate_forecast(save=True)
@@ -113,5 +116,5 @@ def demo():
         conn.execute("DELETE FROM usage_logs WHERE project_id = ?", (pid,))
         conn.execute("DELETE FROM projects WHERE id = ?", (pid,))
         conn.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to commit demo DB cleanup: {e}")

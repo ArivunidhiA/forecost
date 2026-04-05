@@ -1,17 +1,18 @@
 HAS_PLOTEXT = False
+HAS_TEXTUAL = False
 
 try:
-    from textual.app import App, ComposeResult
-    from textual.containers import Horizontal, Vertical
-    from textual.widgets import DataTable, Footer, Header, Static
+    from textual.app import App, ComposeResult  # type: ignore[import-untyped]
+    from textual.containers import Horizontal, Vertical  # type: ignore[import-untyped]
+    from textual.widgets import DataTable, Footer, Header, Static  # type: ignore[import-untyped]
 
     HAS_TEXTUAL = True
 except ImportError:
-    HAS_TEXTUAL = False
+    pass
 
 if HAS_TEXTUAL:
     try:
-        import plotext as plt
+        import plotext as plt  # type: ignore[import-untyped]
 
         HAS_PLOTEXT = True
     except ImportError:
@@ -37,21 +38,21 @@ def _plotext_bar_chart(daily_costs: list[tuple]) -> str:
     if not daily_costs or not HAS_PLOTEXT:
         return _text_bar_chart(daily_costs)
     try:
-        plt.clf()
+        plt.clf()  # type: ignore[union-attr]
         costs = [entry[1] for entry in daily_costs[-14:]]
         if not costs:
             return _text_bar_chart(daily_costs)
-        plt.simple_bar(range(len(costs)), costs, width=0.5)
-        plt.xlabel("Day")
-        plt.ylabel("Cost ($)")
-        return plt.build()
+        plt.simple_bar(range(len(costs)), costs, width=0.5)  # type: ignore[union-attr]
+        plt.xlabel("Day")  # type: ignore[union-attr]
+        plt.ylabel("Cost ($)")  # type: ignore[union-attr]
+        return plt.build()  # type: ignore[union-attr]
     except Exception:
         return _text_bar_chart(daily_costs)
 
 
 if HAS_TEXTUAL:
 
-    class ForecastDashboard(App):
+    class ForecastDashboard(App):  # type: ignore[misc]
         TITLE = "forecost -- Cost Forecast Dashboard"
         BINDINGS = [
             ("q", "quit", "Quit"),
@@ -68,19 +69,19 @@ if HAS_TEXTUAL:
             self._project_id = project_id
             self._on_refresh = on_refresh
 
-        def compose(self) -> ComposeResult:
-            yield Header(show_clock=False)
-            with Horizontal():
-                with Vertical(classes="left-panel"):
-                    yield Static("", id="projected-total")
-                    yield Static("", id="daily-chart")
-                with Vertical(classes="right-panel"):
-                    yield Static("", id="stats-panel")
-                    yield Static("Model breakdown", id="model-table-label")
-                    yield DataTable(id="model-table")
-                    yield Static("Forecast history", id="history-label")
-                    yield DataTable(id="history-table")
-            yield Footer()
+        def compose(self) -> ComposeResult:  # type: ignore[override]
+            yield Header(show_clock=False)  # type: ignore[union-attr]
+            with Horizontal():  # type: ignore[union-attr]
+                with Vertical(classes="left-panel"):  # type: ignore[union-attr]
+                    yield Static("", id="projected-total")  # type: ignore[union-attr]
+                    yield Static("", id="daily-chart")  # type: ignore[union-attr]
+                with Vertical(classes="right-panel"):  # type: ignore[union-attr]
+                    yield Static("", id="stats-panel")  # type: ignore[union-attr]
+                    yield Static("Model breakdown", id="model-table-label")  # type: ignore[union-attr]
+                    yield DataTable(id="model-table")  # type: ignore[union-attr]
+                    yield Static("Forecast history", id="history-label")  # type: ignore[union-attr]
+                    yield DataTable(id="history-table")  # type: ignore[union-attr]
+            yield Footer()  # type: ignore[union-attr]
 
         def on_mount(self) -> None:
             self._populate()
@@ -88,7 +89,7 @@ if HAS_TEXTUAL:
         def _populate(self) -> None:
             f = self._forecast
             total = f.get("projected_total", 0)
-            self.query_one("#projected-total", Static).update(
+            self.query_one("#projected-total", Static).update(  # type: ignore[union-attr]
                 f"[bold cyan]Projected Total:[/] [bold green]${total:.2f}[/]"
             )
 
@@ -98,7 +99,7 @@ if HAS_TEXTUAL:
             chart_content = (
                 _plotext_bar_chart(daily_costs) if HAS_PLOTEXT else _text_bar_chart(daily_costs)
             )
-            self.query_one("#daily-chart", Static).update(chart_content)
+            self.query_one("#daily-chart", Static).update(chart_content)  # type: ignore[union-attr]
 
             actual = f.get("actual_spend", 0)
             remaining = f.get("projected_remaining", 0)
@@ -114,9 +115,9 @@ if HAS_TEXTUAL:
                 f"Confidence: {conf}\n"
                 f"Drift: {drift}"
             )
-            self.query_one("#stats-panel", Static).update(stats)
+            self.query_one("#stats-panel", Static).update(stats)  # type: ignore[union-attr]
 
-            model_table = self.query_one("#model-table", DataTable)
+            model_table = self.query_one("#model-table", DataTable)  # type: ignore[union-attr]
             model_table.clear()
             model_table.add_columns("Model", "Spent", "Projected", "Share")
             for m in f.get("model_breakdown", []):
@@ -128,7 +129,7 @@ if HAS_TEXTUAL:
                 )
 
             history = get_forecast_history(self._project_id)
-            hist_table = self.query_one("#history-table", DataTable)
+            hist_table = self.query_one("#history-table", DataTable)  # type: ignore[union-attr]
             hist_table.clear()
             hist_table.add_columns("Iter", "Projected Total")
             for h in history[-10:]:

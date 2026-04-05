@@ -1,10 +1,15 @@
+# Core Source: forecost/interceptor.py
+
+Auto-tracking via httpx monkey-patching. Non-blocking, transport-level.
+
+```python
 """Auto-tracking via httpx monkey-patching. Non-blocking, transport-level."""
 
 import json as _json
 import os
 import threading
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Callable
 
 from forecost.db import WriteQueue
 from forecost.pricing import calculate_cost, get_provider
@@ -18,8 +23,8 @@ __all__ = [
     "get_interceptor_stats",
 ]
 
-_original_send: Any = None
-_original_async_send: Any = None
+_original_send = None
+_original_async_send = None
 _current_project_id: int | None = None
 _on_usage: Callable[..., None] | None = None
 _write_queue: WriteQueue | None = None
@@ -133,7 +138,7 @@ def _extract_and_log_usage(response) -> None:
                 tokens_out=tokens_out,
                 cost=cost,
             )
-        except Exception:  # nosec B110 - Intentional: user callback errors must not disrupt tracking
+        except Exception:
             pass
 
 
@@ -183,7 +188,7 @@ def log_stream_usage(response_data: dict) -> None:
         if _on_usage:
             try:
                 _on_usage(model=model, tokens_in=tokens_in, tokens_out=tokens_out, cost=cost)
-            except Exception:  # nosec B110 - Intentional: user callback errors must not disrupt tracking
+            except Exception:
                 pass
     except Exception as e:
         _log_internal_error(e)
@@ -234,3 +239,96 @@ def uninstall() -> None:
     httpx.AsyncClient.send = _original_async_send
     _original_send = None
     _original_async_send = None
+```
+
+---
+
+## Design Patterns
+
+### Monkey-Patching Strategy
+
+```python
+_original_send = httpx.Client.send
+_original_async_send = httpx.AsyncClient.send
+httpx.Client.send = _patched_send
+httpx.AsyncClient.send = _patched_async_send
+```
+
+Preserves original methods for uninstall. Patches occur at the transport layer, catching all HTTP calls made by httpx.
+
+### Response Parsing
+
+Uses `response.content` (cached bytes) rather than streaming body:
+```python
+body = response.content  # Safe - httpx caches after .read()
+data = _json.loads(body)
+```
+
+Avoids consuming response stream that caller might need.
+
+### Streaming Detection
+
+```python
+def _is_streaming(response) -> bool:
+    ct = response.headers.get("content-type", "")
+    return ct.startswith("text/event-stream")
+```
+
+Skips parsing for SSE streams (no usage data in initial response). User must call `log_stream_usage()` with accumulated data.
+
+### Singleton WriteQueue
+
+```python
+def _get_queue() -> WriteQueue:
+    global _write_queue
+    if _write_queue is not None:
+        return _write_queue
+    with _queue_lock:
+        if _write_queue is None:
+            _write_queue = WriteQueue()
+        return _write_queue
+```
+
+Thread-safe lazy initialization. All interceptor and tracker calls share one queue.
+
+---
+
+## Token Extraction
+
+**OpenAI format:**
+```python
+{
+    "usage": {
+        "prompt_tokens": 100,
+        "completion_tokens": 50
+    }
+}
+```
+
+**Anthropic format:**
+```python
+{
+    "usage": {
+        "input_tokens": 100,
+        "output_tokens": 50
+    }
+}
+```
+
+Returns `(tokens_in, tokens_out, provider_hint)` tuple.
+
+---
+
+## Error Handling
+
+All interceptor errors caught and logged:
+```python
+try:
+    _extract_and_log_usage(response)
+except Exception as e:
+    with _stats_lock:
+        _errors_count += 1
+    _log_internal_error(e)
+```
+
+Errors never propagate to user code. Log rotates at 1MB, keeps last 100 lines.

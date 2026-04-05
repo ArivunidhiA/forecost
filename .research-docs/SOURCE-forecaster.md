@@ -1,3 +1,8 @@
+# Core Source: forecost/forecaster.py
+
+Ensemble forecasting engine using three-model combination (SES + Damped Trend + Linear Regression) inspired by M4 Forecasting Competition.
+
+```python
 """
 Ensemble forecasting engine for LLM cost tracking.
 
@@ -10,7 +15,6 @@ Falls back to hand-rolled EMA when statsmodels is not installed.
 
 from __future__ import annotations
 
-import logging
 import math
 import warnings
 
@@ -24,13 +28,11 @@ from forecost.db import (
 
 __all__ = ["ProjectForecaster"]
 
-logger = logging.getLogger(__name__)
-
 _HAS_STATSMODELS = True
 try:
-    import numpy as np  # type: ignore[import-untyped]
-    from statsmodels.tsa.api import SimpleExpSmoothing  # type: ignore[import-untyped]
-    from statsmodels.tsa.exponential_smoothing.ets import ETSModel  # type: ignore[import-untyped]
+    import numpy as np
+    from statsmodels.tsa.api import SimpleExpSmoothing
+    from statsmodels.tsa.exponential_smoothing.ets import ETSModel
 except ImportError:
     _HAS_STATSMODELS = False
 
@@ -57,14 +59,14 @@ def _fallback_forecast(
 def _ses_forecast(daily_costs: list[float], horizon: int) -> tuple[list[float], list[float] | None]:
     """Simple Exponential Smoothing."""
     n = len(daily_costs)
-    arr = np.array(daily_costs, dtype=float)  # type: ignore[union-attr]
+    arr = np.array(daily_costs, dtype=float)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         if n < 10:
-            model = SimpleExpSmoothing(arr, initialization_method="heuristic")  # type: ignore[union-attr]
+            model = SimpleExpSmoothing(arr, initialization_method="heuristic")
             fit = model.fit(smoothing_level=0.3, optimized=False)
         else:
-            model = SimpleExpSmoothing(arr, initialization_method="estimated")  # type: ignore[union-attr]
+            model = SimpleExpSmoothing(arr, initialization_method="estimated")
             fit = model.fit(optimized=True)
     fcast = fit.forecast(horizon)
     residuals = arr - fit.fittedvalues
@@ -75,11 +77,11 @@ def _damped_trend_forecast(daily_costs: list[float], horizon: int) -> list[float
     """Damped Trend ETS. Only used with 10+ data points."""
     if len(daily_costs) < 10:
         return None
-    arr = np.array(daily_costs, dtype=float)  # type: ignore[union-attr]
+    arr = np.array(daily_costs, dtype=float)
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            model = ETSModel(arr, error="add", trend="add", damped_trend=True, seasonal=None)  # type: ignore[union-attr]
+            model = ETSModel(arr, error="add", trend="add", damped_trend=True, seasonal=None)
             fit = model.fit(disp=False)
         fcast = fit.forecast(horizon)
         return [max(0.0, v) for v in fcast]
@@ -92,11 +94,11 @@ def _linear_forecast(daily_costs: list[float], horizon: int) -> list[float] | No
     n = len(daily_costs)
     if n < 3:
         return None
-    x = np.arange(n, dtype=float)  # type: ignore[union-attr]
-    y = np.array(daily_costs, dtype=float)  # type: ignore[union-attr]
-    coeffs = np.polyfit(x, y, 1)  # type: ignore[union-attr]
+    x = np.arange(n, dtype=float)
+    y = np.array(daily_costs, dtype=float)
+    coeffs = np.polyfit(x, y, 1)
     slope, intercept = coeffs[0], coeffs[1]
-    future_x = np.arange(n, n + horizon, dtype=float)  # type: ignore[union-attr]
+    future_x = np.arange(n, n + horizon, dtype=float)
     fcast = intercept + slope * future_x
     return [max(0.0, v) for v in fcast]
 
@@ -118,10 +120,8 @@ class ProjectForecaster:
         self._forecast_history = get_forecast_history(project_id)
 
     @staticmethod
-    def _adaptive_buckets(project_id: int) -> tuple[list[tuple[str, float, int]], int]:
+    def _adaptive_buckets(project_id: int) -> tuple[list[tuple[str, float]], int]:
         """Try progressively finer bucket granularity until we get >= 3 data points."""
-        buckets: list[tuple[str, float, int]] = []
-        minutes: int = 1
         for minutes in (15, 5, 1):
             buckets = get_bucketed_costs(project_id, bucket_minutes=minutes)
             active = [(b, c) for b, c, _t in buckets if c > 0]
@@ -155,7 +155,6 @@ class ProjectForecaster:
         all_forecasts: list[list[float]] = []
         ses_residuals: list[float] | None = None
 
-        buckets_per_day: float = 1.0
         if use_buckets:
             active_days_for_rate = max(1, n_days) if n_days > 0 else 1
             buckets_per_day = n_buckets / active_days_for_rate
@@ -168,8 +167,8 @@ class ProjectForecaster:
                 ses_fcast, ses_residuals = _ses_forecast(series, forecast_horizon)
                 all_forecasts.append(ses_fcast)
                 models_used.append("ses")
-            except Exception as e:
-                logger.debug(f"SES forecast failed, skipping model: {e}")
+            except Exception:
+                pass
 
             dt_fcast = _damped_trend_forecast(series, forecast_horizon)
             if dt_fcast is not None:
@@ -368,3 +367,50 @@ class ProjectForecaster:
             "n_models_used": len(models_used),
             "models_used": models_used,
         }
+```
+
+---
+
+## Algorithm Details
+
+### Adaptive Bucket Selection
+
+```python
+for minutes in (15, 5, 1):
+    buckets = get_bucketed_costs(project_id, bucket_minutes=minutes)
+    active = [(b, c) for b, c, _t in buckets if c > 0]
+    if len(active) >= 3:
+        return buckets, minutes
+```
+
+Tries 15-minute buckets first. If fewer than 3 active buckets, tries 5-minute, then 1-minute. This ensures sufficient data points for the ensemble even on day 1 with intra-day usage.
+
+### Ensemble Combination (M4 "Comb" Method)
+
+```python
+period_forecasts = []
+for h in range(forecast_horizon):
+    vals = [f[h] for f in all_forecasts if h < len(f)]
+    period_forecasts.append(sum(vals) / len(vals) if vals else 0.0)
+```
+
+All successful models contribute equally. Research shows simple averages of diverse models outperform complex weighting schemes.
+
+### Prediction Intervals
+
+Uses normal approximation with z-scores:
+- 80% interval: z = 1.28
+- 95% interval: z = 1.96
+
+Interval widens with horizon: `sigma * sqrt(h + 1)` (square root of time for random walk).
+
+### MASE (Mean Absolute Scaled Error)
+
+```python
+model_mae = sum(abs(r) for r in ses_residuals) / len(ses_residuals)
+naive_errors = [abs(series[i] - series[i - 1]) for i in range(1, n)]
+naive_mae = sum(naive_errors) / len(naive_errors)
+mase = model_mae / naive_mae
+```
+
+MASE < 1.0 means the forecast outperforms a naive "yesterday = tomorrow" guess.

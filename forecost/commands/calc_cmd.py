@@ -17,7 +17,7 @@ DEFAULT_MODELS = (
 def _estimate_tokens(text: str) -> int:
     """Uses tiktoken if available, else char-count heuristic."""
     try:
-        import tiktoken
+        import tiktoken  # type: ignore[import-untyped]
 
         enc = tiktoken.get_encoding("cl100k_base")
         return len(enc.encode(text))

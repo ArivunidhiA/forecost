@@ -22,7 +22,7 @@ def _build_display(project):
     pid = project["id"]
     try:
         daily_costs = get_daily_costs(pid)
-        total = sum(c for _, c in daily_costs)
+        total = sum(c for _, c, *_ in daily_costs)
         logs = get_recent_usage_logs(pid, limit=5)
         conn = get_or_create_db()
         call_count = conn.execute(

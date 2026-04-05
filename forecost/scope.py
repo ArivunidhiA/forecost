@@ -198,7 +198,7 @@ def _gather_llm_context(project_path: str) -> str:
 
 def analyze_with_llm(project_path: str, api_key: str | None = None) -> dict:
     try:
-        import litellm
+        import litellm  # type: ignore[import-untyped]
     except ImportError:
         return analyze_heuristic(project_path)
 
