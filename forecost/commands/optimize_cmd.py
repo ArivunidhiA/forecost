@@ -60,6 +60,130 @@ def _calc_savings_pct(model: str, alt: str) -> float:
     return 0.0
 
 
+def _always_switch_suggestion(
+    model: str, cost: float, calls: int, task_type: str
+) -> tuple[dict, float] | None:
+    if model not in ALWAYS_SWITCH:
+        return None
+    alt, savings_pct = ALWAYS_SWITCH[model]
+    saved = cost * savings_pct
+    return (
+        {
+            "model": model,
+            "alternative": alt,
+            "task": task_type,
+            "reason": f"Newer/cheaper model ({calls} calls)",
+            "savings": saved,
+        },
+        saved,
+    )
+
+
+def _light_tier_suggestion(
+    *, model: str, cost: float, calls: int, avg_out: float, task_type: str, tier: str
+) -> tuple[dict, float] | None:
+    if not (task_type == "Light" and tier == "Tier 1 (Heavy)"):
+        return None
+    tier2_models = _get_tier_models("Tier 2 (Standard)")
+    provider = get_provider(model)
+    alt = next((t2 for t2 in tier2_models if get_provider(t2) == provider), None)
+    if alt is None:
+        return None
+    savings_pct = _calc_savings_pct(model, alt)
+    saved = cost * max(0, savings_pct)
+    return (
+        {
+            "model": model,
+            "alternative": alt,
+            "task": task_type,
+            "reason": f"Short outputs (avg {avg_out:.0f} tok) safe for Tier 2",
+            "savings": saved,
+        },
+        saved,
+    )
+
+
+def _heavy_tier_suggestion(
+    model: str, cost: float, calls: int, task_type: str, tier: str
+) -> tuple[dict, float] | None:
+    if not (task_type == "Heavy" and tier == "Tier 1 (Heavy)"):
+        return None
+    alt = _find_cheaper_in_tier(model, tier)
+    if alt is None:
+        return None
+    savings_pct = _calc_savings_pct(model, alt)
+    if savings_pct <= 0.1:
+        return None
+    saved = cost * savings_pct
+    return (
+        {
+            "model": model,
+            "alternative": alt,
+            "task": task_type,
+            "reason": f"Lateral Tier 1 move ({calls} heavy calls)",
+            "savings": saved,
+        },
+        saved,
+    )
+
+
+def _short_output_suggestion(
+    conn, project_id: int, model: str, calls: int, task_type: str
+) -> tuple[dict, float] | None:
+    if model not in SHORT_OUTPUT_SWITCH:
+        return None
+    alt, savings_pct = SHORT_OUTPUT_SWITCH[model]
+    short = conn.execute(
+        "SELECT COUNT(*) as cnt, COALESCE(SUM(cost_usd), 0) as cost "
+        "FROM usage_logs "
+        "WHERE project_id = ? AND model = ? AND tokens_out < 200",
+        (project_id, model),
+    ).fetchone()
+    short_count = short["cnt"]
+    short_cost = float(short["cost"])
+    if short_count <= 0:
+        return None
+    saved = short_cost * savings_pct
+    return (
+        {
+            "model": model,
+            "alternative": alt,
+            "task": task_type,
+            "reason": f"{short_count}/{calls} calls have short outputs",
+            "savings": saved,
+        },
+        saved,
+    )
+
+
+def _build_suggestion(conn, project_id: int, row) -> tuple[dict, float] | None:
+    model = row["model"]
+    calls = row["calls"]
+    cost = float(row["total_cost"])
+    avg_in = float(row["avg_in"] or 0)
+    avg_out = float(row["avg_out"] or 0)
+    task_type = _classify_task(avg_in, avg_out)
+    tier = get_tier(model)
+
+    for builder in (
+        lambda: _always_switch_suggestion(model, cost, calls, task_type),
+        lambda: _light_tier_suggestion(
+            model=model,
+            cost=cost,
+            calls=calls,
+            avg_out=avg_out,
+            task_type=task_type,
+            tier=tier,
+        ),
+        lambda: _heavy_tier_suggestion(model, cost, calls, task_type, tier),
+        lambda: _short_output_suggestion(conn, project_id, model, calls, task_type),
+    ):
+        suggestion = builder()
+        if suggestion is not None:
+            return suggestion
+    return None
+
+
 @click.command()
 def optimize():
     """Suggest cost optimizations based on your usage."""
@@ -91,83 +215,13 @@ def optimize():
     suggestions = []
     total_savings = 0.0
 
-    for r in rows:
-        model = r["model"]
-        calls = r["calls"]
-        cost = float(r["total_cost"])
-        avg_in = float(r["avg_in"] or 0)
-        avg_out = float(r["avg_out"] or 0)
-        task_type = _classify_task(avg_in, avg_out)
-        tier = get_tier(model)
-
-        if model in ALWAYS_SWITCH:
-            alt, savings_pct = ALWAYS_SWITCH[model]
-            saved = cost * savings_pct
-            total_savings += saved
-            suggestions.append(
-                {
-                    "model": model,
-                    "alternative": alt,
-                    "task": task_type,
-                    "reason": f"Newer/cheaper model ({calls} calls)",
-                    "savings": saved,
-                }
-            )
-        elif task_type == "Light" and tier == "Tier 1 (Heavy)":
-            tier2_models = _get_tier_models("Tier 2 (Standard)")
-            provider = get_provider(model)
-            alt = next((t2 for t2 in tier2_models if get_provider(t2) == provider), None)
-            if alt:
-                savings_pct = _calc_savings_pct(model, alt)
-                saved = cost * max(0, savings_pct)
-                total_savings += saved
-                suggestions.append(
-                    {
-                        "model": model,
-                        "alternative": alt,
-                        "task": task_type,
-                        "reason": f"Short outputs (avg {avg_out:.0f} tok) safe for Tier 2",
-                        "savings": saved,
-                    }
-                )
-        elif task_type == "Heavy" and tier == "Tier 1 (Heavy)":
-            alt = _find_cheaper_in_tier(model, tier)
-            if alt:
-                savings_pct = _calc_savings_pct(model, alt)
-                if savings_pct > 0.1:
-                    saved = cost * savings_pct
-                    total_savings += saved
-                    suggestions.append(
-                        {
-                            "model": model,
-                            "alternative": alt,
-                            "task": task_type,
-                            "reason": f"Lateral Tier 1 move ({calls} heavy calls)",
-                            "savings": saved,
-                        }
-                    )
-        elif model in SHORT_OUTPUT_SWITCH:
-            alt, savings_pct = SHORT_OUTPUT_SWITCH[model]
-            short = conn.execute(
-                "SELECT COUNT(*) as cnt, COALESCE(SUM(cost_usd), 0) as cost "
-                "FROM usage_logs "
-                "WHERE project_id = ? AND model = ? AND tokens_out < 200",
-                (project["id"], model),
-            ).fetchone()
-            short_count = short["cnt"]
-            short_cost = float(short["cost"])
-            if short_count > 0:
-                saved = short_cost * savings_pct
-                total_savings += saved
-                suggestions.append(
-                    {
-                        "model": model,
-                        "alternative": alt,
-                        "task": task_type,
-                        "reason": f"{short_count}/{calls} calls have short outputs",
-                        "savings": saved,
-                    }
-                )
+    for row in rows:
+        built = _build_suggestion(conn, project["id"], row)
+        if built is None:
+            continue
+        suggestion, saved = built
+        suggestions.append(suggestion)
+        total_savings += saved
 
     if not suggestions:
         console.print("[green]Your model choices look efficient.[/green]")

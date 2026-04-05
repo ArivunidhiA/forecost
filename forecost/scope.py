@@ -94,7 +94,81 @@ def _detect_sdk_imports(project_path: str) -> set[str]:
     return found
 
 
+def _estimate_project_days(total_files: int) -> int:
+    if total_files < 10:
+        return 7
+    if total_files <= 50:
+        return 14
+    if total_files <= 200:
+        return 21
+    return 30
+
+
+def _build_agent_profile(use_anthropic: bool) -> dict:
+    calls_per_day = 80
+    tokens_in, tokens_out = 2000, 1500
+    model = "claude-3-5-sonnet-latest" if use_anthropic else "gpt-4o"
+    daily_cost = calls_per_day * calculate_cost(model, tokens_in, tokens_out)
+    return {
+        "project_type": "agent",
+        "model": model,
+        "calls_per_day": calls_per_day,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "daily_cost": daily_cost,
+    }
+
+
+def _build_rag_profile(use_anthropic: bool) -> dict:
+    embed_calls, embed_model, embed_tokens = 100, "text-embedding-3-small", 1500
+    gen_calls = 25
+    gen_model = "claude-3-5-sonnet-latest" if use_anthropic else "gpt-4o"
+    gen_tokens_in, gen_tokens_out = 3000, 1000
+    daily_cost = embed_calls * calculate_cost(
+        embed_model, embed_tokens, 0
+    ) + gen_calls * calculate_cost(gen_model, gen_tokens_in, gen_tokens_out)
+    return {
+        "project_type": "rag",
+        "model": gen_model,
+        "calls_per_day": embed_calls + gen_calls,
+        "tokens_in": gen_tokens_in,
+        "tokens_out": gen_tokens_out,
+        "daily_cost": daily_cost,
+    }
+
+
+def _build_default_profile(use_anthropic: bool) -> dict:
+    calls_per_day = 50
+    tokens_in, tokens_out = 600, 1000
+    model = "claude-3-5-haiku-latest" if use_anthropic else "gpt-4o-mini"
+    daily_cost = calls_per_day * calculate_cost(model, tokens_in, tokens_out)
+    return {
+        "project_type": "default",
+        "model": model,
+        "calls_per_day": calls_per_day,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "daily_cost": daily_cost,
+    }
+
+
+def _select_heuristic_profile(*, has_agent_kw: bool, has_rag_kw: bool, use_anthropic: bool) -> dict:
+    if has_agent_kw and not has_rag_kw:
+        return _build_agent_profile(use_anthropic)
+    if has_rag_kw or has_agent_kw:
+        return _build_rag_profile(use_anthropic)
+    return _build_default_profile(use_anthropic)
+
+
 def analyze_heuristic(project_path: str) -> dict:
+    """Estimate baseline project costs using local heuristics.
+
+    Args:
+        project_path: Filesystem path to the project root.
+
+    Returns:
+        dict: Estimated duration, costs, confidence, and profile metadata.
+    """
     ext_counts = _count_files_by_extension(project_path)
     total_files = sum(ext_counts.values())
 
@@ -105,54 +179,36 @@ def analyze_heuristic(project_path: str) -> dict:
     sdks = _detect_sdk_imports(project_path)
     use_anthropic = "anthropic" in sdks
 
-    if total_files < 10:
-        estimated_days = 7
-    elif total_files <= 50:
-        estimated_days = 14
-    elif total_files <= 200:
-        estimated_days = 21
-    else:
-        estimated_days = 30
+    estimated_days = _estimate_project_days(total_files)
+    profile = _select_heuristic_profile(
+        has_agent_kw=has_agent_kw,
+        has_rag_kw=has_rag_kw,
+        use_anthropic=use_anthropic,
+    )
 
-    if has_agent_kw and not has_rag_kw:
-        project_type = "agent"
-        calls_per_day = 80
-        tokens_in, tokens_out = 2000, 1500
-        model = "claude-3-5-sonnet-latest" if use_anthropic else "gpt-4o"
-        daily_cost = calls_per_day * calculate_cost(model, tokens_in, tokens_out)
-    elif has_rag_kw or has_agent_kw:
-        project_type = "rag"
-        embed_calls, embed_model, embed_tokens = 100, "text-embedding-3-small", 1500
-        gen_calls = 25
-        gen_model = "claude-3-5-sonnet-latest" if use_anthropic else "gpt-4o"
-        gen_tokens_in, gen_tokens_out = 3000, 1000
-        model = gen_model
-        tokens_in, tokens_out = gen_tokens_in, gen_tokens_out
-        calls_per_day = embed_calls + gen_calls
-        daily_cost = embed_calls * calculate_cost(
-            embed_model, embed_tokens, 0
-        ) + gen_calls * calculate_cost(gen_model, gen_tokens_in, gen_tokens_out)
-    else:
-        project_type = "default"
-        calls_per_day = 50
-        tokens_in, tokens_out = 600, 1000
-        model = "claude-3-5-haiku-latest" if use_anthropic else "gpt-4o-mini"
-        daily_cost = calls_per_day * calculate_cost(model, tokens_in, tokens_out)
-
-    total_cost = daily_cost * estimated_days
+    total_cost = profile["daily_cost"] * estimated_days
 
     return {
         "estimated_days": estimated_days,
-        "daily_cost": round(daily_cost, 6),
+        "daily_cost": round(profile["daily_cost"], 6),
         "total_cost": round(total_cost, 6),
         "confidence": "low",
         "source": "heuristic",
-        "project_type": project_type,
-        "model": model,
-        "calls_per_day": calls_per_day,
-        "tokens_in": tokens_in,
-        "tokens_out": tokens_out,
+        "project_type": profile["project_type"],
+        "model": profile["model"],
+        "calls_per_day": profile["calls_per_day"],
+        "tokens_in": profile["tokens_in"],
+        "tokens_out": profile["tokens_out"],
     }
+
+
+def _append_context_excerpt(parts: list[str], path: Path, root: Path, *, max_chars: int) -> None:
+    try:
+        rel = path.relative_to(root)
+        content = path.read_text(encoding="utf-8", errors="replace")[:max_chars]
+        parts.append(f"--- {rel} ---\n{content}")
+    except OSError:
+        pass
 
 
 def _gather_llm_context(project_path: str) -> str:
@@ -162,23 +218,13 @@ def _gather_llm_context(project_path: str) -> str:
     for name in _README_NAMES:
         p = root / name
         if p.is_file():
-            try:
-                parts.append(
-                    f"--- {p.name} ---\n{p.read_text(encoding='utf-8', errors='replace')[:3000]}"
-                )
-            except OSError:
-                pass
+            _append_context_excerpt(parts, p, root, max_chars=3000)
             break
 
     for name in (".cursorrules", "CLAUDE.md", ".github/copilot-instructions.md"):
         p = root / name
         if p.is_file():
-            try:
-                parts.append(
-                    f"--- {name} ---\n{p.read_text(encoding='utf-8', errors='replace')[:2000]}"
-                )
-            except OSError:
-                pass
+            _append_context_excerpt(parts, p, root, max_chars=2000)
 
     code_files: list[Path] = []
     for ext in ("*.py", "*.js", "*.ts", "*.tsx"):
@@ -197,6 +243,18 @@ def _gather_llm_context(project_path: str) -> str:
 
 
 def analyze_with_llm(project_path: str, api_key: str | None = None) -> dict:
+    """Estimate baseline project costs using an optional LLM-assisted pass.
+
+    Falls back to :func:`analyze_heuristic` when LLM dependencies are unavailable
+    or completion/parsing fails.
+
+    Args:
+        project_path: Filesystem path to the project root.
+        api_key: Optional API key forwarded to the LLM client.
+
+    Returns:
+        dict: Estimated duration, costs, confidence, and profile metadata.
+    """
     try:
         import litellm  # type: ignore[import-untyped]
     except ImportError:

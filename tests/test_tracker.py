@@ -48,6 +48,8 @@ def test_track_cost_decorator_sync(monkeypatch):
         }
 
     result = fake_call()
+    if asyncio.iscoroutine(result):
+        result = asyncio.run(result)
     assert result["model"] == "gpt-4o"
     summary = get_session_summary()
     assert summary["calls"] == 1

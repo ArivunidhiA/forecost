@@ -1,7 +1,7 @@
 """Self-correcting pricing module with zero external dependencies."""
 
-import os
 import re
+from pathlib import Path
 from typing import Optional
 
 __all__ = [
@@ -177,11 +177,11 @@ _DATE_SUFFIX_RE = re.compile(r"-\d{4}(-\d{2}-\d{2}|\d{4})?$")
 
 
 def _log_unknown_model(model: str) -> None:
-    log_dir = os.path.expanduser("~/.forecost")
-    log_path = os.path.join(log_dir, "error.log")
+    log_dir = Path.home() / ".forecost"
+    log_path = log_dir / "error.log"
     try:
-        os.makedirs(log_dir, exist_ok=True)
-        with open(log_path, "a") as f:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"[pricing] unknown model: {model}\n")
     except OSError:
         pass
@@ -201,6 +201,16 @@ def _resolve_model(model: str) -> Optional[dict[str, float]]:
 
 
 def calculate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
+    """Calculate estimated USD cost for a model invocation.
+
+    Args:
+        model: Model identifier.
+        tokens_in: Input token count.
+        tokens_out: Output token count.
+
+    Returns:
+        float: Estimated total call cost in USD.
+    """
     cost = _resolve_model(model)
     if cost is None:
         _log_unknown_model(model)
@@ -211,7 +221,14 @@ def calculate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
 
 
 def get_tier(model: str) -> str:
-    """Return the capability tier for a model, e.g. 'Tier 1 (Heavy)'."""
+    """Return the capability tier classification for a model.
+
+    Args:
+        model: Model identifier.
+
+    Returns:
+        str: Tier label such as ``Tier 1 (Heavy)`` or ``Unknown``.
+    """
     for tier, models in MODEL_TIERS.items():
         if model in models:
             return tier
@@ -223,23 +240,35 @@ def get_tier(model: str) -> str:
 
 
 def get_provider(model: str) -> str:
+    """Infer provider name from a model identifier.
+
+    Args:
+        model: Model identifier.
+
+    Returns:
+        str: Normalized provider name.
+    """
     m = model.lower()
     if "text-embedding-004" in m:
         return "google"
+
+    prefix_providers = {
+        "claude": "anthropic",
+        "gemini": "google",
+        "mistral": "mistral",
+        "codestral": "mistral",
+        "open-mistral": "mistral",
+        "deepseek": "deepseek",
+        "grok": "xai",
+        "llama": "meta",
+        "command": "cohere",
+    }
+
     if m.startswith("gpt-") or m.startswith("o1") or m.startswith("o3") or "text-embedding" in m:
         return "openai"
-    if m.startswith("claude"):
-        return "anthropic"
-    if m.startswith("gemini"):
-        return "google"
-    if m.startswith("mistral") or m.startswith("codestral") or m.startswith("open-mistral"):
-        return "mistral"
-    if m.startswith("deepseek"):
-        return "deepseek"
-    if m.startswith("grok"):
-        return "xai"
-    if m.startswith("llama"):
-        return "meta"
-    if m.startswith("command"):
-        return "cohere"
+
+    for prefix, provider in prefix_providers.items():
+        if m.startswith(prefix):
+            return provider
+
     return "unknown"

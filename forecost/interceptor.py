@@ -4,6 +4,7 @@ import json as _json
 import os
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable
 
 from forecost.db import WriteQueue
@@ -41,20 +42,20 @@ def _get_queue() -> WriteQueue:
 
 
 def _log_internal_error(e: Exception) -> None:
-    log_dir = os.path.expanduser("~/.forecost")
-    log_path = os.path.join(log_dir, "error.log")
+    log_dir = Path.home() / ".forecost"
+    log_path = log_dir / "error.log"
     try:
-        os.makedirs(log_dir, exist_ok=True)
+        log_dir.mkdir(parents=True, exist_ok=True)
         try:
             if os.path.getsize(log_path) > 1_000_000:
-                with open(log_path, "r") as rf:
+                with open(log_path, "r", encoding="utf-8") as rf:
                     lines = rf.readlines()[-100:]
-                with open(log_path, "w") as wf:
+                with open(log_path, "w", encoding="utf-8") as wf:
                     wf.writelines(lines)
         except OSError:
             pass
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        with open(log_path, "a") as f:
+        with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"{ts} [interceptor] {e!r}\n")
     except OSError:
         pass
@@ -162,10 +163,10 @@ async def _patched_async_send(self, *args, **kwargs):
 
 
 def log_stream_usage(response_data: dict) -> None:
-    """Log usage from a streaming response after it has been consumed.
+    """Log usage from a consumed streaming response payload.
 
-    Call this after reading all chunks from a streaming LLM API call.
-    Pass the final accumulated response dict containing a "usage" key.
+    Args:
+        response_data: Final accumulated response dictionary containing a ``usage`` key.
     """
     try:
         extracted = _extract_usage(response_data)
@@ -190,6 +191,11 @@ def log_stream_usage(response_data: dict) -> None:
 
 
 def get_interceptor_stats() -> dict:
+    """Return interceptor runtime counters.
+
+    Returns:
+        dict: Counts for tracked calls, skipped streaming calls, and internal errors.
+    """
     with _stats_lock:
         return {
             "calls_tracked": _calls_tracked,
@@ -199,16 +205,31 @@ def get_interceptor_stats() -> dict:
 
 
 def set_project_id(project_id: int | None) -> None:
+    """Set the current project id used for usage logging.
+
+    Args:
+        project_id: Project id to associate with logs, or None to disable association.
+    """
     global _current_project_id
     _current_project_id = project_id
 
 
 def set_on_usage(callback: Callable[..., None] | None) -> None:
+    """Register an optional callback invoked after successful usage extraction.
+
+    Args:
+        callback: Callback receiving usage keyword arguments, or None to clear it.
+    """
     global _on_usage
     _on_usage = callback
 
 
 def install(on_usage: Callable[..., None] | None = None) -> None:
+    """Install httpx send monkey-patches for automatic usage tracking.
+
+    Args:
+        on_usage: Optional callback invoked for each captured usage event.
+    """
     global _original_send, _original_async_send, _on_usage
     if os.environ.get("FORECOST_DISABLED", "").lower() in ("1", "true", "yes"):
         return
@@ -225,6 +246,7 @@ def install(on_usage: Callable[..., None] | None = None) -> None:
 
 
 def uninstall() -> None:
+    """Restore original httpx send methods and disable interceptor patches."""
     global _original_send, _original_async_send
     import httpx
 

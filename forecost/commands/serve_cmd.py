@@ -100,7 +100,7 @@ class ForecostHandler(BaseHTTPRequestHandler):
 
         _send_404(self)
 
-    def log_message(self, format, *args):
+    def log_message(self, _format, *args):
         pass
 
 

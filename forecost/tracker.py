@@ -6,6 +6,7 @@ import functools
 import inspect
 import json
 import os
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -36,6 +37,11 @@ _project_cache_set = False
 _project_cache_time: float = 0.0
 _PROJECT_CACHE_TTL = 300.0  # 5 minutes
 
+if sys.version_info >= (3, 11):
+    import tomllib as _toml_loader
+else:
+    import tomli as _toml_loader
+
 
 def _get_queue():
     """Reuse the interceptor module's WriteQueue (single shared queue)."""
@@ -52,12 +58,8 @@ def _find_project() -> dict | None:
         toml_path = parent / ".forecost.toml"
         if toml_path.is_file():
             try:
-                try:
-                    import tomllib
-                except ImportError:
-                    import tomli as tomllib  # type: ignore[no-redef]
                 with open(toml_path, "rb") as f:
-                    data = tomllib.load(f)
+                    data = _toml_loader.load(f)
             except Exception:
                 _cached_project = None
                 _project_cache_set = True
@@ -120,6 +122,7 @@ def _record_usage(model: str, tokens_in: int, tokens_out: int, cost: float) -> N
 
 
 def auto_track() -> None:
+    """Auto-install tracking when a project config is discoverable in parent directories."""
     if os.environ.get("FORECOST_DISABLED", "").lower() in ("1", "true", "yes"):
         return
     proj = _find_project()
@@ -137,11 +140,23 @@ def auto_track() -> None:
 
 
 def log_stream_usage(response_data: dict) -> None:
-    """Log usage from a consumed streaming response. Delegates to interceptor."""
+    """Log usage extracted from a consumed streaming response payload.
+
+    Args:
+        response_data: Final accumulated response dictionary containing usage fields.
+    """
     interceptor.log_stream_usage(response_data)
 
 
 def track_cost(provider: str = "openai"):
+    """Decorator factory that records usage from dict-like LLM responses.
+
+    Args:
+        provider: Retained for API compatibility; provider is inferred from model at runtime.
+
+    Returns:
+        Callable: Decorator wrapping sync or async call sites.
+    """
     def _process_result(result):
         if isinstance(result, dict) and "usage" in result:
             usage = result["usage"]
@@ -189,6 +204,11 @@ def track_cost(provider: str = "openai"):
 
 @contextmanager
 def track():
+    """Yield a lightweight imperative tracker object for manual call logging.
+
+    Yields:
+        Tracker: Object exposing ``log_call`` for direct usage accounting.
+    """
     class Tracker:
         def log_call(
             self,
@@ -225,6 +245,15 @@ def log_call(
     provider: str = "openai",
     metadata: dict | None = None,
 ) -> None:
+    """Record one model call in session stats and project usage logs.
+
+    Args:
+        model: Model identifier.
+        tokens_in: Input token count.
+        tokens_out: Output token count.
+        provider: Retained for API compatibility; provider is inferred from model.
+        metadata: Optional metadata dictionary to persist with the usage row.
+    """
     cost = calculate_cost(model, tokens_in, tokens_out)
     _record_usage(model, tokens_in, tokens_out, cost)
     proj = _find_project()
@@ -237,6 +266,11 @@ def log_call(
 
 
 def get_session_summary() -> dict:
+    """Return an aggregate summary of usage observed in the current process.
+
+    Returns:
+        dict: Totals for cost, tokens, calls, and per-model breakdown.
+    """
     with _stats_lock:
         if not _session_stats:
             return {"total_cost": 0.0, "total_tokens": 0, "calls": 0, "by_model": {}}

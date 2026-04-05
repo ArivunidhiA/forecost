@@ -14,41 +14,30 @@ console = Console()
 logger = logging.getLogger(__name__)
 
 
-@click.command()
-def demo():
-    """See forecost in action with sample data."""
-    demo_dir = os.path.join(tempfile.gettempdir(), "forecost-demo")
-    os.makedirs(demo_dir, exist_ok=True)
-
+def _reset_existing_demo(demo_dir: str) -> None:
     existing = get_project_by_path(demo_dir)
-    if existing:
-        conn = get_or_create_db()
-        conn.execute("DELETE FROM forecasts WHERE project_id = ?", (existing["id"],))
-        conn.execute("DELETE FROM usage_logs WHERE project_id = ?", (existing["id"],))
-        conn.execute("DELETE FROM projects WHERE id = ?", (existing["id"],))
-        conn.commit()
+    if not existing:
+        return
+    conn = get_or_create_db()
+    conn.execute("DELETE FROM forecasts WHERE project_id = ?", (existing["id"],))
+    conn.execute("DELETE FROM usage_logs WHERE project_id = ?", (existing["id"],))
+    conn.execute("DELETE FROM projects WHERE id = ?", (existing["id"],))
+    conn.commit()
 
-    pid = create_project(
-        name="demo-project",
-        path=demo_dir,
-        baseline_daily_cost=0.50,
-        baseline_total_days=14,
-        baseline_total_cost=7.00,
-    )
 
+def _seed_demo_usage(pid: int) -> None:
     conn = get_or_create_db()
     base = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
 
-    # 10 days of realistic data showing model switching and cost patterns
     day_configs = [
-        (1, "gpt-4o", 30, 1000, 500),  # Day 1-3: gpt-4o, moderate use
+        (1, "gpt-4o", 30, 1000, 500),
         (2, "gpt-4o", 35, 1200, 600),
         (3, "gpt-4o", 40, 1100, 550),
-        (4, "gpt-4o", 50, 1500, 700),  # Day 4-6: ramping up
+        (4, "gpt-4o", 50, 1500, 700),
         (5, "gpt-4o", 55, 1400, 650),
         (6, "gpt-4o", 60, 1600, 800),
-        (7, "gpt-4o-mini", 80, 800, 400),  # Day 7: switch to cheaper model
-        (8, "gpt-4o-mini", 70, 900, 450),  # Day 8-10: mix
+        (7, "gpt-4o-mini", 80, 800, 400),
+        (8, "gpt-4o-mini", 70, 900, 450),
         (9, "gpt-4o", 20, 1200, 600),
         (10, "gpt-4o-mini", 60, 700, 350),
     ]
@@ -63,15 +52,16 @@ def demo():
         )
     conn.commit()
 
-    # Run forecaster and build 3 iterations to show convergence
-    result: dict = {}
-    for i in range(3):
-        f = ProjectForecaster(pid)
-        result = f.calculate_forecast(save=True)
 
-    # Display the final result
-    console.print()
-    # (reuse the same display logic as forecast_cmd but inline)
+def _run_demo_forecasts(pid: int) -> dict:
+    result: dict = {}
+    for _ in range(3):
+        forecaster = ProjectForecaster(pid)
+        result = forecaster.calculate_forecast(save=True)
+    return result
+
+
+def _print_demo_result(result: dict) -> None:
     from rich.panel import Panel
     from rich.table import Table
 
@@ -92,9 +82,12 @@ def demo():
     model_table.add_column("Spent", justify="right")
     model_table.add_column("Projected", justify="right")
     model_table.add_column("Share", justify="right")
-    for m in result.get("model_breakdown", []):
+    for model_row in result.get("model_breakdown", []):
         model_table.add_row(
-            m["model"], f"${m['spent']:.2f}", f"${m['projected']:.2f}", f"{m['share']:.0%}"
+            model_row["model"],
+            f"${model_row['spent']:.2f}",
+            f"${model_row['projected']:.2f}",
+            f"{model_row['share']:.0%}",
         )
 
     console.print(
@@ -109,7 +102,8 @@ def demo():
     console.print("  forecost init")
     console.print()
 
-    # Clean up demo data from DB
+
+def _cleanup_demo_project(pid: int) -> None:
     try:
         conn = get_or_create_db()
         conn.execute("DELETE FROM forecasts WHERE project_id = ?", (pid,))
@@ -118,3 +112,26 @@ def demo():
         conn.commit()
     except Exception as e:
         logger.debug(f"Failed to commit demo DB cleanup: {e}")
+
+
+@click.command()
+def demo():
+    """See forecost in action with sample data."""
+    demo_dir = os.path.join(tempfile.gettempdir(), "forecost-demo")
+    os.makedirs(demo_dir, exist_ok=True)
+
+    _reset_existing_demo(demo_dir)
+
+    pid = create_project(
+        name="demo-project",
+        path=demo_dir,
+        baseline_daily_cost=0.50,
+        baseline_total_days=14,
+        baseline_total_cost=7.00,
+    )
+
+    _seed_demo_usage(pid)
+    result = _run_demo_forecasts(pid)
+    console.print()
+    _print_demo_result(result)
+    _cleanup_demo_project(pid)

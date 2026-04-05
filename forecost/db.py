@@ -88,6 +88,11 @@ def _init_schema(conn: sqlite3.Connection) -> None:
 
 
 def get_or_create_db() -> sqlite3.Connection:
+    """Return the process-wide SQLite connection, creating it if needed.
+
+    Returns:
+        sqlite3.Connection: Initialized SQLite connection with schema and pragmas applied.
+    """
     global _conn
     with _conn_lock:
         if _conn is not None:
@@ -112,6 +117,19 @@ def create_project(
     baseline_total_cost: float,
     metadata: dict | None = None,
 ) -> int:
+    """Create a project row and return its identifier.
+
+    Args:
+        name: Project display name.
+        path: Absolute project path.
+        baseline_daily_cost: Expected daily cost baseline.
+        baseline_total_days: Planned total duration in days.
+        baseline_total_cost: Planned total cost baseline.
+        metadata: Optional JSON-serializable metadata dictionary.
+
+    Returns:
+        int: Inserted project id.
+    """
     conn = get_or_create_db()
     now = datetime.now(timezone.utc).isoformat()
     meta_json = json.dumps(metadata) if metadata is not None else None
@@ -128,6 +146,14 @@ def create_project(
 
 
 def get_project_by_path(path: str) -> dict | None:
+    """Look up a project by its path.
+
+    Args:
+        path: Project path stored in the database.
+
+    Returns:
+        dict | None: Project row as a dictionary, or None when not found.
+    """
     conn = get_or_create_db()
     row = conn.execute("SELECT * FROM projects WHERE path = ?", (path,)).fetchone()
     if row is None:
@@ -139,6 +165,14 @@ def get_project_by_path(path: str) -> dict | None:
 
 
 def get_daily_costs(project_id: int) -> list[tuple[str, float, int]]:
+    """Return per-day aggregated cost and token usage for a project.
+
+    Args:
+        project_id: Project id.
+
+    Returns:
+        list[tuple[str, float, int]]: Tuples of (day, cost, total_tokens).
+    """
     conn = get_or_create_db()
     rows = conn.execute(
         """
@@ -155,10 +189,17 @@ def get_daily_costs(project_id: int) -> list[tuple[str, float, int]]:
 
 
 def get_bucketed_costs(project_id: int, bucket_minutes: int = 15) -> list[tuple[str, float, int]]:
-    """Aggregate costs into fixed time buckets.
+    """Aggregate project usage into fixed-size time buckets.
 
-    Only returns buckets that have actual costs (no zero-fill).
-    Default 15-minute buckets give 16 data points per 4-hour session.
+    Args:
+        project_id: Project id.
+        bucket_minutes: Bucket width in minutes.
+
+    Returns:
+        list[tuple[str, float, int]]: Tuples of (bucket_label, cost, total_tokens).
+
+    Raises:
+        ValueError: If ``bucket_minutes`` is less than 1.
     """
     if bucket_minutes < 1:
         raise ValueError(f"bucket_minutes must be >= 1, got {bucket_minutes}")
@@ -182,6 +223,15 @@ def get_bucketed_costs(project_id: int, bucket_minutes: int = 15) -> list[tuple[
 
 
 def get_recent_usage_logs(project_id: int, limit: int = 20) -> list[dict]:
+    """Return recent usage log rows ordered by newest first.
+
+    Args:
+        project_id: Project id.
+        limit: Maximum number of rows to return.
+
+    Returns:
+        list[dict]: Recent usage log rows.
+    """
     conn = get_or_create_db()
     rows = conn.execute(
         """
@@ -197,6 +247,14 @@ def get_recent_usage_logs(project_id: int, limit: int = 20) -> list[dict]:
 
 
 def get_active_days(project_id: int) -> int:
+    """Count distinct active usage days for a project.
+
+    Args:
+        project_id: Project id.
+
+    Returns:
+        int: Number of distinct days with at least one usage log entry.
+    """
     conn = get_or_create_db()
     row = conn.execute(
         "SELECT COUNT(DISTINCT date(timestamp)) AS cnt FROM usage_logs WHERE project_id = ?",
@@ -215,6 +273,21 @@ def save_forecast(
     active_days_count: int,
     mape: float | None = None,
 ) -> int:
+    """Persist a forecast snapshot for a project.
+
+    Args:
+        project_id: Project id.
+        iteration: Sequential forecast iteration.
+        projected_total: Forecasted total project spend.
+        projected_remaining_days: Estimated remaining active days.
+        smoothed_burn_ratio: Smoothed burn ratio versus baseline.
+        confidence: Confidence label for the forecast.
+        active_days_count: Number of active days seen in historical data.
+        mape: Optional MAPE/accuracy signal.
+
+    Returns:
+        int: Inserted forecast row id.
+    """
     conn = get_or_create_db()
     now = datetime.now(timezone.utc).isoformat()
     cur = conn.execute(
@@ -240,6 +313,14 @@ def save_forecast(
 
 
 def get_forecast_history(project_id: int) -> list[dict]:
+    """Return all saved forecast iterations for a project.
+
+    Args:
+        project_id: Project id.
+
+    Returns:
+        list[dict]: Forecast rows ordered by iteration.
+    """
     conn = get_or_create_db()
     rows = conn.execute(
         """
@@ -346,7 +427,7 @@ class WriteQueue:
         except Exception as e:
             _ensure_dir()
             try:
-                with open(log_path, "a") as f:
+                with open(log_path, "a", encoding="utf-8") as f:
                     f.write(f"[db] {e!r}\n")
             except OSError:
                 pass
@@ -357,13 +438,13 @@ class WriteQueue:
                 try:
                     try:
                         if os.path.getsize(recovery_path) > 1_000_000:
-                            with open(recovery_path, "r") as rf:
+                            with open(recovery_path, "r", encoding="utf-8") as rf:
                                 lines = rf.readlines()[-100:]
-                            with open(recovery_path, "w") as wf:
+                            with open(recovery_path, "w", encoding="utf-8") as wf:
                                 wf.writelines(lines)
                     except OSError:
                         pass
-                    with open(recovery_path, "a") as f:
+                    with open(recovery_path, "a", encoding="utf-8") as f:
                         for item in batch:
                             d = {
                                 "project_id": item[0],

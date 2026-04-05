@@ -197,7 +197,7 @@ def test_daily_costs_include_tokens(db_path):
     conn.commit()
     costs = get_daily_costs(pid)
     assert len(costs) == 1
-    day, cost, tokens = costs[0]
+    _day, _cost, tokens = costs[0]
     assert tokens == 1500
 
 

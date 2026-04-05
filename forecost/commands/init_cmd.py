@@ -1,5 +1,6 @@
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 import click
 from rich.console import Console
@@ -10,6 +11,85 @@ from forecost.db import create_project, get_or_create_db, get_project_by_path
 from forecost.scope import analyze_heuristic, analyze_with_llm
 
 console = Console()
+
+
+def _remove_existing_project_data(existing: dict, project_path: str) -> None:
+    conn = get_or_create_db()
+    pid = existing["id"]
+    conn.execute("DELETE FROM forecasts WHERE project_id = ?", (pid,))
+    conn.execute("DELETE FROM usage_logs WHERE project_id = ?", (pid,))
+    conn.execute("DELETE FROM projects WHERE id = ?", (pid,))
+    conn.commit()
+    toml_path = Path(project_path) / ".forecost.toml"
+    if toml_path.exists():
+        toml_path.unlink()
+
+
+def _build_metadata(result: dict, budget: float | None) -> dict:
+    metadata = {
+        "project_type": result["project_type"],
+        "model": result["model"],
+        "confidence": result["confidence"],
+        "calls_per_day": result["calls_per_day"],
+        "tokens_in": result["tokens_in"],
+        "tokens_out": result["tokens_out"],
+    }
+    if budget is not None:
+        metadata["budget"] = budget
+    return metadata
+
+
+def _write_project_config(project_path: str, project_name: str) -> None:
+    config_path = Path(project_path) / ".forecost.toml"
+    created_at = datetime.now(timezone.utc).isoformat()
+    safe_name = project_name.replace("\\", "\\\\").replace('"', '\\"')
+    config_content = f'''project_name = "{safe_name}"
+path = "."
+created_at = "{created_at}"
+'''
+
+    try:
+        config_path.write_text(config_content, encoding="utf-8")
+    except OSError as e:
+        console.print(f"[yellow]Could not write .forecost.toml: {e}[/yellow]")
+        return
+
+    gitignore_path = Path(project_path) / ".gitignore"
+    if gitignore_path.is_file():
+        gitignore_content = gitignore_path.read_text(encoding="utf-8")
+        if ".forecost.toml" not in gitignore_content:
+            console.print("[dim]Tip: Add .forecost.toml to your .gitignore[/dim]")
+
+
+def _print_init_summary(
+    *,
+    project_name: str,
+    result: dict,
+    estimated_days: int,
+    daily_cost: float,
+    total_cost: float,
+    budget: float | None,
+) -> None:
+    table = Table(show_header=False)
+    table.add_column("", style="dim")
+    table.add_column("")
+    table.add_row("Project", project_name)
+    table.add_row("Type", result["project_type"])
+    table.add_row("Model", result["model"])
+    table.add_row("Duration", f"{estimated_days} days")
+    table.add_row("Daily cost", f"${daily_cost:.2f}")
+    table.add_row("Total projected", f"${total_cost:.2f}")
+    table.add_row("Confidence", result["confidence"])
+
+    if budget is not None:
+        status = "Under budget" if total_cost <= budget else "Over budget"
+        table.add_row("Budget", f"${budget:.2f} ({status})")
+
+    console.print(Panel(table, title="[bold]forecost initialized[/bold]", border_style="green"))
+    if result["project_type"] == "default":
+        console.print(
+            "[dim]Using default estimates. Override with: forecost init --days 14 --budget 50[/dim]"
+        )
 
 
 @click.command()
@@ -32,15 +112,7 @@ def init(smart, days, budget):
                 "  Your usage history in ~/.forecost/costs.db is preserved."
             )
             raise SystemExit(1)
-        conn = get_or_create_db()
-        pid = existing["id"]
-        conn.execute("DELETE FROM forecasts WHERE project_id = ?", (pid,))
-        conn.execute("DELETE FROM usage_logs WHERE project_id = ?", (pid,))
-        conn.execute("DELETE FROM projects WHERE id = ?", (pid,))
-        conn.commit()
-        toml_path = os.path.join(project_path, ".forecost.toml")
-        if os.path.exists(toml_path):
-            os.remove(toml_path)
+        _remove_existing_project_data(existing, project_path)
 
     if smart:
         result = analyze_with_llm(project_path)
@@ -54,16 +126,7 @@ def init(smart, days, budget):
     daily_cost = result["daily_cost"]
     total_cost = daily_cost * estimated_days
 
-    metadata = {
-        "project_type": result["project_type"],
-        "model": result["model"],
-        "confidence": result["confidence"],
-        "calls_per_day": result["calls_per_day"],
-        "tokens_in": result["tokens_in"],
-        "tokens_out": result["tokens_out"],
-    }
-    if budget is not None:
-        metadata["budget"] = budget
+    metadata = _build_metadata(result, budget)
 
     try:
         create_project(
@@ -78,44 +141,12 @@ def init(smart, days, budget):
         console.print(f"[red]Failed to create project: {e}[/red]")
         raise SystemExit(1)
 
-    config_path = os.path.join(project_path, ".forecost.toml")
-    created_at = datetime.now(timezone.utc).isoformat()
-    safe_name = project_name.replace("\\", "\\\\").replace('"', '\\"')
-    config_content = f'''project_name = "{safe_name}"
-path = "."
-created_at = "{created_at}"
-'''
-    try:
-        with open(config_path, "w") as f:
-            f.write(config_content)
-    except OSError as e:
-        console.print(f"[yellow]Could not write .forecost.toml: {e}[/yellow]")
-    else:
-        gitignore_path = os.path.join(project_path, ".gitignore")
-        if os.path.isfile(gitignore_path):
-            with open(gitignore_path, "r") as f:
-                gitignore_content = f.read()
-            if ".forecost.toml" not in gitignore_content:
-                console.print("[dim]Tip: Add .forecost.toml to your .gitignore[/dim]")
-
-    table = Table(show_header=False)
-    table.add_column("", style="dim")
-    table.add_column("")
-    table.add_row("Project", project_name)
-    table.add_row("Type", result["project_type"])
-    table.add_row("Model", result["model"])
-    table.add_row("Duration", f"{estimated_days} days")
-    table.add_row("Daily cost", f"${daily_cost:.2f}")
-    table.add_row("Total projected", f"${total_cost:.2f}")
-    table.add_row("Confidence", result["confidence"])
-
-    if budget is not None:
-        status = "Under budget" if total_cost <= budget else "Over budget"
-        table.add_row("Budget", f"${budget:.2f} ({status})")
-
-    content = table
-    console.print(Panel(content, title="[bold]forecost initialized[/bold]", border_style="green"))
-    if result["project_type"] == "default":
-        console.print(
-            "[dim]Using default estimates. Override with: forecost init --days 14 --budget 50[/dim]"
-        )
+    _write_project_config(project_path, project_name)
+    _print_init_summary(
+        project_name=project_name,
+        result=result,
+        estimated_days=estimated_days,
+        daily_cost=daily_cost,
+        total_cost=total_cost,
+        budget=budget,
+    )

@@ -38,6 +38,15 @@ dev = [
     "pytest>=7.0",
     "pytest-cov",
     "pytest-asyncio>=0.23",
+    "hypothesis>=6.0",
+    "pytest-benchmark>=4.0",
+    "diff-cover>=7.0",
+    "radon>=6.0",
+    "xenon>=0.9",
+    "bandit>=1.7",
+    "pip-audit>=2.0",
+    "pyright>=1.1",
+    "vulture>=2.0",
     "ruff",
     "mypy",
     "statsmodels>=0.14",
@@ -46,6 +55,9 @@ dev = [
 
 [project.scripts]
 forecost = "forecost.cli:main"
+
+[project.entry-points.pytest11]
+forecost = "forecost.pytest_plugin"
 
 [project.urls]
 Homepage = "https://github.com/ArivunidhiA/forecost"
@@ -57,7 +69,45 @@ target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "W"]
+select = ["E", "F", "I", "W", "UP", "B", "SIM", "RUF", "S", "A", "C4", "DTZ", "T20", "PT"]
+unfixable = ["F841"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["forecost"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "S108", "S311"]
+"forecost/__init__.py" = ["RUF022"]
+"forecost/commands/calc_cmd.py" = ["E501"]
+"forecost/commands/export_cmd.py" = ["T201"]
+"forecost/commands/forecast_cmd.py" = ["E501", "T201", "B904"]
+"forecost/pricing.py" = ["RUF022", "UP045"]
+"forecost/scope.py" = ["E501", "SIM103"]
+"forecost/tracker.py" = ["RUF022", "T201", "UP035"]
+"forecost/tui.py" = ["RUF012", "T201"]
+"forecost/commands/init_cmd.py" = ["SIM108", "B904", "E501"]
+"forecost/commands/optimize_cmd.py" = ["E501"]
+"forecost/commands/serve_cmd.py" = ["S101", "T201"]
+"forecost/commands/status_cmd.py" = ["B904"]
+"forecost/db.py" = ["RUF022", "S110", "UP015"]
+"forecost/forecaster.py" = ["E501"]
+"forecost/interceptor.py" = ["RUF022", "S110", "SIM105", "UP015", "UP035"]
+"tests/test_commands.py" = ["PT018"]
+"tests/test_edge_cases.py" = ["PT011"]
+"tests/test_property_based.py" = ["I001"]
+
+[tool.pyright]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"
+reportMissingImports = true
+reportMissingTypeStubs = false
+venvPath = "."
+venv = ".venv312"
+exclude = ["scripts/test_real_sdk.py"]
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+skips = ["B101"]
 
 [tool.mypy]
 python_version = "3.10"
@@ -67,4 +117,13 @@ warn_unused_configs = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-markers = ["benchmark: marks tests as benchmark/accuracy tests"]
+markers = [
+    "benchmark: marks tests as benchmark/accuracy tests",
+    "slow: marks tests as slow-running",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["forecost"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"forecost/py.typed" = "forecost/py.typed"

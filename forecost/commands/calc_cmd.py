@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import click
 from rich.console import Console
@@ -7,6 +8,93 @@ from rich.table import Table
 from forecost.pricing import calculate_cost, get_tier
 
 console = Console()
+
+
+def _read_prompt(prompt: str | None, prompt_file: str | None) -> str | None:
+    if not prompt_file:
+        return prompt
+    return Path(prompt_file).read_text(encoding="utf-8")
+
+
+def _build_results(
+    model_list: list[str], input_tokens: int, output_tokens: int, calls: int
+) -> list[dict[str, float | int | str]]:
+    results: list[dict[str, float | int | str]] = []
+    for model in model_list:
+        cost_per_call = calculate_cost(model, input_tokens, output_tokens)
+        results.append(
+            {
+                "model": model,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cost_per_call": cost_per_call,
+                "cost_total": cost_per_call * calls,
+                "tier": get_tier(model),
+            }
+        )
+    return results
+
+
+def _print_json_output(
+    *,
+    input_tokens: int,
+    output_tokens: int,
+    calls: int,
+    results: list[dict[str, float | int | str]],
+) -> None:
+    payload = {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "calls": calls,
+        "models": results,
+    }
+    click.echo(json.dumps(payload, indent=2))
+
+
+def _print_table_output(
+    *,
+    input_tokens: int,
+    output_tokens: int,
+    calls: int,
+    results: list[dict[str, float | int | str]],
+) -> None:
+    console.print(
+        f"\n[dim]Input tokens:[/dim] [bold]{input_tokens:,}[/bold]  "
+        f"[dim]Output tokens:[/dim] [bold]{output_tokens:,}[/bold]  "
+        f"[dim]Calls:[/dim] [bold]{calls:,}[/bold]\n"
+    )
+
+    table = Table(title="Cost Comparison")
+    table.add_column("Model", style="cyan")
+    table.add_column("Tier", style="dim")
+    table.add_column("Tokens (In/Out)", justify="right")
+    table.add_column("Cost per call", justify="right", style="green")
+    if calls > 1:
+        table.add_column(f"Cost x{calls:,}", justify="right", style="bold yellow")
+
+    for r in results:
+        row = [
+            str(r["model"]),
+            str(r["tier"]),
+            f"{int(r['input_tokens']):,} / {int(r['output_tokens']):,}",
+            f"${float(r['cost_per_call']):.6f}",
+        ]
+        if calls > 1:
+            row.append(f"${float(r['cost_total']):.4f}")
+        table.add_row(*row)
+
+    console.print(table)
+
+    if len(results) >= 2:
+        cheapest = min(results, key=lambda r: float(r["cost_per_call"]))
+        expensive = max(results, key=lambda r: float(r["cost_per_call"]))
+        if float(expensive["cost_per_call"]) > 0:
+            ratio = float(expensive["cost_per_call"]) / float(cheapest["cost_per_call"])
+            console.print(
+                f"\n[dim]{expensive['model']} costs "
+                f"{ratio:.1f}x more than {cheapest['model']}[/dim]"
+            )
+
 
 DEFAULT_MODELS = (
     "gpt-4o,gpt-4o-mini,claude-3-5-sonnet-latest,"
@@ -40,9 +128,7 @@ def calc(prompt, prompt_file, models, output_tokens, calls, as_json):
         forecost calc --file prompt.txt --models gpt-4o,claude-3-5-sonnet-latest
         forecost calc "Hello" --output-tokens 2000 --calls 1000
     """
-    if prompt_file:
-        with open(prompt_file) as f:
-            prompt = f.read()
+    prompt = _read_prompt(prompt, prompt_file)
 
     if not prompt:
         console.print("[red]Provide a prompt string or --file path[/red]")
@@ -51,64 +137,20 @@ def calc(prompt, prompt_file, models, output_tokens, calls, as_json):
     input_tokens = _estimate_tokens(prompt)
     model_list = [m.strip() for m in models.split(",") if m.strip()]
 
-    results = []
-    for model in model_list:
-        cost_per_call = calculate_cost(model, input_tokens, output_tokens)
-        tier = get_tier(model)
-        results.append(
-            {
-                "model": model,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cost_per_call": cost_per_call,
-                "cost_total": cost_per_call * calls,
-                "tier": tier,
-            }
-        )
+    results = _build_results(model_list, input_tokens, output_tokens, calls)
 
     if as_json:
-        payload = {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "calls": calls,
-            "models": results,
-        }
-        click.echo(json.dumps(payload, indent=2))
+        _print_json_output(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            calls=calls,
+            results=results,
+        )
         return
 
-    console.print(
-        f"\n[dim]Input tokens:[/dim] [bold]{input_tokens:,}[/bold]  "
-        f"[dim]Output tokens:[/dim] [bold]{output_tokens:,}[/bold]  "
-        f"[dim]Calls:[/dim] [bold]{calls:,}[/bold]\n"
+    _print_table_output(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        calls=calls,
+        results=results,
     )
-
-    table = Table(title="Cost Comparison")
-    table.add_column("Model", style="cyan")
-    table.add_column("Tier", style="dim")
-    table.add_column("Tokens (In/Out)", justify="right")
-    table.add_column("Cost per call", justify="right", style="green")
-    if calls > 1:
-        table.add_column(f"Cost x{calls:,}", justify="right", style="bold yellow")
-
-    for r in results:
-        row = [
-            r["model"],
-            r["tier"],
-            f"{r['input_tokens']:,} / {r['output_tokens']:,}",
-            f"${r['cost_per_call']:.6f}",
-        ]
-        if calls > 1:
-            row.append(f"${r['cost_total']:.4f}")
-        table.add_row(*row)
-
-    console.print(table)
-
-    if len(results) >= 2:
-        cheapest = min(results, key=lambda r: r["cost_per_call"])
-        expensive = max(results, key=lambda r: r["cost_per_call"])
-        if expensive["cost_per_call"] > 0:
-            ratio = expensive["cost_per_call"] / cheapest["cost_per_call"]
-            console.print(
-                f"\n[dim]{expensive['model']} costs "
-                f"{ratio:.1f}x more than {cheapest['model']}[/dim]"
-            )
