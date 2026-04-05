@@ -159,8 +159,7 @@ def forecost_get_cost_summary(
         if params.group_by == "day":
             raw = get_daily_costs(params.project_id)
             rows = [
-                {"date": day, "cost_usd": cost, "total_tokens": tokens}
-                for day, cost, tokens in raw
+                {"date": day, "cost_usd": cost, "total_tokens": tokens} for day, cost, tokens in raw
             ]
 
             if params.days is not None:
@@ -316,8 +315,7 @@ def forecost_get_anomalies(project_id: int) -> str:
                 )
         elif drift_status == "under_budget":
             recommendation = (
-                "Spending is significantly under baseline. "
-                "Your estimates may be too conservative."
+                "Spending is significantly under baseline. Your estimates may be too conservative."
             )
         else:
             recommendation = "No anomalies detected. Spending is within expected range."
@@ -406,9 +404,7 @@ def forecost_track_call(
         provider = get_provider(params.model)
 
         conn = get_or_create_db()
-        row = conn.execute(
-            "SELECT id FROM projects WHERE id = ?", (params.project_id,)
-        ).fetchone()
+        row = conn.execute("SELECT id FROM projects WHERE id = ?", (params.project_id,)).fetchone()
         if row is None:
             return (
                 f"Error: Project {params.project_id} not found. "
@@ -421,8 +417,14 @@ def forecost_track_call(
             "(project_id, timestamp, model, provider, tokens_in, tokens_out, cost_usd, source) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                params.project_id, now, params.model, provider,
-                params.tokens_in, params.tokens_out, final_cost, "mcp",
+                params.project_id,
+                now,
+                params.model,
+                provider,
+                params.tokens_in,
+                params.tokens_out,
+                final_cost,
+                "mcp",
             ),
         )
         conn.commit()

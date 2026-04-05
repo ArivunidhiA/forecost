@@ -235,9 +235,7 @@ def test_track_call_auto_calculates_cost(
     # First execute returns project existence check, second is the INSERT
     mock_conn.execute.return_value.fetchone.return_value = {"id": 1}
 
-    result = forecost_track_call(
-        project_id=1, model="gpt-4o", tokens_in=1000, tokens_out=500
-    )
+    result = forecost_track_call(project_id=1, model="gpt-4o", tokens_in=1000, tokens_out=500)
     data = json.loads(result)
     assert data["cost_usd"] == pytest.approx(0.025)
     assert data["source"] == "mcp"
@@ -278,9 +276,7 @@ def test_track_call_explicit_cost(
 def test_validation_negative_tokens() -> None:
     """Negative tokens_in raises validation error."""
     with pytest.raises(ValidationError):
-        TrackCallInput(
-            project_id=1, model="gpt-4o", tokens_in=-1, tokens_out=0
-        )
+        TrackCallInput(project_id=1, model="gpt-4o", tokens_in=-1, tokens_out=0)
 
 
 def test_validation_limit_zero() -> None:
@@ -339,9 +335,7 @@ def test_cost_summary_with_days_filter(mock_daily: MagicMock, mock_db: MagicMock
     mock_conn = MagicMock()
     mock_db.return_value = mock_conn
     # Return 30 days of data; only recent 7 should survive the filter
-    daily_data = [
-        ((today - timedelta(days=i)).isoformat(), 5.0, 1000) for i in range(30)
-    ]
+    daily_data = [((today - timedelta(days=i)).isoformat(), 5.0, 1000) for i in range(30)]
     mock_daily.return_value = daily_data
     mock_conn.execute.return_value.fetchone.return_value = {"cnt": 7}
 
@@ -406,8 +400,6 @@ def test_track_call_nonexistent_project(
     mock_db.return_value = mock_conn
     mock_conn.execute.return_value.fetchone.return_value = None
 
-    result = forecost_track_call(
-        project_id=9999, model="gpt-4o", tokens_in=100, tokens_out=50
-    )
+    result = forecost_track_call(project_id=9999, model="gpt-4o", tokens_in=100, tokens_out=50)
     assert "Error" in result
     assert "not found" in result

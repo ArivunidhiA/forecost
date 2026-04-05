@@ -184,7 +184,7 @@ def test_drift_status_flags_under_budget_with_three_trailing_drops(
     )
 )
 def test_tracker_action_sequences_preserve_call_and_token_totals(
-    actions: list[tuple[str, int, int]]
+    actions: list[tuple[str, int, int]],
 ) -> None:
     import forecost.tracker as tracker_mod
 
