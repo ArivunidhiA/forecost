@@ -1,20 +1,46 @@
 # forecost
 
-**The Swiss army knife for LLM costs. Local-first, zero infra.**
+**Know what your LLMs cost. No cloud. No signup. Just `pip install forecost`.**
 
-[![PyPI version](https://img.shields.io/pypi/v/forecost.svg)](https://pypi.org/project/forecost/)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![PyPI version](https://img.shields.io/pypi/v/forecost)](https://pypi.org/project/forecost/)
+[![Downloads](https://img.shields.io/pypi/dm/forecost)](https://pypi.org/project/forecost/)
+[![License: MIT](https://img.shields.io/github/license/ArivunidhiA/forecost)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/ArivunidhiA/forecost/ci.yml)](https://github.com/ArivunidhiA/forecost/actions)
+[![Python](https://img.shields.io/pypi/pyversions/forecost)](https://pypi.org/project/forecost/)
 
-Python 3.10+ required. forecost is in Alpha: APIs may change and some features are experimental.
+<!-- TODO: Replace with demo GIF showing: forecost calc → forecost forecast → TUI dashboard -->
+<p align="center">
+  <img src="https://via.placeholder.com/800x400?text=Demo+GIF+Coming+Soon" alt="forecost demo" width="800">
+</p>
 
-## Instant Value — No Setup Required
+## The Problem
 
-### Compare costs across models instantly
+Most developers have no idea what their LLM API calls actually cost until the bill arrives, and by then the damage is done. One team burned $47,000 in 11 days when LangChain agents got stuck in a loop, and 96% of enterprises report AI costs exceeding initial estimates. forecost fixes that by making spend visible and predictable from day one.
+
+## Quickstart
 
 ```bash
-$ forecost calc "Explain quantum computing in simple terms"
+pip install forecost
+```
 
+```python
+import forecost
+forecost.auto_track()   # Add this before your LLM calls
+```
+
+```bash
+forecost forecast       # See where your money is going
+```
+
+> 💡 No API keys yet? Run `forecost demo` to see a forecast with sample data.
+
+## Compare costs across models instantly
+
+```bash
+forecost calc "Explain quantum computing in simple terms"
+```
+
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                     Cost Comparison                         │
 ├──────────────────────────┬──────────┬──────────┬────────────┤
@@ -29,56 +55,44 @@ $ forecost calc "Explain quantum computing in simple terms"
 └──────────────────────────┴──────────┴──────────┴────────────┘
 ```
 
-### Browse all LLM pricing
+Browse all built-in pricing with:
 
 ```bash
-forecost price               # Rich table of all 80+ models
-forecost price --json        # Programmatic JSON output
-forecost price --tier 1      # Filter by capability tier
+forecost price
+forecost price --json
 ```
 
-## Quick Start
+## Why forecost?
 
-Full walkthrough from install to forecast:
+| Feature | forecost | LiteLLM | Helicone | LangSmith |
+|---------|----------|---------|----------|-----------|
+| Cost tracking | ✅ | ✅ | ✅ | ✅ |
+| Cost forecasting | ✅ | ❌ | ❌ | ❌ |
+| Instant cost calc | ✅ | ❌ | ❌ | ❌ |
+| Prediction intervals | ✅ | ❌ | ❌ | ❌ |
+| Zero infrastructure | ✅ | ❌ (proxy) | ❌ (cloud) | ❌ (cloud) |
+| Local-only / private | ✅ | Partial | ❌ | ❌ |
+| pip install + 2 lines | ✅ | ❌ | ❌ | ❌ |
+| Free forever | ✅ | Freemium | Freemium | $39/seat/mo |
 
-```bash
-pip install forecost
-cd your-project
-forecost init
-```
+## Feature Highlights
 
-Add to your app's entry point (before any LLM calls):
+- Tracks non-streaming LLM calls automatically — zero decorators needed.
+- Reports both token burn and dollar cost side by side in every command.
+- Forecasts spend using 3 statistical models that beat naive baselines on real cost data.
+- Enforces budgets in CI with exit codes — over-budget runs fail fast.
+- Includes an 80+ model pricing database for instant cross-provider comparison.
+- Offers an optional TUI dashboard with `pip install forecost[tui]`.
 
-```python
-import forecost
-forecost.auto_track()
-```
+## Detailed Usage
 
-Call `auto_track()` early, before any httpx usage. If your app imports httpx before forecost, the interceptor may not attach correctly.
+### Auto-Tracking
 
-Run your app as usual. After building usage for a few days:
+Non-streaming calls are tracked automatically; call `forecost.auto_track()` as early as possible in your entry point.
 
-```bash
-forecost forecast
-```
+If your app imports `httpx` before `forecost.auto_track()`, the interceptor may not attach correctly.
 
-## See It in Action
-
-`forecost demo` runs a forecast with sample data and no setup. Use it to see the full output before tracking your own project.
-
-## Dual-Mode Tracking: Tokens + Dollars
-
-forecost v0.2.0 tracks both **token burn** and **dollar cost** side by side:
-
-- **API users** see dollar projections and cost optimization suggestions
-- **Subscription users** (Cursor, Claude Code) see token burn rates and remaining capacity
-- All CLI commands (`status`, `forecast`, `optimize`) display both metrics
-
-## Auto-Tracking
-
-Non-streaming calls are tracked automatically. No decorators, no manual logging.
-
-**Streaming limitation:** forecost cannot intercept streaming responses automatically. You must call `log_stream_usage` after consuming the stream. Pass the accumulated response dict containing a `usage` key (and optionally `model` for identification):
+Streaming responses are not intercepted automatically, so call `log_stream_usage` after consuming the stream and pass the accumulated response dictionary.
 
 ```python
 import forecost
@@ -89,31 +103,76 @@ response = client.chat.completions.create(model="gpt-4", messages=[...], stream=
 accumulated = {"usage": {"prompt_tokens": 0, "completion_tokens": 0}, "model": "gpt-4"}
 for chunk in response:
     if chunk.usage:
-        accumulated["usage"] = {"prompt_tokens": chunk.usage.prompt_tokens,
-                               "completion_tokens": chunk.usage.completion_tokens}
+        accumulated["usage"] = {
+            "prompt_tokens": chunk.usage.prompt_tokens,
+            "completion_tokens": chunk.usage.completion_tokens,
+        }
     if chunk.model:
         accumulated["model"] = chunk.model
+
 forecost.log_stream_usage(accumulated)
 ```
 
 For Anthropic, use `input_tokens` and `output_tokens` instead of `prompt_tokens` and `completion_tokens`.
 
-## Manual Tracking
+### Manual Tracking
 
-For fine-grained control, use the `@track_cost` decorator or `log_call`:
+Use the `@track_cost` decorator or `log_call` when you want explicit control:
 
 ```python
 import forecost
 
 @forecost.track_cost(provider="openai")
 def call_gpt(prompt: str):
-    return openai.chat.completions.create(model="gpt-4", messages=[{"role": "user", "content": prompt}])
+    return openai.chat.completions.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}],
+    )
+```
 
-# Or log calls manually
+```python
+import forecost
+
 forecost.log_call(model="gpt-4", tokens_in=500, tokens_out=200, provider="openai")
 ```
 
-## Commands
+### Budget Enforcement
+
+Set a project budget during initialization:
+
+```bash
+forecost init --budget 100
+```
+
+Use `--exit-code` on forecast to fail CI when over budget:
+
+```yaml
+- name: Check LLM Budget
+  run: |
+    pip install forecost
+    forecost forecast --exit-code
+```
+
+Exit codes: `0` = on track, `1` = projected over budget, `2` = actual spend over budget.
+
+### Disabling in Tests
+
+If you have forecost installed, it automatically disables itself during `pytest` runs via the built-in pytest plugin.
+
+```bash
+FORECOST_DISABLED=1 pytest
+```
+
+Or disable explicitly in code:
+
+```python
+forecost.disable()
+```
+
+## Commands Reference
+
+<details>
+<summary>📖 Full Command Reference</summary>
 
 | Command | Description |
 |---------|-------------|
@@ -140,42 +199,13 @@ forecost.log_call(model="gpt-4", tokens_in=500, tokens_out=200, provider="openai
 | `forecost reset` | Reset the current project (optionally keep usage logs) |
 | `forecost serve` | Run local API server for programmatic access |
 
-`status` and `forecast --brief` both show the same one-line summary. Use `status` when you only need a quick check; use `forecast --brief` when you want that format in a script or CI pipeline.
+`status` and `forecast --brief` show the same one-line summary; use `status` for quick checks and `forecast --brief` for scripts/CI.
 
-## Budget Enforcement
+</details>
 
-Set a budget at init with `--budget`:
+## Forecasting Methodology
 
-```bash
-forecost init --budget 100
-```
-
-Use `--exit-code` on forecast to fail CI when over budget:
-
-```yaml
-- name: Check LLM Budget
-  run: |
-    pip install forecost
-    forecost forecast --exit-code
-```
-
-Exit codes: 0 = on track, 1 = projected over budget, 2 = actual spend over budget.
-
-## Disabling in Tests
-
-```bash
-FORECOST_DISABLED=1 pytest
-```
-
-Or in code:
-
-```python
-forecost.disable()
-```
-
-## Forecasting Accuracy
-
-forecost uses an ensemble of three statistical forecasting methods (Simple Exponential Smoothing, Damped Trend, and Linear Regression) inspired by the M4 Forecasting Competition, where simple combinations beat complex ML models across 100,000 time series.
+forecost uses an ensemble of three statistical forecasting methods (Simple Exponential Smoothing, Damped Trend, and Linear Regression) inspired by the M4 Forecasting Competition, where simple model combinations beat many complex ML approaches across large time-series benchmarks.
 
 | Metric | What it means | Typical result |
 |--------|---------------|----------------|
@@ -184,46 +214,23 @@ forecost uses an ensemble of three statistical forecasting methods (Simple Expon
 | 80% interval | Will the real cost land here? | ~80% of the time |
 | 95% interval | Conservative budget range | ~95% of the time |
 
-Install the ensemble engine for best results: `pip install forecost[forecast]`
+For best results, install the ensemble engine with `pip install forecost[forecast]`; the base install falls back to a lighter exponential moving average.
 
-The base install uses a simpler exponential moving average that works without additional dependencies.
+## Support
 
-## Why forecost?
-
-| Feature | forecost | LiteLLM | Helicone | LangSmith |
-|---------|--------|---------|----------|-----------|
-| Cost tracking | Yes | Yes | Yes | Yes |
-| Cost forecasting | Yes | No | No | No |
-| Instant cost calc | Yes | No | No | No |
-| LLM pricing database | Yes | Partial | No | No |
-| Prediction intervals | Yes | No | No | No |
-| Zero infrastructure | Yes | No (proxy) | No (cloud) | No (cloud) |
-| Zero overhead on requests | Yes (post-response) | No (proxy latency) | No (proxy latency) | No (SDK wrapper) |
-| Local-only / private | Yes | Partial | No | No |
-| pip install, 2 lines | Yes | SDK wrapper | Proxy setup | SDK setup |
-| Free forever | Yes | Freemium | Freemium | $39/seat/mo |
-
-Minimal footprint: 3 runtime dependencies (click, rich, httpx; plus tomli on Python 3.10), under 3MB.
+If forecost saves you from a surprise LLM bill, consider giving it a ⭐ — it helps other developers find this tool.
 
 ## Data Storage
 
 - **Usage and forecasts:** `~/.forecost/costs.db` (SQLite). All projects share this database.
 - **Project config:** `.forecost.toml` in your project root. Contains project name, baseline days, and optional budget.
 
-## Glossary
-
-| Term | Meaning |
-|------|---------|
-| **Confidence levels** | How reliable the forecast is based on data volume: low (0 days), medium-low (1-3), medium (4-7), high (8-14), very-high (15+). More usage data yields higher confidence. |
-| **Drift status** | Whether spend is trending above or below the baseline: `on_track`, `over_budget`, or `under_budget`. Based on recent daily burn ratios. |
-| **MASE** | Mean Absolute Scaled Error. Compares forecast accuracy to a naive "yesterday = tomorrow" guess. MASE < 1.0 means the forecast beats the naive baseline. |
-| **Stability** | How much the forecast changes between runs: `converged` (< 5% change), `stabilizing` (5-15%), or `adjusting` (> 15%). |
-| **Prediction intervals** | 80% and 95% ranges around the projected total. The real cost will fall within the 80% interval about 80% of the time. |
-| **Model Tiers** | Capability classification: Tier 1 (Heavy) for complex tasks, Tier 2 (Standard) for routine work, Tier 3 (Economy) for simple tasks. Used by `optimize` for intelligent suggestions. |
-
 ## Local API Server
 
-`forecost serve` starts a local HTTP server (default port 8787) for programmatic access:
+<details>
+<summary>Local API Server (`forecost serve`)</summary>
+
+`forecost serve` starts a local HTTP server (default port `8787`) for programmatic access:
 
 | Endpoint | Description |
 |----------|-------------|
@@ -233,6 +240,8 @@ Minimal footprint: 3 runtime dependencies (click, rich, httpx; plus tomli on Pyt
 | `GET /api/costs` | Recent usage logs. |
 
 Run from your project directory so forecost can find `.forecost.toml`.
+
+</details>
 
 ## Contributing
 
