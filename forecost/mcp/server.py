@@ -175,7 +175,7 @@ def _summarize_by_column(params: CostSummaryInput, conn: object, column: str) ->
         msg = f"Invalid group column: {column}"
         raise ValueError(msg)
     query = (
-        f"SELECT {column}, SUM(cost_usd) as total_cost, "  # noqa: S608
+        f"SELECT {column}, SUM(cost_usd) as total_cost, "  # nosec B608  # noqa: S608
         "SUM(tokens_in + tokens_out) as total_tokens, COUNT(*) as call_count "
         f"FROM usage_logs WHERE project_id = ? GROUP BY {column} "
         "ORDER BY total_cost DESC"
