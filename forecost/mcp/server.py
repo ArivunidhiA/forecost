@@ -137,6 +137,62 @@ def forecost_list_projects() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _summarize_by_day(params: CostSummaryInput, conn: object) -> dict:
+    """Build cost summary grouped by day."""
+    raw = get_daily_costs(params.project_id)
+    rows = [{"date": day, "cost_usd": cost, "total_tokens": tokens} for day, cost, tokens in raw]
+
+    if params.days is not None:
+        cutoff_str = (datetime.now(timezone.utc).date() - timedelta(days=params.days)).isoformat()
+        rows = [r for r in rows if r["date"] >= cutoff_str]
+        count_row = conn.execute(  # type: ignore[union-attr]
+            "SELECT COUNT(*) as cnt FROM usage_logs WHERE project_id = ? AND date(timestamp) >= ?",
+            (params.project_id, cutoff_str),
+        ).fetchone()
+    else:
+        count_row = conn.execute(  # type: ignore[union-attr]
+            "SELECT COUNT(*) as cnt FROM usage_logs WHERE project_id = ?",
+            (params.project_id,),
+        ).fetchone()
+
+    return {
+        "group_by": "day",
+        "data": rows,
+        "totals": {
+            "total_cost_usd": sum(r["cost_usd"] for r in rows),
+            "total_tokens": sum(r["total_tokens"] for r in rows),
+            "total_calls": count_row["cnt"] if count_row else 0,
+        },
+    }
+
+
+_ALLOWED_GROUP_COLUMNS = frozenset({"model", "provider"})
+
+
+def _summarize_by_column(params: CostSummaryInput, conn: object, column: str) -> dict:
+    """Build cost summary grouped by model or provider."""
+    if column not in _ALLOWED_GROUP_COLUMNS:
+        msg = f"Invalid group column: {column}"
+        raise ValueError(msg)
+    query = (
+        f"SELECT {column}, SUM(cost_usd) as total_cost, "  # noqa: S608
+        "SUM(tokens_in + tokens_out) as total_tokens, COUNT(*) as call_count "
+        f"FROM usage_logs WHERE project_id = ? GROUP BY {column} "
+        "ORDER BY total_cost DESC"
+    )
+    db_rows = conn.execute(query, (params.project_id,)).fetchall()  # type: ignore[union-attr]
+    data = [dict(r) for r in db_rows]
+    return {
+        "group_by": column,
+        "data": data,
+        "totals": {
+            "total_cost_usd": sum(r["total_cost"] for r in data),
+            "total_tokens": sum(r["total_tokens"] for r in data),
+            "total_calls": sum(r["call_count"] for r in data),
+        },
+    }
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         readOnlyHint=True,
@@ -152,83 +208,13 @@ def forecost_get_cost_summary(
 ) -> str:
     """Get aggregated cost summary for a project, grouped by day, model, or provider."""
     try:
-        # Validate via Pydantic
         params = CostSummaryInput(project_id=project_id, group_by=group_by, days=days)
         conn = get_or_create_db()
 
         if params.group_by == "day":
-            raw = get_daily_costs(params.project_id)
-            rows = [
-                {"date": day, "cost_usd": cost, "total_tokens": tokens} for day, cost, tokens in raw
-            ]
-
-            if params.days is not None:
-                cutoff = datetime.now(timezone.utc).date()
-                cutoff_str = (cutoff - timedelta(days=params.days)).isoformat()
-                rows = [r for r in rows if r["date"] >= cutoff_str]
-                count_row = conn.execute(
-                    "SELECT COUNT(*) as cnt FROM usage_logs "
-                    "WHERE project_id = ? AND date(timestamp) >= ?",
-                    (params.project_id, cutoff_str),
-                ).fetchone()
-            else:
-                count_row = conn.execute(
-                    "SELECT COUNT(*) as cnt FROM usage_logs WHERE project_id = ?",
-                    (params.project_id,),
-                ).fetchone()
-
-            total_cost = sum(r["cost_usd"] for r in rows)
-            total_tokens = sum(r["total_tokens"] for r in rows)
-            total_calls = count_row["cnt"] if count_row else 0
-            result = {
-                "group_by": "day",
-                "data": rows,
-                "totals": {
-                    "total_cost_usd": total_cost,
-                    "total_tokens": total_tokens,
-                    "total_calls": total_calls,
-                },
-            }
-        elif params.group_by == "model":
-            query = (
-                "SELECT model, SUM(cost_usd) as total_cost, "
-                "SUM(tokens_in + tokens_out) as total_tokens, COUNT(*) as call_count "
-                "FROM usage_logs WHERE project_id = ? GROUP BY model ORDER BY total_cost DESC"
-            )
-            db_rows = conn.execute(query, (params.project_id,)).fetchall()
-            data = [dict(r) for r in db_rows]
-            total_cost = sum(r["total_cost"] for r in data)
-            total_tokens = sum(r["total_tokens"] for r in data)
-            total_calls = sum(r["call_count"] for r in data)
-            result = {
-                "group_by": "model",
-                "data": data,
-                "totals": {
-                    "total_cost_usd": total_cost,
-                    "total_tokens": total_tokens,
-                    "total_calls": total_calls,
-                },
-            }
-        else:  # provider
-            query = (
-                "SELECT provider, SUM(cost_usd) as total_cost, "
-                "SUM(tokens_in + tokens_out) as total_tokens, COUNT(*) as call_count "
-                "FROM usage_logs WHERE project_id = ? GROUP BY provider ORDER BY total_cost DESC"
-            )
-            db_rows = conn.execute(query, (params.project_id,)).fetchall()
-            data = [dict(r) for r in db_rows]
-            total_cost = sum(r["total_cost"] for r in data)
-            total_tokens = sum(r["total_tokens"] for r in data)
-            total_calls = sum(r["call_count"] for r in data)
-            result = {
-                "group_by": "provider",
-                "data": data,
-                "totals": {
-                    "total_cost_usd": total_cost,
-                    "total_tokens": total_tokens,
-                    "total_calls": total_calls,
-                },
-            }
+            result = _summarize_by_day(params, conn)
+        else:
+            result = _summarize_by_column(params, conn, params.group_by or "model")
 
         return json.dumps(result, indent=2, default=str)
     except ValueError as e:
