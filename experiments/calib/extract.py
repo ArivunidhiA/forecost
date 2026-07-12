@@ -132,7 +132,9 @@ def _flush_turn(turn: TurnAccumulator, conn: sqlite3.Connection) -> None:
         # Nothing observable happened after this prompt (e.g. trailing prompt with
         # no response captured yet); skip rather than record a zero-cost phantom turn.
         return
-    dominant_model = max(turn.model_mix, key=turn.model_mix.get) if turn.model_mix else "unknown"
+    dominant_model = (
+        max(turn.model_mix, key=lambda m: turn.model_mix[m]) if turn.model_mix else "unknown"
+    )
     cost = calculate_cost(
         dominant_model, turn.tokens_in, turn.tokens_out, turn.cache_read, turn.cache_write
     )
@@ -411,7 +413,7 @@ def _join_subagents(session_file: Path, conn: sqlite3.Connection) -> int:
             continue
         (tid, tin, tout, cr, cw, tc, old_cost, model_mix_json) = row
         model_mix = json.loads(model_mix_json) if model_mix_json else {}
-        dominant_model = max(model_mix, key=model_mix.get) if model_mix else "unknown"
+        dominant_model = max(model_mix, key=lambda m: model_mix[m]) if model_mix else "unknown"
         new_in = tin + extra_in
         new_out = tout + extra_out
         new_cr = cr + extra_cache_r

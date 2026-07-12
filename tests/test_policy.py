@@ -91,7 +91,7 @@ def test_evaluate_fails_open_on_internal_error(ledger_conn):
     class Broken:
         rules = None  # not iterable -> forces an internal exception
 
-    d = evaluate(ledger_conn, Broken())
+    d = evaluate(ledger_conn, Broken())  # type: ignore[arg-type]  # intentionally malformed
     assert d.action == "allow"
     assert "fail-open" in d.reason
 

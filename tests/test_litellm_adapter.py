@@ -78,11 +78,12 @@ def test_success_event_lands_in_ledger_with_source_reported_cost(ledger_conn, mo
     import forecost.adapters.litellm_hook as hook_mod
 
     monkeypatch.setattr(hook_mod, "get_ledger_db", lambda _path=None: ledger_conn)
+    from forecost.ledger.sink import SyncLedgerSink
+
     logger = ForecostLogger()
-    logger._sink = __import__("forecost.ledger.sink", fromlist=["SyncLedgerSink"]).SyncLedgerSink(
-        ledger_path=None
-    )
-    logger._sink._conn = ledger_conn
+    sink = SyncLedgerSink(ledger_path=None)
+    sink._conn = ledger_conn
+    logger._sink = sink
 
     kwargs = {
         "model": "gpt-4o",

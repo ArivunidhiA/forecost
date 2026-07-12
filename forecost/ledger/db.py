@@ -7,9 +7,10 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from forecost.core.paths import forecost_home
 from forecost.ledger.schema import apply_schema
 
-LEDGER_PATH = Path.home() / ".forecost" / "ledger.db"
+LEDGER_PATH = forecost_home() / "ledger.db"
 
 _conn: sqlite3.Connection | None = None
 _conn_lock = threading.Lock()

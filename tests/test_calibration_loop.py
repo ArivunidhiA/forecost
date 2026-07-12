@@ -130,6 +130,7 @@ def test_burn_report_projects_time_to_limit(ledger_conn):
     reports = burn_report(ledger_conn, window_hours=24.0)
     r = reports[0]
     assert r.budget_name == "weekly-cap"
+    assert r.spent_toward_budget is not None
     assert r.spent_toward_budget > 0
     assert r.hours_to_limit is not None
     assert r.hours_to_limit > 0

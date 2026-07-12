@@ -57,7 +57,9 @@ class ForecostLogger(CustomLogger):
 
     def __init__(self, policy_path: Path | None = None, ledger_path: Path | None = None) -> None:
         super().__init__()
-        self._policy_path = policy_path or (Path.home() / ".forecost" / "policy.toml")
+        from forecost.core.paths import forecost_home
+
+        self._policy_path = policy_path or (forecost_home() / "policy.toml")
         self._ledger_path = ledger_path
         self._sink: SyncLedgerSink | None = None
 

@@ -27,7 +27,9 @@ def _policy_path(cwd: str | None) -> Path:
         candidate = Path(cwd) / ".forecost.toml"
         if candidate.exists():
             return candidate
-    return Path.home() / ".forecost" / "policy.toml"
+    from forecost.core.paths import forecost_home
+
+    return forecost_home() / "policy.toml"
 
 
 def _resolve_ids(conn, cwd: str, session_id_raw: str | None) -> tuple[int | None, int | None]:

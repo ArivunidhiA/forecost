@@ -92,19 +92,23 @@ def _run_hook(command, payload, env):
     return proc
 
 
-def test_prompt_submit_silent_on_cheap_turn(tmp_path, monkeypatch):
-    env = {**__import__("os").environ, "HOME": str(tmp_path)}
+def _fc_env(fc_home) -> dict:
+    """A subprocess env with FORECOST_HOME set — relocates the ledger + policy to a
+    tmp dir on every platform (unlike HOME, which Path.home() ignores on Windows)."""
+    return {**__import__("os").environ, "FORECOST_HOME": str(fc_home)}
+
+
+def test_prompt_submit_silent_on_cheap_turn(tmp_path):
     proc = _run_hook(
         "prompt-submit",
         {"session_id": "s1", "cwd": str(tmp_path), "prompt_id": "p1", "prompt": "fix a typo"},
-        env,
+        _fc_env(tmp_path / "fc"),
     )
     assert proc.returncode == 0
     assert proc.stdout.strip() == ""
 
 
 def test_prompt_submit_speaks_on_fanout(tmp_path):
-    env = {**__import__("os").environ, "HOME": str(tmp_path)}
     proc = _run_hook(
         "prompt-submit",
         {
@@ -113,7 +117,7 @@ def test_prompt_submit_speaks_on_fanout(tmp_path):
             "prompt_id": "p1",
             "prompt": "spawn parallel subagents to review everything",
         },
-        env,
+        _fc_env(tmp_path / "fc"),
     )
     assert proc.returncode == 0
     out = json.loads(proc.stdout)
@@ -121,68 +125,55 @@ def test_prompt_submit_speaks_on_fanout(tmp_path):
 
 
 def test_malformed_stdin_fails_open(tmp_path):
-    env = {**__import__("os").environ, "HOME": str(tmp_path)}
     proc = subprocess.run(
         [sys.executable, "-m", "forecost.hooks.fastpath", "prompt-submit"],
         input="not json {{{",
         capture_output=True,
         text=True,
-        env=env,
+        env=_fc_env(tmp_path / "fc"),
         timeout=10,
     )
     assert proc.returncode == 0
 
 
 def test_unknown_command_fails_open(tmp_path):
-    env = {**__import__("os").environ, "HOME": str(tmp_path)}
-    proc = _run_hook("bogus-command", {}, env)
+    proc = _run_hook("bogus-command", {}, _fc_env(tmp_path / "fc"))
     assert proc.returncode == 0
 
 
 def test_gate_denies_over_hard_limit(tmp_path):
-    forecost_home = tmp_path / "home"
-    forecost_home.mkdir()
-    (forecost_home / ".forecost").mkdir()
-    (forecost_home / ".forecost" / "policy.toml").write_text(
+    fc_home = tmp_path / "fc"
+    fc_home.mkdir()
+    (fc_home / "policy.toml").write_text(
         '[[policy.rules]]\nid="cap"\nscope="session"\ncurrency="USD"\n'
         'soft_limit=0.001\nhard_limit=0.002\naction="deny"\n'
     )
-    env = {**__import__("os").environ, "HOME": str(forecost_home)}
+    env = _fc_env(fc_home)
     cwd = str(tmp_path / "proj")
 
-    # Establish the session, then inject spend directly via the ledger.
+    # Establish the session (subprocess writes to fc_home/ledger.db via FORECOST_HOME).
     _run_hook("session-start", {"session_id": "sd1", "cwd": cwd}, env)
 
-    sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
-    import importlib
-    import os as _os
+    # Inject spend into the SAME ledger file by pointing the sink at it explicitly —
+    # no Path.home() dependence, so this works identically on every OS.
+    from datetime import datetime, timezone
 
-    old_home = _os.environ.get("HOME")
-    _os.environ["HOME"] = str(forecost_home)
-    try:
-        import forecost.ledger.db as ledger_db
+    from forecost.adapters.base import UsageEvent
+    from forecost.ledger.sink import SyncLedgerSink
 
-        importlib.reload(ledger_db)
-        from datetime import datetime, timezone
-
-        from forecost.adapters.base import UsageEvent
-        from forecost.ledger.sink import SyncLedgerSink
-
-        sink = SyncLedgerSink()
-        sink.emit(
-            UsageEvent(
-                event_uid="deny-test",
-                ts=datetime.now(timezone.utc),
-                source="test",
-                model="claude-opus-4-8",
-                session_uid="sd1",
-                tokens_in=1_000_000,
-                tokens_out=100_000,
-            )
+    sink = SyncLedgerSink(ledger_path=fc_home / "ledger.db")
+    sink.emit(
+        UsageEvent(
+            event_uid="deny-test",
+            ts=datetime.now(timezone.utc),
+            source="test",
+            model="claude-opus-4-8",
+            session_uid="sd1",
+            tokens_in=1_000_000,
+            tokens_out=100_000,
         )
-    finally:
-        if old_home is not None:
-            _os.environ["HOME"] = old_home
+    )
+    sink.flush()
 
     proc = _run_hook("pre-tool", {"session_id": "sd1", "cwd": cwd, "tool_name": "Bash"}, env)
     assert proc.returncode == 0

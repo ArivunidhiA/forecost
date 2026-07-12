@@ -88,6 +88,7 @@ def test_guard_error_streak_thresholds():
 
 def test_guard_evidence_is_a_measured_fact_not_a_prediction():
     ev = check_error_streak(consecutive_errors=4, total_errors_in_tail=0)
+    assert ev is not None
     assert "4 consecutive" in ev.fact
     assert "fail" not in ev.fact.lower()
     assert "likely" not in ev.fact.lower()
