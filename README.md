@@ -1,261 +1,146 @@
 # forecost
 
-**Know what your LLMs cost. No cloud. No signup. Just `pip install forecost`.**
+**The independent flight recorder for AI agent work.** It records what your coding
+agents actually cost — across every harness and currency — reconciles the meters
+nobody trusts, and (once it has earned the right to) briefs you before you launch an
+expensive run. Local-first. Content-free. `pip install`, no signup, no cloud.
 
-[![PyPI version](https://img.shields.io/pypi/v/forecost)](https://pypi.org/project/forecost/)
-[![Downloads](https://img.shields.io/pypi/dm/forecost)](https://pypi.org/project/forecost/)
 [![License: MIT](https://img.shields.io/github/license/ArivunidhiA/forecost)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/ArivunidhiA/forecost/ci.yml)](https://github.com/ArivunidhiA/forecost/actions)
-[![Python](https://img.shields.io/pypi/pyversions/forecost)](https://pypi.org/project/forecost/)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 
-<!-- TODO: Replace with demo GIF showing: forecost calc → forecost forecast → TUI dashboard -->
-<p align="center">
-  <img src="assets/demo.gif" alt="forecost demo" width="800">
-</p>
+> **Honest status.** The ledger, reconciliation, budget gate, and Claude Code plugin
+> work today. The pre-execution **estimator runs in shadow mode** — it computes and
+> records estimates but **displays nothing**, because on real data it hasn't yet cleared
+> the accuracy bar we set for it (see [Calibration](#calibration-the-honest-part)).
+> We'd rather show you a trustworthy ledger than an untrustworthy guess.
 
-## The Problem
+## What it does that other tools don't
 
-Most developers have no idea what their LLM API calls actually cost until the bill arrives, and by then the damage is done. One team burned $47,000 in 11 days when LangChain agents got stuck in a loop, and 96% of enterprises report AI costs exceeding initial estimates. forecost fixes that by making spend visible and predictable from day one.
+Everyone can meter tokens. Two things are genuinely unoccupied, and forecost does both:
+
+- **It's an independent second set of books.** Your Claude Code session says one number,
+  the dashboard says another, LiteLLM says a third — and no vendor will audit its own
+  meter. forecost reconciles them and shows you the disagreement.
+- **It reads the harnesses where agentic spend actually happens.** It ingests Claude
+  Code transcripts directly (no proxy, no API key), computing cost from tokens ×
+  a bundled pricing table — because those transcripts carry no dollar field.
+
+## Privacy is the whole point (and it's testable)
+
+forecost's ledger is **content-free by construction**: it stores token counts, models,
+timestamps, and workspace paths — never your prompts, completions, tool output, or the
+file paths inside tool calls. This isn't a promise, it's a
+[CI-enforced test](tests/test_privacy_canary.py): a sentinel string is planted in a
+synthetic transcript's prompt, tool arguments, and output, and the test fails if it can
+be found anywhere under `~/.forecost/`. Nothing leaves your machine — there is no cloud
+tier to leave to.
 
 ## Quickstart
 
 ```bash
-pip install forecost
-```
+pip install -e .        # from a clone; PyPI release coming
 
-```python
-import forecost
-forecost.auto_track()   # Add this before your LLM calls
-```
-
-```bash
-forecost forecast       # See where your money is going
-```
-
-> 💡 No API keys yet? Run `forecost demo` to see a forecast with sample data.
-
-## Compare costs across models instantly
-
-```bash
-forecost calc "Explain quantum computing in simple terms"
+forecost ingest         # pull new usage from your Claude Code transcripts
+forecost ledger status  # what you've spent, by model
+forecost reconcile      # cross-check the ledger's internal consistency
+forecost burn           # trailing burn rate → time-to-budget
 ```
 
 ```text
-┌─────────────────────────────────────────────────────────────┐
-│                     Cost Comparison                         │
-├──────────────────────────┬──────────┬──────────┬────────────┤
-│ Model                    │ Tier     │ Tokens   │ Cost/call  │
-├──────────────────────────┼──────────┼──────────┼────────────┤
-│ gpt-4o                   │ Tier 1   │ 8 / 500  │ $0.005020  │
-│ gpt-4o-mini              │ Tier 2   │ 8 / 500  │ $0.000301  │
-│ claude-3-5-sonnet-latest │ Tier 1   │ 8 / 500  │ $0.007524  │
-│ claude-3-5-haiku-latest  │ Tier 2   │ 8 / 500  │ $0.002006  │
-│ gemini-2.5-pro           │ Tier 1   │ 8 / 500  │ $0.005010  │
-│ gemini-2.5-flash         │ Tier 2   │ 8 / 500  │ $0.000301  │
-└──────────────────────────┴──────────┴──────────┴────────────┘
+$ forecost ledger status
+Ledger: 38,996 usage events, 70 workspaces, 97 sessions
+Total USD spend (pricing_table + source_reported): 14164.05
+
+Top models by spend:
+  claude-opus-4-8       n=19616   USD 12092.45
+  claude-sonnet-5       n=11367   USD  1394.43
+  claude-haiku-4-5      n=502     USD     5.10
 ```
 
-Browse all built-in pricing with:
+## Budget enforcement for Claude Code (the plugin)
 
-```bash
-forecost price
-forecost price --json
+forecost ships a Claude Code plugin (`plugin/`) that installs hooks:
+
+- a **budget gate** — if a session crosses a hard limit you set in `.forecost.toml`, the
+  next tool call is denied with a reason;
+- a **threshold-gated preflight note** — on fan-out / scope-broadening prompts only
+  (never on cheap turns — nobody wants another prompt to rubber-stamp);
+- a **background reconciler** — every session end quietly ingests and scores itself.
+
+Every hook is **fail-open by law**: if forecost breaks, your agent keeps working. A
+broken forecost degrades to "no forecost," never to "no Claude Code."
+
+```toml
+# .forecost.toml
+[[policy.rules]]
+id = "session-cap"
+scope = "session"
+currency = "USD"
+soft_limit = 5.0
+hard_limit = 10.0
+action = "deny"
 ```
 
-## Why forecost?
+## Works with your gateway too
 
-| Feature | forecost | LiteLLM | Helicone | LangSmith |
-|---------|----------|---------|----------|-----------|
-| Cost tracking | ✅ | ✅ | ✅ | ✅ |
-| Cost forecasting | ✅ | ❌ | ❌ | ❌ |
-| Instant cost calc | ✅ | ❌ | ❌ | ❌ |
-| Prediction intervals | ✅ | ❌ | ❌ | ❌ |
-| Zero infrastructure | ✅ | ❌ (proxy) | ❌ (cloud) | ❌ (cloud) |
-| Local-only / private | ✅ | Partial | ❌ | ❌ |
-| pip install + 2 lines | ✅ | ❌ | ❌ | ❌ |
-| Free forever | ✅ | Freemium | Freemium | $39/seat/mo |
+If you run a [LiteLLM](https://github.com/BerriAI/litellm) proxy, forecost provides a
+callback (`examples/litellm/`) that enforces the same budget on the money path and
+records every call — with LiteLLM's own cost figure kept alongside forecost's, so the
+two can be reconciled.
 
-## Feature Highlights
+## Calibration — the honest part
 
-- Tracks non-streaming LLM calls automatically — zero decorators needed.
-- Reports both token burn and dollar cost side by side in every command.
-- Forecasts spend using 3 statistical models that beat naive baselines on real cost data.
-- Enforces budgets in CI with exit codes — over-budget runs fail fast.
-- Includes an 80+ model pricing database for instant cross-provider comparison.
-- Offers an optional TUI dashboard with `pip install forecost[tui]`.
+We ran the estimator against 601 real prompt-turns of one heavy user's history. The
+results, [published in full](experiments/calib/VERDICT.md):
 
-## Detailed Usage
+| Target | Coverage of the P90 band | Interval width | Verdict |
+|---|---|---|---|
+| Cost | 88% (want 85–95%) ✓ | 8.5× (want ≤4×) ✗ | **too wide to show** |
+| Duration | 88% ✓ | 10.7× ✗ | **too wide to show** |
+| Files touched | 85% ✓ | 9.6× ✗ | **static flags only** |
+| Mid-run "stuck?" detector | 67% precision at a 2% flag rate | — | **passed** ✓ |
 
-### Auto-Tracking
+So the estimator stays in shadow mode and the brief displays no ranges — that's a
+pre-commitment kept, not a feature missing. The one thing that *did* clear its bar is
+the mid-run stuck-run detector. As real usage accumulates, `forecost calibration`
+tracks whether the bands ever tighten enough to earn a place on screen.
 
-Non-streaming calls are tracked automatically; call `forecost.auto_track()` as early as possible in your entry point.
+The methodology is fully reproducible — [`experiments/calib/`](experiments/calib/) has
+the extractor and backtest; run them against your own history.
 
-If your app imports `httpx` before `forecost.auto_track()`, the interceptor may not attach correctly.
+## Command reference
 
-Streaming responses are not intercepted automatically, so call `log_stream_usage` after consuming the stream and pass the accumulated response dictionary.
-
-```python
-import forecost
-forecost.auto_track()
-
-# Example: OpenAI streaming
-response = client.chat.completions.create(model="gpt-4", messages=[...], stream=True)
-accumulated = {"usage": {"prompt_tokens": 0, "completion_tokens": 0}, "model": "gpt-4"}
-for chunk in response:
-    if chunk.usage:
-        accumulated["usage"] = {
-            "prompt_tokens": chunk.usage.prompt_tokens,
-            "completion_tokens": chunk.usage.completion_tokens,
-        }
-    if chunk.model:
-        accumulated["model"] = chunk.model
-
-forecost.log_stream_usage(accumulated)
-```
-
-For Anthropic, use `input_tokens` and `output_tokens` instead of `prompt_tokens` and `completion_tokens`.
-
-### Manual Tracking
-
-Use the `@track_cost` decorator or `log_call` when you want explicit control:
-
-```python
-import forecost
-
-@forecost.track_cost(provider="openai")
-def call_gpt(prompt: str):
-    return openai.chat.completions.create(
-        model="gpt-4",
-        messages=[{"role": "user", "content": prompt}],
-    )
-```
-
-```python
-import forecost
-
-forecost.log_call(model="gpt-4", tokens_in=500, tokens_out=200, provider="openai")
-```
-
-### Budget Enforcement
-
-Set a project budget during initialization:
-
-```bash
-forecost init --budget 100
-```
-
-Use `--exit-code` on forecast to fail CI when over budget:
-
-```yaml
-- name: Check LLM Budget
-  run: |
-    pip install forecost
-    forecost forecast --exit-code
-```
-
-Exit codes: `0` = on track, `1` = projected over budget, `2` = actual spend over budget.
-
-### Disabling in Tests
-
-If you have forecost installed, it automatically disables itself during `pytest` runs via the built-in pytest plugin.
-
-```bash
-FORECOST_DISABLED=1 pytest
-```
-
-Or disable explicitly in code:
-
-```python
-forecost.disable()
-```
-
-## Commands Reference
+| Command | What it does |
+|---|---|
+| `forecost ingest` | Pull new usage from Claude Code transcripts into the ledger |
+| `forecost ledger status` / `by-workspace` | Spend totals, by model or project |
+| `forecost reconcile` | Cross-check the ledger's internal consistency |
+| `forecost calibration` | The estimator's accuracy record (shadow-mode) |
+| `forecost burn` | Trailing burn rate, projected against your budgets |
 
 <details>
-<summary>📖 Full Command Reference</summary>
+<summary>Legacy commands (v0.2 — still work, being superseded)</summary>
 
-| Command | Description |
-|---------|-------------|
-| `forecost calc "prompt"` | Instant cost comparison across models |
-| `forecost calc --file prompt.txt` | Cost estimate from a file |
-| `forecost price` | Browse LLM pricing for all 80+ models |
-| `forecost price --json` | Programmatic pricing data |
-| `forecost init` | Initialize project and create `.forecost.toml` config |
-| `forecost init --budget X` | Set a budget cap in USD |
-| `forecost forecast` | Show cost forecast in terminal |
-| `forecost forecast --output markdown` | Output forecast as Markdown |
-| `forecost forecast --output csv` | Output forecast as CSV |
-| `forecost forecast --tui` | Interactive TUI dashboard (requires `pip install forecost[tui]`) |
-| `forecost forecast --json` | JSON output for CI/scripts |
-| `forecost forecast --brief` | One-line summary (same format as `status`) |
-| `forecost forecast --exit-code` | Exit 1 if projected over budget, 2 if actual over budget (for CI) |
-| `forecost status` | One-line summary: tokens, spend, projected total, drift status |
-| `forecost track` | View recent tracked LLM calls |
-| `forecost watch` | Live cost dashboard; updates as your app makes calls |
-| `forecost export --format csv` | Export usage data as CSV |
-| `forecost export --format json` | Export usage data as JSON |
-| `forecost demo` | Run forecast with sample data, no setup needed |
-| `forecost optimize` | Tier-aware cost optimization suggestions |
-| `forecost reset` | Reset the current project (optionally keep usage logs) |
-| `forecost serve` | Run local API server for programmatic access |
-
-`status` and `forecast --brief` show the same one-line summary; use `status` for quick checks and `forecast --brief` for scripts/CI.
+The earlier calendar-forecasting product (`calc`, `price`, `forecast`, `track`, `watch`,
+`optimize`, `serve`, `demo`, `init`, `export`) still ships and works. It's being
+superseded by the ledger-based commands above; see
+[the repositioning docs](#background) for why.
 
 </details>
 
-## Forecasting Methodology
+## Background
 
-forecost uses an ensemble of three statistical forecasting methods (Simple Exponential Smoothing, Damped Trend, and Linear Regression) inspired by the M4 Forecasting Competition, where simple model combinations beat many complex ML approaches across large time-series benchmarks.
-
-| Metric | What it means | Typical result |
-|--------|---------------|----------------|
-| MASE | Are we beating a naive guess? | < 1.0 after 5 days |
-| MAE | How many dollars could we be off? | Decreases as data grows |
-| 80% interval | Will the real cost land here? | ~80% of the time |
-| 95% interval | Conservative budget range | ~95% of the time |
-
-For best results, install the ensemble engine with `pip install forecost[forecast]`; the base install falls back to a lighter exponential moving average.
-
-## Support
-
-If forecost saves you from a surprise LLM bill, consider giving it a ⭐ — it helps other developers find this tool.
-
-## Data Storage
-
-- **Usage and forecasts:** `~/.forecost/costs.db` (SQLite). All projects share this database.
-- **Project config:** `.forecost.toml` in your project root. Contains project name, baseline days, and optional budget.
-
-## Local API Server
-
-<details>
-<summary>Local API Server (`forecost serve`)</summary>
-
-`forecost serve` starts a local HTTP server (default port `8787`) for programmatic access:
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/health` | Health check. Returns `{"status": "ok"}`. |
-| `GET /api/forecast` | Full forecast result (same as `forecost forecast --json`). |
-| `GET /api/status` | Project status: active days, actual spend, baseline info. |
-| `GET /api/costs` | Recent usage logs. |
-
-Run from your project directory so forecost can find `.forecost.toml`.
-
-</details>
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=ArivunidhiA%2Fforecost&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=ArivunidhiA/forecost&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=ArivunidhiA/forecost&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=ArivunidhiA/forecost&type=date&legend=top-left" />
- </picture>
-</a>
+forecost started as a calendar-spend forecaster and was deliberately repositioned after
+a long research effort concluded that (a) nobody wanted daily-spend forecasting and
+(b) the interesting, unoccupied problems were reconciliation and pre-execution
+briefing. The full research trail — including the agents that tried to *kill* the idea —
+lives in the project's internal docs.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md). Issues and PRs welcome — especially reports of
+how ingestion and the hooks behave on *your* transcripts and harnesses.
 
 ## License
 

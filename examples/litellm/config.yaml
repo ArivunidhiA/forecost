@@ -1,0 +1,17 @@
+# Minimal LiteLLM proxy config that routes usage + budget enforcement through forecost.
+#
+# Run with:  litellm --config config.yaml
+# Then point any OpenAI-compatible client at http://localhost:4000.
+#
+# forecost's budget gate reads ~/.forecost/policy.toml; add a [[policy.rules]]
+# block there to enforce a cap. Every completed call lands in ~/.forecost/ledger.db
+# — inspect it with `forecost ledger status` and `forecost reconcile`.
+
+model_list:
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      # api_key: set OPENAI_API_KEY in your environment instead of hardcoding here
+
+litellm_settings:
+  callbacks: custom_callbacks.proxy_handler_instance

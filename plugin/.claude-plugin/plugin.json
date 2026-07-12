@@ -1,0 +1,5 @@
+{
+  "name": "forecost",
+  "version": "0.3.0",
+  "description": "The independent flight recorder and preflight briefing for AI agent work — records cost, time, and files across every harness, reconciles the meters nobody trusts, and briefs you at the moments you already pause."
+}

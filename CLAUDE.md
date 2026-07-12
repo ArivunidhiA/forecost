@@ -127,3 +127,26 @@ Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
 2. Use `detect_changes` for code review.
 3. Use `get_affected_flows` to understand impact.
 4. Use `query_graph` pattern="tests_for" to check coverage.
+
+## Multi-Agent Engineering Pipeline
+
+This project uses a systematic fix pipeline with research → implement → verify phases.
+
+### Agents
+- **researcher**: Investigates complex issues, produces research reports in `.claude/research/`
+- **fixer**: Implements fixes with tests, follows research reports
+- **verifier**: Reviews fixes for correctness and completeness
+
+### Progress tracking
+All state is in `.claude/PROGRESS.md`. Always read it first when starting a session.
+
+### Resume protocol
+1. Read `.claude/PROGRESS.md`
+2. Pick highest-priority 🔴 or 🟡 issue
+3. If 🔴: research first, then fix. If 🟡: research done, go straight to fix.
+4. Fix → verify → update PROGRESS.md → next issue
+5. Before session ends: update PROGRESS.md with current state
+
+### Reference documents
+- `gaps/phase-1-audit-report.md` — Full codebase audit (1000+ lines)
+- `gaps/Phase 1 audit, list.md` — Prioritized issue list with context and research

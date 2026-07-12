@@ -138,14 +138,18 @@ def test_serve_costs_endpoint(tmp_path, monkeypatch, db_path):
         server.shutdown()
 
 
-def test_serve_cors_headers(tmp_path, monkeypatch, db_path):
-    """Responses should include Access-Control-Allow-Origin: *."""
+def test_serve_no_wildcard_cors(tmp_path, monkeypatch, db_path):
+    """Responses must NOT include a wildcard CORS header.
+
+    A wildcard Access-Control-Allow-Origin on a localhost server exposing spend
+    data lets any page the user's browser visits read that data via fetch().
+    """
     monkeypatch.chdir(tmp_path)
     port = _free_port()
     server = _start_server(port)
     try:
         _, _, headers = _get(port, "/api/health")
-        assert headers.get("Access-Control-Allow-Origin") == "*"
+        assert "Access-Control-Allow-Origin" not in headers
     finally:
         server.shutdown()
 

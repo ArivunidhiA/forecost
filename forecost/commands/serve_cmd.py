@@ -7,11 +7,11 @@ import click
 from forecost.db import get_active_days, get_daily_costs, get_project_by_path, get_recent_usage_logs
 from forecost.forecaster import ProjectForecaster
 
-CORS_HEADERS = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-}
+# No CORS headers are sent: this server binds to 127.0.0.1 and exposes local spend
+# data. A wildcard Access-Control-Allow-Origin would let any page the user visits in
+# a browser read that data via fetch(). Without CORS headers, browsers block
+# cross-origin reads by default; same-origin tools (curl, the CLI itself) are unaffected.
+CORS_HEADERS: dict[str, str] = {}
 
 
 def _project_or_error():
