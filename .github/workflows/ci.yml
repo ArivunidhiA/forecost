@@ -63,7 +63,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -e ".[dev,forecast]"
+      # litellm so the optional-adapter tests run (and count toward diff-cover)
+      # instead of being importorskip'd, which would show the adapter as uncovered.
+      - run: pip install -e ".[dev,forecast]" litellm
       - run: pytest tests/ --cov=forecost --cov-report=term-missing --cov-report=xml
       - run: diff-cover coverage.xml --compare-branch=origin/main --fail-under 90
       - uses: actions/upload-artifact@v4
