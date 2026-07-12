@@ -81,19 +81,19 @@ def _write_canary_session(project_dir: Path):
 
 
 def test_canary_content_never_reaches_disk(tmp_path):
-    home = tmp_path / "home"
-    home.mkdir()
+    fc_home = tmp_path / "fc"  # FORECOST_HOME — the .forecost dir itself
     claude_dir = tmp_path / "claude_projects"
     _write_canary_session(claude_dir / "-tmp-canary-project")
 
-    env = {**__import__("os").environ, "HOME": str(home)}
+    # FORECOST_HOME redirects the ledger on every OS (HOME is POSIX-only for Path.home()).
+    env = {**__import__("os").environ, "FORECOST_HOME": str(fc_home)}
 
-    # Run ingestion via the actual ClaudeCodeAdapter, in-process but isolated to
-    # this tmp HOME, mirroring what the `stop` hook does after a real session.
+    # Run ingestion via the actual ClaudeCodeAdapter, isolated to a tmp forecost
+    # home, mirroring what the `stop` hook does after a real session.
     script = f"""
 import sys, os
 sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})
-os.environ['HOME'] = {str(home)!r}
+os.environ['FORECOST_HOME'] = {str(fc_home)!r}
 from pathlib import Path
 from forecost.ledger.db import get_ledger_db
 from forecost.ledger.sink import SyncLedgerSink
@@ -124,8 +124,8 @@ record_estimate(conn, est, None, None, "canary-run", shadow=True)
     )
     assert proc.returncode == 0, proc.stderr
 
-    # The canary check: grep every file under ~/.forecost/ for the sentinel.
-    forecost_dir = home / ".forecost"
+    # The canary check: grep every file under the forecost home for the sentinel.
+    forecost_dir = fc_home
     assert forecost_dir.exists(), "ledger directory was not created"
     offenders = []
     for path in forecost_dir.rglob("*"):

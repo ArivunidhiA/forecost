@@ -12,11 +12,18 @@ Iron Rule #6 (never `except Exception: pass` — always log) and Iron Rule #1
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-_LOG_PATH = Path.home() / ".forecost" / "error.log"
+from forecost.core.paths import forecost_home
+
 _MAX_LOG_BYTES = 1_000_000
 _MAX_MESSAGE_CHARS = 400
+
+
+def _log_path():
+    # Computed per-write so $FORECOST_HOME is always honored (BASEMENT.md: one
+    # source of truth for where forecost keeps its data).
+    return forecost_home() / "error.log"
+
 
 _REDACT_PATTERNS = [
     re.compile(r"sk-[A-Za-z0-9]{20,}"),
@@ -46,21 +53,21 @@ def redact(text: str) -> str:
     return out
 
 
-def _ensure_dir() -> None:
-    _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+def _ensure_dir(log_path) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def _rotate_if_large() -> None:
+def _rotate_if_large(log_path) -> None:
     try:
-        if _LOG_PATH.exists() and _LOG_PATH.stat().st_size > _MAX_LOG_BYTES:
-            lines = _LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
-            _LOG_PATH.write_text("\n".join(lines[-2000:]) + "\n", encoding="utf-8")
+        if log_path.exists() and log_path.stat().st_size > _MAX_LOG_BYTES:
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            log_path.write_text("\n".join(lines[-2000:]) + "\n", encoding="utf-8")
     except OSError:
         pass
 
 
 def log_error(component: str, message: str) -> None:
-    """Append a redacted, bounded error line to ~/.forecost/error.log.
+    """Append a redacted, bounded error line to $FORECOST_HOME/error.log.
 
     Never raises. Intended to be the only write path to error.log across the
     codebase so redaction and rotation are applied exactly once, everywhere.
@@ -71,10 +78,11 @@ def log_error(component: str, message: str) -> None:
             repr, which will be redacted before it is written.
     """
     try:
-        _ensure_dir()
-        _rotate_if_large()
+        log_path = _log_path()
+        _ensure_dir(log_path)
+        _rotate_if_large(log_path)
         safe = redact(message)
-        with open(_LOG_PATH, "a", encoding="utf-8") as f:
+        with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"[{component}] {safe}\n")
     except OSError:
         pass

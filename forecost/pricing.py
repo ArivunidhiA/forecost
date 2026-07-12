@@ -1,7 +1,6 @@
 """Self-correcting pricing module with zero external dependencies."""
 
 import re
-from pathlib import Path
 from typing import Optional
 
 __all__ = [
@@ -229,14 +228,13 @@ _DATE_SUFFIX_RE = re.compile(r"-\d{4}(-\d{2}-\d{2}|\d{4})?$")
 
 
 def _log_unknown_model(model: str) -> None:
-    log_dir = Path.home() / ".forecost"
-    log_path = log_dir / "error.log"
-    try:
-        log_dir.mkdir(parents=True, exist_ok=True)
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(f"[pricing] unknown model: {model}\n")
-    except OSError:
-        pass
+    import contextlib
+
+    # Logging must never break cost calculation.
+    with contextlib.suppress(Exception):
+        from forecost.core.errlog import log_error
+
+        log_error("pricing", f"unknown model: {model}")
 
 
 def _resolve_model(model: str) -> Optional[dict[str, float]]:
