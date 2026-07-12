@@ -64,3 +64,32 @@ def test_get_tier_strips_date_suffix():
     from forecost.pricing import get_tier
 
     assert get_tier("gpt-4o-2024-08-06") == "Tier 1 (Heavy)"
+
+
+def test_calculate_cost_ignores_cache_tokens_by_default():
+    """Without cache args, cost matches the pre-cache-support calculation exactly."""
+    assert calculate_cost("claude-sonnet-4-20250514", 1_000_000, 0) == 3.0
+
+
+def test_calculate_cost_prices_cache_read_and_write():
+    """Cache reads/writes must not be priced at zero (a real bug on agentic workloads
+    where cache reads dominate token counts)."""
+    base = calculate_cost("claude-sonnet-4-20250514", 0, 0)
+    with_cache = calculate_cost(
+        "claude-sonnet-4-20250514", 0, 0, cache_read_tokens=1_000_000, cache_write_tokens=1_000_000
+    )
+    assert with_cache > base
+    # explicit rates from FALLBACK_PRICING: cache_read=0.30, cache_write=3.75 per Mtok
+    assert with_cache == 0.30 + 3.75
+
+
+def test_calculate_cost_cache_fallback_ratio_for_models_without_explicit_rates():
+    """A model with no explicit cache_read/cache_write rate falls back to the
+    standard 10%/125%-of-input ratio rather than pricing cache tokens at zero."""
+    cost = calculate_cost("gpt-4o", 0, 0, cache_read_tokens=1_000_000, cache_write_tokens=1_000_000)
+    # gpt-4o input rate is 2.50/Mtok -> cache_read=0.25, cache_write=3.125
+    assert cost == 0.25 + 3.125
+
+
+def test_calculate_cost_negative_cache_tokens_clamped():
+    assert calculate_cost("gpt-4o", 100, 100, cache_read_tokens=-5, cache_write_tokens=-5) >= 0

@@ -1,0 +1,355 @@
+{
+  "n_turns": 601,
+  "n_categories": 12,
+  "gate_G_A": {
+    "cost": {
+      "verdict": "MARGINAL",
+      "coverage_p90": 0.8835,
+      "median_width_p90_p50": 8.5531,
+      "skill_vs_B0": 0.0824,
+      "worst_cell_coverage": 0.8226,
+      "n_eval": 558,
+      "backtest": {
+        "B0": {
+          "n_eval": 561,
+          "coverage_p90": 0.9091,
+          "coverage_p50": 0.6096,
+          "median_pinball50": 4.304,
+          "median_pinball90": 7.6169,
+          "median_width_p90_p50": 10.5727
+        },
+        "B1": {
+          "n_eval": 549,
+          "coverage_p90": 0.8616,
+          "coverage_p50": 0.6066,
+          "median_pinball50": 4.3937,
+          "median_pinball90": 6.9999,
+          "median_width_p90_p50": 8.4249
+        },
+        "M1": {
+          "n_eval": 558,
+          "coverage_p90": 0.8835,
+          "coverage_p50": 0.5932,
+          "median_pinball50": 4.384,
+          "median_pinball90": 6.9891,
+          "median_width_p90_p50": 8.5531,
+          "skill_vs_B0_pinball90": 0.0824
+        },
+        "per_category": {
+          "quick-edit": {
+            "n_eval": 216,
+            "avg_n_train": 118.5,
+            "coverage_p90": 0.9028,
+            "median_width": 11.2171
+          },
+          "bugfix-debug": {
+            "n_eval": 50,
+            "avg_n_train": 34.5,
+            "coverage_p90": 0.84,
+            "median_width": 11.5749
+          },
+          "config-devops": {
+            "n_eval": 31,
+            "avg_n_train": 17.0,
+            "coverage_p90": 0.9032,
+            "median_width": 5.4256
+          },
+          "test-work": {
+            "n_eval": 120,
+            "avg_n_train": 64.5,
+            "coverage_p90": 0.8667,
+            "median_width": 12.8244
+          },
+          "repo-research": {
+            "n_eval": 22,
+            "avg_n_train": 12.5,
+            "coverage_p90": 0.8636,
+            "median_width": 5.9155
+          },
+          "feature-build": {
+            "n_eval": 17,
+            "avg_n_train": 9.0,
+            "coverage_p90": 0.9412,
+            "median_width": 5.0545
+          },
+          "docs-writing": {
+            "n_eval": 19,
+            "avg_n_train": 10.0,
+            "coverage_p90": 0.9474,
+            "median_width": 4.3656
+          },
+          "fanout-batch": {
+            "n_eval": 62,
+            "avg_n_train": 33.5,
+            "coverage_p90": 0.8226,
+            "median_width": 8.1297
+          },
+          "continuation-misc": {
+            "n_eval": 8,
+            "avg_n_train": 5.5,
+            "coverage_p90": 0.875,
+            "median_width": 8.4949
+          },
+          "web-research": {
+            "n_eval": 10,
+            "avg_n_train": 8.5,
+            "coverage_p90": 1.0,
+            "median_width": 10.2813
+          }
+        }
+      }
+    },
+    "duration": {
+      "verdict": "MARGINAL",
+      "coverage_p90": 0.8835,
+      "median_width_p90_p50": 10.658,
+      "skill_vs_B0": -0.0744,
+      "worst_cell_coverage": 0.8182,
+      "n_eval": 558,
+      "backtest": {
+        "B0": {
+          "n_eval": 561,
+          "coverage_p90": 0.8841,
+          "coverage_p50": 0.5187,
+          "median_pinball50": 82.3293,
+          "median_pinball90": 160.9321,
+          "median_width_p90_p50": 9.3452
+        },
+        "B1": {
+          "n_eval": 549,
+          "coverage_p90": 0.8616,
+          "coverage_p50": 0.4936,
+          "median_pinball50": 79.759,
+          "median_pinball90": 175.189,
+          "median_width_p90_p50": 10.8939
+        },
+        "M1": {
+          "n_eval": 558,
+          "coverage_p90": 0.8835,
+          "coverage_p50": 0.4875,
+          "median_pinball50": 78.4124,
+          "median_pinball90": 172.9131,
+          "median_width_p90_p50": 10.658,
+          "skill_vs_B0_pinball90": -0.0744
+        },
+        "per_category": {
+          "quick-edit": {
+            "n_eval": 216,
+            "avg_n_train": 118.5,
+            "coverage_p90": 0.8843,
+            "median_width": 10.0639
+          },
+          "bugfix-debug": {
+            "n_eval": 50,
+            "avg_n_train": 34.5,
+            "coverage_p90": 0.94,
+            "median_width": 17.1255
+          },
+          "config-devops": {
+            "n_eval": 31,
+            "avg_n_train": 17.0,
+            "coverage_p90": 0.9032,
+            "median_width": 7.0176
+          },
+          "test-work": {
+            "n_eval": 120,
+            "avg_n_train": 64.5,
+            "coverage_p90": 0.85,
+            "median_width": 23.191
+          },
+          "repo-research": {
+            "n_eval": 22,
+            "avg_n_train": 12.5,
+            "coverage_p90": 0.8182,
+            "median_width": 10.5138
+          },
+          "feature-build": {
+            "n_eval": 17,
+            "avg_n_train": 9.0,
+            "coverage_p90": 0.8824,
+            "median_width": 6.0472
+          },
+          "docs-writing": {
+            "n_eval": 19,
+            "avg_n_train": 10.0,
+            "coverage_p90": 0.8947,
+            "median_width": 5.6902
+          },
+          "fanout-batch": {
+            "n_eval": 62,
+            "avg_n_train": 33.5,
+            "coverage_p90": 0.8871,
+            "median_width": 7.561
+          },
+          "continuation-misc": {
+            "n_eval": 8,
+            "avg_n_train": 5.5,
+            "coverage_p90": 1.0,
+            "median_width": 7.1043
+          },
+          "web-research": {
+            "n_eval": 10,
+            "avg_n_train": 8.5,
+            "coverage_p90": 0.9,
+            "median_width": 12.3897
+          }
+        }
+      }
+    },
+    "files": {
+      "verdict": "MARGINAL",
+      "coverage_p90": 0.8513,
+      "median_width_p90_p50": 9.63,
+      "skill_vs_B0": 0.0,
+      "worst_cell_coverage": 0.8241,
+      "n_eval": 558,
+      "backtest": {
+        "B0": {
+          "n_eval": 561,
+          "coverage_p90": 0.8592,
+          "coverage_p50": 0.5401,
+          "median_pinball50": 0.0,
+          "median_pinball90": 0.4,
+          "median_width_p90_p50": null
+        },
+        "B1": {
+          "n_eval": 544,
+          "coverage_p90": 0.8401,
+          "coverage_p50": 0.5809,
+          "median_pinball50": 0.441,
+          "median_pinball90": 0.4,
+          "median_width_p90_p50": 5.0
+        },
+        "M1": {
+          "n_eval": 558,
+          "coverage_p90": 0.8513,
+          "coverage_p50": 0.5394,
+          "median_pinball50": 0.2257,
+          "median_pinball90": 0.4,
+          "median_width_p90_p50": 9.63,
+          "skill_vs_B0_pinball90": 0.0
+        },
+        "per_category": {
+          "quick-edit": {
+            "n_eval": 216,
+            "avg_n_train": 118.5,
+            "coverage_p90": 0.8241,
+            "median_width": null
+          },
+          "bugfix-debug": {
+            "n_eval": 50,
+            "avg_n_train": 34.5,
+            "coverage_p90": 0.84,
+            "median_width": null
+          },
+          "config-devops": {
+            "n_eval": 31,
+            "avg_n_train": 17.0,
+            "coverage_p90": 0.9032,
+            "median_width": 10.2637
+          },
+          "test-work": {
+            "n_eval": 120,
+            "avg_n_train": 64.5,
+            "coverage_p90": 0.85,
+            "median_width": null
+          },
+          "repo-research": {
+            "n_eval": 22,
+            "avg_n_train": 12.5,
+            "coverage_p90": 0.8636,
+            "median_width": 8.2668
+          },
+          "feature-build": {
+            "n_eval": 17,
+            "avg_n_train": 9.0,
+            "coverage_p90": 0.9412,
+            "median_width": 6.2004
+          },
+          "docs-writing": {
+            "n_eval": 19,
+            "avg_n_train": 10.0,
+            "coverage_p90": 0.8947,
+            "median_width": 8.9319
+          },
+          "fanout-batch": {
+            "n_eval": 62,
+            "avg_n_train": 33.5,
+            "coverage_p90": 0.871,
+            "median_width": 11.9463
+          },
+          "continuation-misc": {
+            "n_eval": 8,
+            "avg_n_train": 5.5,
+            "coverage_p90": 0.875,
+            "median_width": 19.7424
+          },
+          "web-research": {
+            "n_eval": 10,
+            "avg_n_train": 8.5,
+            "coverage_p90": 0.9,
+            "median_width": null
+          }
+        }
+      }
+    }
+  },
+  "gate_G_R2": {
+    "verdict": "INSUFFICIENT-DATA",
+    "note": "Only 0 weak-labeled failures in the whole corpus (520 ok, 81 ambiguous) \u2014 the corpus is too healthy to learn a failure signal from (round5-risk \u00a76.1's predicted outcome).",
+    "rates_by_category": {
+      "feature-build": {
+        "n": 15,
+        "success_rate": 1.0,
+        "wilson_90_lo": 0.8472,
+        "wilson_90_hi": 1.0
+      },
+      "fanout-batch": {
+        "n": 56,
+        "success_rate": 1.0,
+        "wilson_90_lo": 0.9539,
+        "wilson_90_hi": 1.0
+      },
+      "config-devops": {
+        "n": 31,
+        "success_rate": 1.0,
+        "wilson_90_lo": 0.9197,
+        "wilson_90_hi": 1.0
+      },
+      "quick-edit": {
+        "n": 201,
+        "success_rate": 1.0,
+        "wilson_90_lo": 0.9867,
+        "wilson_90_hi": 1.0
+      },
+      "bugfix-debug": {
+        "n": 52,
+        "success_rate": 1.0,
+        "wilson_90_lo": 0.9505,
+        "wilson_90_hi": 1.0
+      },
+      "test-work": {
+        "n": 109,
+        "success_rate": 1.0,
+        "wilson_90_lo": 0.9758,
+        "wilson_90_hi": 1.0
+      },
+      "repo-research": {
+        "n": 18,
+        "success_rate": 1.0,
+        "wilson_90_lo": 0.8693,
+        "wilson_90_hi": 1.0
+      }
+    },
+    "n_fail_total": 0,
+    "n_ok_total": 520,
+    "n_ambiguous_total": 81
+  },
+  "gate_G_R3": {
+    "verdict": "PASS",
+    "precision": 0.6667,
+    "flag_rate": 0.02,
+    "n_flagged": 12,
+    "note": "12/601 turns flagged (2.0%); 8/12 of flagged turns were non-ok (66.7% precision)."
+  }
+}

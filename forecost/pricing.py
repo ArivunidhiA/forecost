@@ -1,7 +1,6 @@
 """Self-correcting pricing module with zero external dependencies."""
 
 import re
-from pathlib import Path
 from typing import Optional
 
 __all__ = [
@@ -87,9 +86,43 @@ FALLBACK_PRICING: dict[str, dict[str, float]] = {
     "gpt-4o-audio-preview": {"input": 2.50, "output": 10.00},
     "gpt-4o-realtime": {"input": 5.00, "output": 20.00},
     # Anthropic - Claude 4 family
-    "claude-sonnet-4-20250514": {"input": 3.00, "output": 15.00},
-    "claude-opus-4-20250514": {"input": 15.00, "output": 75.00},
-    "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.00},
+    "claude-sonnet-4-20250514": {
+        "input": 3.00,
+        "output": 15.00,
+        "cache_read": 0.30,
+        "cache_write": 3.75,
+    },
+    "claude-opus-4-20250514": {
+        "input": 15.00,
+        "output": 75.00,
+        "cache_read": 1.50,
+        "cache_write": 18.75,
+    },
+    "claude-haiku-4-5-20251001": {
+        "input": 0.80,
+        "output": 4.00,
+        "cache_read": 0.08,
+        "cache_write": 1.00,
+    },
+    # Anthropic - Claude 5 family (Fable/Opus/Sonnet 5)
+    "claude-fable-5": {
+        "input": 3.00,
+        "output": 15.00,
+        "cache_read": 0.30,
+        "cache_write": 3.75,
+    },
+    "claude-opus-4-8": {
+        "input": 15.00,
+        "output": 75.00,
+        "cache_read": 1.50,
+        "cache_write": 18.75,
+    },
+    "claude-sonnet-5": {
+        "input": 3.00,
+        "output": 15.00,
+        "cache_read": 0.30,
+        "cache_write": 3.75,
+    },
     # Google Gemini 2.5
     "gemini-2.5-pro": {"input": 1.25, "output": 10.00},
     "gemini-2.5-pro-preview-05-06": {"input": 1.25, "output": 10.00},
@@ -195,14 +228,13 @@ _DATE_SUFFIX_RE = re.compile(r"-\d{4}(-\d{2}-\d{2}|\d{4})?$")
 
 
 def _log_unknown_model(model: str) -> None:
-    log_dir = Path.home() / ".forecost"
-    log_path = log_dir / "error.log"
-    try:
-        log_dir.mkdir(parents=True, exist_ok=True)
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(f"[pricing] unknown model: {model}\n")
-    except OSError:
-        pass
+    import contextlib
+
+    # Logging must never break cost calculation.
+    with contextlib.suppress(Exception):
+        from forecost.core.errlog import log_error
+
+        log_error("pricing", f"unknown model: {model}")
 
 
 def _resolve_model(model: str) -> Optional[dict[str, float]]:
@@ -218,26 +250,46 @@ def _resolve_model(model: str) -> Optional[dict[str, float]]:
     return None
 
 
-def calculate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
+def calculate_cost(
+    model: str,
+    tokens_in: int,
+    tokens_out: int,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+) -> float:
     """Calculate estimated USD cost for a model invocation.
 
     Args:
         model: Model identifier.
-        tokens_in: Input token count.
+        tokens_in: Input token count (uncached).
         tokens_out: Output token count.
+        cache_read_tokens: Tokens served from a prompt cache (typically priced far
+            below standard input; billed at zero if omitted, which undercounts cost
+            on cache-heavy agentic workloads).
+        cache_write_tokens: Tokens newly written to a prompt cache (typically priced
+            above standard input).
 
     Returns:
         float: Estimated total call cost in USD.
     """
     tokens_in = max(0, tokens_in)
     tokens_out = max(0, tokens_out)
+    cache_read_tokens = max(0, cache_read_tokens)
+    cache_write_tokens = max(0, cache_write_tokens)
     cost = _resolve_model(model)
     if cost is None:
         _log_unknown_model(model)
         cost = DEFAULT_COST
-    input_cost = (tokens_in / 1_000_000) * cost["input"]
+    input_rate = cost["input"]
+    # Anthropic's standard published ratios when a model has no explicit cache rate:
+    # cache reads ~10% of input price, cache writes ~125% of input price.
+    cache_read_rate = cost.get("cache_read", input_rate * 0.1)
+    cache_write_rate = cost.get("cache_write", input_rate * 1.25)
+    input_cost = (tokens_in / 1_000_000) * input_rate
     output_cost = (tokens_out / 1_000_000) * cost["output"]
-    return input_cost + output_cost
+    cache_read_cost = (cache_read_tokens / 1_000_000) * cache_read_rate
+    cache_write_cost = (cache_write_tokens / 1_000_000) * cache_write_rate
+    return input_cost + output_cost + cache_read_cost + cache_write_cost
 
 
 def get_tier(model: str) -> str:

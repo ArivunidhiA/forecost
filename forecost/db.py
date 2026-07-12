@@ -4,13 +4,16 @@ Zero-maintenance SQLite database module for forecost cost tracking.
 
 import atexit
 import json
+import logging
 import os
 import sqlite3
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "get_or_create_db",
@@ -387,8 +390,14 @@ class WriteQueue:
                 source,
             )
             self._queue.put_nowait(item)
-        except Exception:  # nosec B110 - Intentional: drop item if queue is full, never block the caller
-            pass
+        except Full:
+            logger.warning(
+                "forecost: WriteQueue full (10,000 items) — dropping usage record for model=%s. "
+                "SQLite may be writing slower than expected.",
+                model,
+            )
+        except Exception as exc:  # nosec B110 - Intentional: never block the caller
+            logger.warning("forecost: WriteQueue.put failed — dropping usage record: %s", exc)
 
     def _worker(self) -> None:
         _ensure_dir()

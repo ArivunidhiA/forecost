@@ -55,6 +55,12 @@ htmlcov/
 .forecost.toml
 .forecost/
 
+# Calibration experiment: keep the reproducible scripts + aggregate verdicts,
+# never the extracted per-turn data (it's derived from private transcripts).
+experiments/**/turns.db
+experiments/**/*.parquet
+experiments/**/*.csv
+
 # AI assistant configs
 .claude/
 .cursorrules
@@ -77,6 +83,9 @@ GEMINI.md
 item1_coverage_output.txt
 demo.tape
 forecost-social-preview.png
+
+# Internal audit / planning docs
+gaps/
 
 # Node
 node_modules/
