@@ -1,9 +1,13 @@
 """Plugin manifests are valid JSON and versions stay in sync (deep-audit FC-009)."""
 
 import json
+import sys
 from pathlib import Path
 
-import tomllib
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # 3.10 fallback (matches forecost/policy/rules.py)
+    import tomli as tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 
