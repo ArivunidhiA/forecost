@@ -13,7 +13,7 @@ def test_purge_removes_forecost_dir(tmp_path, monkeypatch):
     (forecost_dir / "costs.db").write_text("fake")
     (forecost_dir / "error.log").write_text("fake")
 
-    monkeypatch.setattr("forecost.commands.purge_cmd._FORECOST_DIR", forecost_dir)
+    monkeypatch.setenv("FORECOST_HOME", str(forecost_dir))
     monkeypatch.chdir(tmp_path)
 
     runner = CliRunner()
@@ -30,7 +30,7 @@ def test_purge_removes_local_toml(tmp_path, monkeypatch):
     forecost_dir = fake_home / ".forecost"
     forecost_dir.mkdir(parents=True)
 
-    monkeypatch.setattr("forecost.commands.purge_cmd._FORECOST_DIR", forecost_dir)
+    monkeypatch.setenv("FORECOST_HOME", str(forecost_dir))
     monkeypatch.chdir(tmp_path)
 
     local_toml = tmp_path / ".forecost.toml"
@@ -49,7 +49,7 @@ def test_purge_keep_config(tmp_path, monkeypatch):
     forecost_dir = fake_home / ".forecost"
     forecost_dir.mkdir(parents=True)
 
-    monkeypatch.setattr("forecost.commands.purge_cmd._FORECOST_DIR", forecost_dir)
+    monkeypatch.setenv("FORECOST_HOME", str(forecost_dir))
     monkeypatch.chdir(tmp_path)
 
     local_toml = tmp_path / ".forecost.toml"
@@ -68,7 +68,7 @@ def test_purge_nothing_to_purge(tmp_path, monkeypatch):
     fake_home = tmp_path / "home"
     forecost_dir = fake_home / ".forecost"  # Does not exist
 
-    monkeypatch.setattr("forecost.commands.purge_cmd._FORECOST_DIR", forecost_dir)
+    monkeypatch.setenv("FORECOST_HOME", str(forecost_dir))
     monkeypatch.chdir(tmp_path)
 
     runner = CliRunner()

@@ -12,9 +12,10 @@ from forecost.policy.rules import Action, PolicyConfig, PolicyRule
 
 _ACTION_RANK: dict[Action, int] = {"allow": 0, "warn": 1, "ask": 2, "deny": 3}
 
+# Rolling-window scopes only. "session" is handled separately via session_id
+# (below); "run" is rejected at parse time (rules.py). A scope that is neither a
+# window here nor "session" is a bug — _since_iso raises so evaluate() fails open.
 _SCOPE_WINDOWS = {
-    "run": None,  # handled by caller via run_id, not time window
-    "session": None,  # handled by caller via session_id, not time window
     "day": timedelta(days=1),
     "week": timedelta(weeks=1),
     "month": timedelta(days=30),
@@ -33,14 +34,22 @@ class Decision:
 def _since_iso(scope: str) -> str:
     window = _SCOPE_WINDOWS.get(scope)
     if window is None:
-        return "1970-01-01T00:00:00+00:00"
+        # Never the old silent 1970 lifetime window: an unknown scope is a bug,
+        # and raising lets evaluate() fail open rather than measure all-time spend.
+        raise ValueError(f"unsupported policy scope for time window: {scope!r}")
     return (datetime.now(timezone.utc) - window).isoformat()
 
 
 def _evaluate_rule(
     conn: sqlite3.Connection, rule: PolicyRule, workspace_id: int | None, session_id: int | None
 ) -> Decision:
-    if rule.scope == "session" and session_id is not None:
+    if rule.scope == "session":
+        if session_id is None:
+            # No active session to measure against — cannot evaluate a session cap.
+            # Fail open (allow) rather than fall through to all-time spend.
+            return Decision(
+                "allow", rule.rule_id, "session scope: no active session to measure", 0.0
+            )
         measured = q.session_spend(conn, session_id, rule.currency)
     else:
         since = _since_iso(rule.scope)

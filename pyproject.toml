@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "forecost"
-version = "0.2.0"
-description = "Know exactly what your AI project will cost. Local-first LLM cost forecasting that learns from your usage."
+version = "0.3.0"
+description = "A local, content-free ledger for AI agent work: records what your agents actually cost across every harness, reconciles the meters nobody trusts, and gates budgets via fail-open hooks."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [{ name = "Arivunidhi A" }]
-keywords = ["llm", "cost", "forecast", "openai", "anthropic", "cli"]
+keywords = ["llm", "cost", "ledger", "reconciliation", "claude-code", "agents", "anthropic", "cli"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -20,6 +20,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [

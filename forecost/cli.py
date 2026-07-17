@@ -5,15 +5,19 @@ from forecost.commands.burn_cmd import burn
 from forecost.commands.calc_cmd import calc
 from forecost.commands.calibration_cmd import calibration
 from forecost.commands.demo_cmd import demo
+from forecost.commands.doctor_cmd import doctor
 from forecost.commands.export_cmd import export_data
 from forecost.commands.forecast_cmd import forecast
 from forecost.commands.ingest_cmd import ingest
 from forecost.commands.init_cmd import init
 from forecost.commands.ledger_cmd import ledger
+from forecost.commands.migrate_cmd import migrate
 from forecost.commands.optimize_cmd import optimize
 from forecost.commands.price_cmd import price
+from forecost.commands.pricing_audit_cmd import pricing_audit
 from forecost.commands.purge_cmd import purge
 from forecost.commands.reconcile_cmd import reconcile
+from forecost.commands.recover_cmd import recover
 from forecost.commands.reset_cmd import reset
 from forecost.commands.serve_cmd import serve
 from forecost.commands.status_cmd import status
@@ -24,7 +28,14 @@ from forecost.commands.watch_cmd import watch
 @click.group()
 @click.version_option(__version__, "--version", prog_name="forecost")
 def main():
-    """forecost -- Know exactly what your AI project will cost."""
+    """forecost -- a local, content-free ledger for AI agent work.
+
+    Records what your agents actually cost across every harness, reconciles the
+    meters nobody trusts, and gates budgets via fail-open hooks. The `ingest`,
+    `ledger`, `reconcile`, `burn`, and `calibration` commands are the current
+    product; `forecast`/`track`/`watch`/`demo`/`optimize` are legacy (the old
+    calendar-spend forecaster) and will be deprecated.
+    """
     pass
 
 
@@ -46,3 +57,7 @@ main.add_command(ledger)
 main.add_command(reconcile)
 main.add_command(calibration)
 main.add_command(burn)
+main.add_command(pricing_audit)
+main.add_command(recover)
+main.add_command(doctor)
+main.add_command(migrate)

@@ -10,9 +10,14 @@ from datetime import datetime, timezone
 from forecost.adapters.base import LedgerSink, PostingSpec, UsageEvent
 from forecost.ledger.db import get_ledger_db
 from forecost.ledger.writer import LedgerWriteQueue
-from forecost.pricing import calculate_cost
+from forecost.pricing import calculate_cost, is_priced
 
 PRICING_SNAPSHOT_VERSION = "bundled-2026-07"
+# Marker appended to pricing_version when the model was not in the pricing table
+# and its cost is a DEFAULT_COST guess. Kept as a version suffix (not a new
+# basis) so canonical spend selection is unaffected; `forecost pricing-audit`
+# and reconcile can surface these as low-confidence.
+UNPRICED_SUFFIX = "/unpriced-guess"
 
 
 def _get_or_create_workspace(conn: sqlite3.Connection, root_path: str) -> int:
@@ -87,12 +92,15 @@ def _resolve_and_price(
         event.tokens_cache_read,
         event.tokens_cache_write,
     )
+    pricing_version = PRICING_SNAPSHOT_VERSION
+    if not is_priced(event.model):
+        pricing_version += UNPRICED_SUFFIX  # cost is a DEFAULT_COST guess, flag it
     postings.append(
         PostingSpec(
             currency="USD",
             amount=usd_cost,
             basis="pricing_table",
-            pricing_version=PRICING_SNAPSHOT_VERSION,
+            pricing_version=pricing_version,
         )
     )
     if event.reported_cost is not None:
@@ -115,7 +123,7 @@ class SyncLedgerSink(LedgerSink):
     def __init__(self, ledger_path=None) -> None:
         self._conn = get_ledger_db(ledger_path)
 
-    def emit(self, event: UsageEvent) -> None:
+    def emit(self, event: UsageEvent) -> bool:
         resolved, postings = _resolve_and_price(self._conn, event)
         cur = self._conn.execute(
             """
@@ -142,7 +150,7 @@ class SyncLedgerSink(LedgerSink):
             ),
         )
         if cur.rowcount == 0:
-            return  # duplicate event_uid
+            return False  # duplicate event_uid — nothing new recorded
         event_db_id = cur.lastrowid
         now = datetime.now(timezone.utc).isoformat()
         for p in postings:
@@ -153,6 +161,7 @@ class SyncLedgerSink(LedgerSink):
                 (event_db_id, p.currency, p.amount, p.basis, p.pricing_version, now),
             )
         self._conn.commit()
+        return True
 
     def flush(self, timeout: float = 2.0) -> None:
         self._conn.commit()
@@ -169,11 +178,17 @@ class DefaultLedgerSink(LedgerSink):
         self._conn = get_ledger_db(ledger_path)
         self._queue = LedgerWriteQueue(ledger_path or LEDGER_PATH)
 
-    def emit(self, event: UsageEvent) -> None:
+    def emit(self, event: UsageEvent) -> bool:
         resolved, postings = _resolve_and_price(self._conn, event)
         self._queue.put(resolved, postings)
+        # Queued for the async worker; duplicate detection happens at write time.
+        # Report True (accepted for writing) — the DB's INSERT OR IGNORE is the
+        # source of truth for idempotency, so callers must not treat this as a
+        # guaranteed new-row count.
+        return True
 
-    def flush(self, timeout: float = 2.0) -> None:
-        import time
-
-        time.sleep(min(timeout, 2.5))
+    def flush(self, timeout: float = 5.0) -> None:
+        # Real drain barrier (not a sleep): returns once every queued event has
+        # been committed, so a subsequent read (e.g. calibration reconcile) sees
+        # its own writes. Fail-open: a drain timeout just means we proceed.
+        self._queue.drain(timeout)

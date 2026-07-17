@@ -82,6 +82,49 @@ def _print_multi_version_report(pricing_versions_by_model):
         click.echo(f"  {model}: {sorted(versions)}")
 
 
+def _print_source_vs_table_report(conn, currency, tolerance_pct):
+    """The genuinely non-tautological check: for events that carry BOTH a
+    source-reported cost (from a gateway) and forecost's own pricing_table cost,
+    compare the two independent valuations of the same event. This is the meter
+    audit the product exists to provide — forecost's number vs the gateway's."""
+    rows = conn.execute(
+        """
+        SELECT e.model AS model,
+               pt.amount AS table_amount,
+               sr.amount AS source_amount
+        FROM usage_events e
+        JOIN postings pt ON pt.event_id = e.id
+             AND pt.currency = ? AND pt.basis = 'pricing_table'
+        JOIN postings sr ON sr.event_id = e.id
+             AND sr.currency = ? AND sr.basis = 'source_reported'
+        """,
+        (currency, currency),
+    ).fetchall()
+    if not rows:
+        click.echo(
+            "\nNo events carry both a source-reported and a pricing_table cost yet "
+            "(this cross-check activates for gateway sources like LiteLLM)."
+        )
+        return
+    table_total = sum(r["table_amount"] for r in rows)
+    source_total = sum(r["source_amount"] for r in rows)
+    disagreements = [
+        r
+        for r in rows
+        if r["source_amount"] > 0
+        and abs(r["table_amount"] - r["source_amount"]) / r["source_amount"] * 100 > tolerance_pct
+    ]
+    click.echo(
+        f"\nSource-reported vs forecost pricing_table on {len(rows)} shared events: "
+        f"gateway {currency} {source_total:.2f} vs forecost {currency} {table_total:.2f} "
+        f"({len(disagreements)} disagree by >{tolerance_pct}%)."
+    )
+    for r in disagreements[:20]:
+        click.echo(
+            f"  {r['model']}: gateway={r['source_amount']:.4f} vs forecost={r['table_amount']:.4f}"
+        )
+
+
 @click.command()
 @click.option("--currency", default="USD")
 @click.option("--tolerance-pct", default=3.0, help="Yellow-flag threshold, percent")
@@ -114,8 +157,10 @@ def reconcile(currency, tolerance_pct):
     )
     _print_drift_report(drift_events, tolerance_pct)
     _print_multi_version_report(pricing_versions_by_model)
+    _print_source_vs_table_report(conn, currency, tolerance_pct)
 
     click.echo(
-        "\nExternal cross-checks (Anthropic Admin API, LiteLLM, OpenRouter) are not wired up "
-        "yet — that requires per-source adapters and real credentials (Phase 3)."
+        "\nExternal cross-checks against provider/admin bills (Anthropic Admin API, "
+        "OpenRouter) are not wired up yet — that requires per-source adapters and real "
+        "credentials (Phase 3)."
     )

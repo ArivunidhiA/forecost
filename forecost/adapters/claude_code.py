@@ -47,8 +47,15 @@ def _extract_usage(rec: dict) -> tuple[dict, str] | None:
 def _build_event(
     rec: dict, usage: dict, model: str, source: str, ts, current_prompt_id: str | None
 ) -> UsageEvent:
-    request_id = rec.get("requestId") or rec.get("uuid", "")
-    event_uid = f"cc:{request_id}:{rec.get('uuid', '')}"
+    # Claude Code writes one JSONL record per *content block* of a single API
+    # response, and every one of those records repeats the identical
+    # message.usage. Keying on the per-record uuid (the old bug) billed each
+    # block as a separate event — up to ~2.25x inflation on real transcripts.
+    # Key on the requestId so one API response counts exactly once; INSERT OR
+    # IGNORE on event_uid then collapses the repeated blocks. Fall back to the
+    # uuid only when a record carries no requestId (rare, non-standard records).
+    request_id = rec.get("requestId")
+    event_uid = f"cc:{request_id}" if request_id else f"cc:uuid:{rec.get('uuid', '')}"
     return UsageEvent(
         event_uid=event_uid,
         ts=ts,
@@ -111,29 +118,37 @@ class ClaudeCodeAdapter(PullAdapter):
 
     def _process_line(
         self, line: str, current_prompt_id: str | None, sink: LedgerSink
-    ) -> tuple[str | None, bool]:
-        """Returns (updated current_prompt_id, whether an event was emitted)."""
+    ) -> tuple[str | None, bool, bool]:
+        """Process one line. Returns (current_prompt_id, inserted, accepted).
+
+        - inserted: a NEW usage_event was recorded (False for duplicates and
+          non-billable records) — used for the honest ingested count.
+        - accepted: True unless a *transient* emit failure occurred. On
+          accepted=False the caller must stop and NOT advance the cursor past
+          this record, so the event is retried (idempotently) next poll. A
+          corrupt or non-billable line is accepted (safe to skip).
+        """
         try:
             rec = json.loads(line)
         except json.JSONDecodeError:
-            return current_prompt_id, False  # tolerate corrupt lines, never halt
+            return current_prompt_id, False, True  # complete but corrupt line: safe to skip
 
         if rec.get("type") == "user" and rec.get("promptId"):
             current_prompt_id = rec.get("promptId")
 
         if rec.get("type") != "assistant":
-            return current_prompt_id, False
+            return current_prompt_id, False, True
 
         event = _record_to_event(rec, self.name, current_prompt_id)
         if event is None:
-            return current_prompt_id, False
+            return current_prompt_id, False, True
 
         try:
-            sink.emit(event)
-            return current_prompt_id, True
-        except Exception as exc:  # nosec B110 - one bad record must not halt ingest
-            log_error("adapters.claude_code", f"emit failed: {exc!r}")
-            return current_prompt_id, False
+            inserted = sink.emit(event) is not False
+            return current_prompt_id, inserted, True
+        except Exception as exc:  # nosec B110 - transient failure must not advance the cursor
+            log_error("adapters.claude_code", f"emit failed, will retry next poll: {exc!r}")
+            return current_prompt_id, False, False
 
     def _poll_file(self, path: Path, state: IngestStateStore, sink: LedgerSink) -> int:
         start_offset = self._read_start_offset(path, state)
@@ -142,20 +157,31 @@ class ClaudeCodeAdapter(PullAdapter):
 
         current_prompt_id: str | None = None
         count = 0
+        # Advance the cursor only past newline-terminated, successfully-accepted
+        # lines. A partial final line (the writer is still appending it) or a
+        # transient emit failure leaves the cursor before that record so the
+        # next poll retries it — no silent undercount, no torn-line loss.
+        safe_offset = start_offset
         try:
             with open(path, "rb") as f:
                 f.seek(start_offset)
                 for raw_line in f:
+                    if not raw_line.endswith(b"\n"):
+                        break  # torn/partial final line — leave it for the next poll
                     line = raw_line.decode("utf-8", errors="replace").strip()
-                    if not line:
-                        continue
-                    current_prompt_id, emitted = self._process_line(line, current_prompt_id, sink)
-                    if emitted:
-                        count += 1
-                new_offset = f.tell()
+                    if line:
+                        current_prompt_id, inserted, accepted = self._process_line(
+                            line, current_prompt_id, sink
+                        )
+                        if not accepted:
+                            break  # transient emit failure — do not advance past this record
+                        if inserted:
+                            count += 1
+                    safe_offset += len(raw_line)
         except OSError as exc:
             log_error("adapters.claude_code", f"read failed for {path.name}: {exc!r}")
             return count
 
-        state.set(self.name, str(path), json.dumps({"offset": new_offset}))
+        if safe_offset != start_offset:  # skip a no-op write when nothing new was consumed
+            state.set(self.name, str(path), json.dumps({"offset": safe_offset}))
         return count

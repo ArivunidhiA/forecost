@@ -1,11 +1,17 @@
-"""forecost - Know exactly what your AI project will cost."""
+"""forecost - a local, content-free ledger for AI agent work.
+
+The public SDK names below (auto_track/track/interceptor) are the LEGACY
+calendar-spend product's surface, kept for backward compatibility; the current
+product is the CLI (`forecost ingest|ledger|reconcile|burn|calibration`) plus
+the Claude Code / LiteLLM hook adapters.
+"""
 
 from __future__ import annotations
 
 import os
 from typing import TYPE_CHECKING
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 if TYPE_CHECKING:
     from forecost.interceptor import get_interceptor_stats as get_interceptor_stats

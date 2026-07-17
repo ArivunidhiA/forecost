@@ -7,7 +7,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-from forecost.core.paths import forecost_home
+from forecost.core.paths import chmod_private, ensure_private_dir, forecost_home
 from forecost.ledger.schema import apply_schema
 
 LEDGER_PATH = forecost_home() / "ledger.db"
@@ -17,7 +17,14 @@ _conn_lock = threading.Lock()
 
 
 def _ensure_dir(path: Path = LEDGER_PATH) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    ensure_private_dir(path.parent)
+
+
+def _lock_down_db_files(path: Path) -> None:
+    """Make the DB and its WAL/SHM sidecars owner-only — the sidecars hold the
+    same spend data as the main file, so all three must be private."""
+    for p in (path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")):
+        chmod_private(p)
 
 
 def _apply_pragmas(conn: sqlite3.Connection) -> None:
@@ -54,8 +61,7 @@ def get_ledger_db(path: Path | None = None) -> sqlite3.Connection:
         _conn.row_factory = sqlite3.Row
         _apply_pragmas(_conn)
         apply_schema(_conn)
-        with contextlib.suppress(OSError):
-            LEDGER_PATH.chmod(0o600)
+        _lock_down_db_files(LEDGER_PATH)  # main + -wal/-shm sidecars
         return _conn
 
 

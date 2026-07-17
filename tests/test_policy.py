@@ -18,7 +18,7 @@ def _spend(conn, session_uid, usd, event_uid="e1"):
             source="test",
             model="claude-opus-4-8",
             session_uid=session_uid,
-            tokens_in=int(usd / 15 * 1_000_000),
+            tokens_in=int(usd / 5 * 1_000_000),  # opus-4-8 input rate $5/MTok
             tokens_out=0,
         )
     )
@@ -50,6 +50,25 @@ def test_parse_policy_toml_allows_fail_closed_in_ci_mode():
 def test_parse_policy_toml_rejects_invalid_action():
     with pytest.raises(ValueError, match="invalid policy action"):
         parse_policy_toml('[[policy.rules]]\nid="x"\naction="explode"\n')
+
+
+def test_parse_policy_toml_rejects_run_scope():
+    """'run' scope is unsupported (no reliable per-run spend key) — it must be
+    rejected at parse time, not silently evaluated against all-time spend."""
+    with pytest.raises(ValueError, match="invalid policy scope"):
+        parse_policy_toml('[[policy.rules]]\nid="r"\nscope="run"\nhard_limit=5.0\naction="deny"\n')
+
+
+def test_session_scope_without_session_id_does_not_measure_lifetime(ledger_conn):
+    """A session-scoped rule with no active session must NOT fall through to
+    all-time spend (the old bug that over-denied); it allows instead."""
+    _spend(ledger_conn, "some-session", 100.0, event_uid="big")  # lots of lifetime spend
+    config = parse_policy_toml(
+        '[[policy.rules]]\nid="cap"\nscope="session"\nhard_limit=5.0\naction="deny"\n'
+    )
+    # session_id=None: cannot resolve the session -> allow, not deny-on-lifetime.
+    decision = evaluate(ledger_conn, config, session_id=None)
+    assert decision.action == "allow"
 
 
 def test_evaluate_allows_within_soft_limit(ledger_conn):

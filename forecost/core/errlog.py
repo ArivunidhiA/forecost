@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 
-from forecost.core.paths import forecost_home
+from forecost.core.paths import chmod_private, ensure_private_dir, forecost_home
 
 _MAX_LOG_BYTES = 1_000_000
 _MAX_MESSAGE_CHARS = 400
@@ -54,7 +54,7 @@ def redact(text: str) -> str:
 
 
 def _ensure_dir(log_path) -> None:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(log_path.parent)
 
 
 def _rotate_if_large(log_path) -> None:
@@ -84,6 +84,7 @@ def log_error(component: str, message: str) -> None:
         safe = redact(message)
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"[{component}] {safe}\n")
+        chmod_private(log_path)  # spend/project metadata — never world-readable
     except OSError:
         pass
 

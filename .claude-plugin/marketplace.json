@@ -1,0 +1,14 @@
+{
+  "name": "forecost",
+  "owner": {
+    "name": "Arivunidhi A",
+    "url": "https://github.com/ArivunidhiA"
+  },
+  "plugins": [
+    {
+      "name": "forecost",
+      "source": "./plugin",
+      "description": "Local, content-free ledger + fail-open budget gates for Claude Code: records what your agents actually cost, reconciles the meters nobody trusts, and holds the budget line you set."
+    }
+  ]
+}

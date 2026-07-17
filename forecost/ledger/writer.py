@@ -29,6 +29,17 @@ _EXIT_TIMEOUT = 1.0
 _WriteItem = tuple[UsageEvent, list[PostingSpec]]
 
 
+class _Barrier:
+    """A drain marker. FIFO ordering guarantees every item enqueued before this
+    marker has been dequeued (and thus flushed) by the time the worker sets the
+    event — so `drain()` is a real barrier, not a hopeful sleep."""
+
+    __slots__ = ("event",)
+
+    def __init__(self) -> None:
+        self.event = threading.Event()
+
+
 def _insert_batch(conn, items: list[_WriteItem]) -> int:
     inserted = 0
     for event, postings in items:
@@ -79,7 +90,7 @@ class LedgerWriteQueue:
 
     def __init__(self, ledger_path: Path = LEDGER_PATH) -> None:
         self._ledger_path = ledger_path
-        self._queue: Queue[_WriteItem | None] = Queue(maxsize=10_000)
+        self._queue: Queue[_WriteItem | _Barrier | None] = Queue(maxsize=10_000)
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
         atexit.register(self._on_exit)
@@ -94,6 +105,23 @@ class LedgerWriteQueue:
             )
         except Exception as exc:  # nosec B110 - never block the caller
             log_error("ledger.writer", f"put failed: {exc!r}")
+
+    def drain(self, timeout: float = 5.0) -> bool:
+        """Block until every item enqueued before this call has been flushed to
+        the DB. Returns True if the drain completed within `timeout`, else False.
+
+        This is the real barrier that replaces the old `time.sleep`-based flush:
+        callers that must read their own writes back (the stop-hook calibration
+        loop) can now do so deterministically instead of racing the flush timer.
+        """
+        if not self._thread.is_alive():
+            return False
+        barrier = _Barrier()
+        try:
+            self._queue.put(barrier, timeout=timeout)
+        except Full:
+            return False
+        return barrier.event.wait(timeout)
 
     def _worker(self) -> None:
         import sqlite3
@@ -120,6 +148,12 @@ class LedgerWriteQueue:
                 self._flush(batch, conn)
                 conn.close()
                 break
+            if isinstance(item, _Barrier):
+                self._flush(batch, conn)  # everything before the barrier is now durable
+                batch = []
+                last_flush = time.monotonic()
+                item.event.set()
+                continue
             batch.append(item)
             now = time.monotonic()
             if len(batch) >= _BATCH_SIZE or (now - last_flush) >= _FLUSH_INTERVAL:
@@ -149,8 +183,11 @@ class LedgerWriteQueue:
                             row["ts"] = event.ts.isoformat()
                             row["postings"] = [asdict(p) for p in postings]
                             f.write(json.dumps(row, default=str) + "\n")
-                except OSError:
-                    pass
+                    from forecost.core.paths import chmod_private
+
+                    chmod_private(recovery_path)  # dead-letter holds event metadata
+                except OSError as e3:
+                    log_error("ledger.writer", f"recovery spill failed, batch lost: {e3!r}")
 
     def _on_exit(self) -> None:
         try:

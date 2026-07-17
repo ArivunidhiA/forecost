@@ -94,7 +94,10 @@ def _print_init_summary(
 
 @click.command()
 @click.option(
-    "--smart", is_flag=True, help="Use LLM to analyze project scope (requires forecost[llm])"
+    "--smart",
+    is_flag=True,
+    help="Use an LLM to analyze project scope (requires forecost[llm]). "
+    "OUTBOUND: sends project excerpts (README, code snippets) to an LLM provider.",
 )
 @click.option("--days", type=int, default=None, help="Override estimated project duration")
 @click.option("--budget", type=float, default=None, help="Set a budget cap in USD")
@@ -115,7 +118,16 @@ def init(smart, days, budget):
         _remove_existing_project_data(existing, project_path)
 
     if smart:
-        result = analyze_with_llm(project_path)
+        console.print(
+            "[yellow]--smart sends project excerpts (README, code snippets) to an LLM "
+            "provider to estimate scope. This is the one forecost path that leaves your "
+            "machine.[/yellow]"
+        )
+        if not click.confirm("Send project excerpts to the configured LLM provider?"):
+            console.print("[dim]Falling back to local heuristic analysis.[/dim]")
+            result = analyze_heuristic(project_path)
+        else:
+            result = analyze_with_llm(project_path)
     else:
         result = analyze_heuristic(project_path)
 

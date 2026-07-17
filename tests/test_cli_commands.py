@@ -127,8 +127,10 @@ def test_calibration_empty(isolated_ledger):
 
 
 def test_calibration_with_record(isolated_ledger):
+    from forecost.estimate.calibration import reconcile_estimates
     from forecost.estimate.engine import record_estimate
     from forecost.estimate.types import EstimateRange
+    from forecost.ledger.sink import _get_or_create_session
 
     est = EstimateRange(
         currency="USD",
@@ -141,10 +143,13 @@ def test_calibration_with_record(isolated_ledger):
         confidence="medium",
         category="bugfix-debug",
     )
-    record_estimate(isolated_ledger, est, None, None, "run-1", shadow=True)
-    _seed(isolated_ledger, uid="run-1-actual", tokens_out=4_000)  # ~$0.30, in band
-    isolated_ledger.execute("UPDATE usage_events SET run_id='run-1' WHERE event_uid='run-1-actual'")
-    isolated_ledger.commit()
+    # Real path: an estimate in a session, that session's actuals, then reconcile.
+    sess_id = _get_or_create_session(
+        isolated_ledger, "s-cal", None, "test", datetime.now(timezone.utc).isoformat()
+    )
+    record_estimate(isolated_ledger, est, sess_id, None, "s-cal", shadow=True)
+    _seed(isolated_ledger, uid="s-cal", tokens_out=4_000)  # ~$0.30, in band, session s-cal
+    reconcile_estimates(isolated_ledger)
 
     result = CliRunner().invoke(calibration, [])
     assert result.exit_code == 0

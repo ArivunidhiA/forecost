@@ -28,13 +28,19 @@ Everyone can meter tokens. Two things are genuinely unoccupied, and forecost doe
 
 ## Privacy is the whole point (and it's testable)
 
-forecost's ledger is **content-free by construction**: it stores token counts, models,
-timestamps, and workspace paths — never your prompts, completions, tool output, or the
-file paths inside tool calls. This isn't a promise, it's a
+forecost's **ledger** (the `ingest` / hook path) is **content-free by construction**:
+it stores token counts, models, timestamps, costs, and workspace paths — never your
+prompts, completions, or tool output. This isn't a promise, it's a
 [CI-enforced test](tests/test_privacy_canary.py): a sentinel string is planted in a
 synthetic transcript's prompt, tool arguments, and output, and the test fails if it can
-be found anywhere under `~/.forecost/`. Nothing leaves your machine — there is no cloud
-tier to leave to.
+be found anywhere under `~/.forecost/`. The ledger has no cloud tier — there is nothing
+to leave to.
+
+**Two exceptions, both local-first opt-outs, not part of the ledger path:** the legacy
+`forecost init --smart` command sends project excerpts (README, code snippets) to an LLM
+provider to estimate scope — it asks for confirmation first and is entirely optional. And
+the LiteLLM gateway adapter records the gateway's own `response_cost` figure (a number,
+not content). Neither touches transcript content.
 
 ## Quickstart
 
@@ -99,12 +105,20 @@ results, [published in full](experiments/calib/VERDICT.md):
 | Cost | 88% (want 85–95%) ✓ | 8.5× (want ≤4×) ✗ | **too wide to show** |
 | Duration | 88% ✓ | 10.7× ✗ | **too wide to show** |
 | Files touched | 85% ✓ | 9.6× ✗ | **static flags only** |
-| Mid-run "stuck?" detector | 67% precision at a 2% flag rate | — | **passed** ✓ |
+| Mid-run "error-dense turn?" flag | see caveat below | — | **shadow only** |
 
 So the estimator stays in shadow mode and the brief displays no ranges — that's a
-pre-commitment kept, not a feature missing. The one thing that *did* clear its bar is
-the mid-run stuck-run detector. As real usage accumulates, `forecost calibration`
-tracks whether the bands ever tighten enough to earn a place on screen.
+pre-commitment kept, not a feature missing.
+
+**About that mid-run flag — the honest caveat.** The backtest reported "67% precision at
+a 2% flag rate," but that number is not yet trustworthy: the detector flags error-dense
+turns, and the weak labels it was scored against were themselves *defined* by errors — so
+numerator and denominator share one signal. Of the 12 flagged turns, 8 were merely
+"ambiguous" and **0** were confirmed failures; there are no independent stuck/failure
+labels in the corpus yet. So the guard ships **shadow-only** (computed, never surfaced)
+until it can be scored against real user marks, exactly like the cost estimator. As real
+usage accumulates, `forecost calibration` tracks whether any of these earn a place on
+screen.
 
 The methodology is fully reproducible — [`experiments/calib/`](experiments/calib/) has
 the extractor and backtest; run them against your own history.

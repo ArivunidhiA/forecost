@@ -62,7 +62,10 @@ class LedgerSink(ABC):
     """Write side. Backed by the LedgerWriteQueue; computes postings via pricing."""
 
     @abstractmethod
-    def emit(self, event: UsageEvent) -> None: ...
+    def emit(self, event: UsageEvent) -> bool:
+        """Record an event. Returns True if a NEW row was accepted, False if a
+        duplicate event_uid was ignored. Raises only on a transient failure the
+        caller should retry (adapters treat a raise as 'do not advance cursor')."""
 
     @abstractmethod
     def flush(self, timeout: float = 2.0) -> None: ...

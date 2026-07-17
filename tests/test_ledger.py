@@ -52,6 +52,63 @@ def test_sync_sink_writes_event_and_pricing_table_posting(ledger_conn):
     assert row["basis"] == "pricing_table"
 
 
+def test_canonical_spend_does_not_double_count_dual_basis(ledger_conn):
+    """An event with both a pricing_table and a source_reported USD posting must
+    count once in every operational total — not as the sum of both valuations.
+    This is the fix for the double-count bug (deep-audit P0-1)."""
+    from forecost.ledger import queries as q
+
+    sink = SyncLedgerSink(ledger_path=None)
+    sink._conn = ledger_conn
+    # pricing_table posting = 10.50 (see test above); source_reported = 9.00.
+    sink.emit(_event(uid="dual", reported_cost=Money(amount=9.00, currency="USD")))
+
+    n_postings = ledger_conn.execute(
+        "SELECT COUNT(*) FROM postings WHERE currency='USD'"
+    ).fetchone()[0]
+    assert n_postings == 2, "both valuations should be stored"
+
+    all_time = "1970-01-01T00:00:00+00:00"
+    # Canonical prefers source_reported: 9.00, and never 19.50 (the buggy sum).
+    canonical = q.scope_spend(ledger_conn, "USD", all_time)
+    assert canonical.total == 9.00
+    assert canonical.n_events == 1
+    # Pinning a basis shows that single valuation.
+    assert q.scope_spend(ledger_conn, "USD", all_time, basis="pricing_table").total == 10.50
+    assert q.scope_spend(ledger_conn, "USD", all_time, basis="source_reported").total == 9.00
+    # by-model and session views agree (no double-count).
+    assert q.spend_by_model(ledger_conn, "USD")[0]["total"] == 9.00
+    sess_id = ledger_conn.execute("SELECT id FROM sessions LIMIT 1").fetchone()[0]
+    assert q.session_spend(ledger_conn, sess_id) == 9.00
+
+
+def test_unknown_model_posting_is_flagged_unpriced(ledger_conn):
+    """A model with no real rate is priced with DEFAULT_COST, and the posting is
+    flagged so `forecost pricing-audit` can surface it (deep-audit P0-2)."""
+    from forecost.ledger.sink import UNPRICED_SUFFIX
+    from forecost.pricing import is_priced
+
+    assert is_priced("claude-opus-4-8") is True
+    assert is_priced("some-brand-new-model-2027") is False
+
+    sink = SyncLedgerSink(ledger_path=None)
+    sink._conn = ledger_conn
+    sink.emit(_event(uid="unk", model="some-brand-new-model-2027"))
+    row = ledger_conn.execute(
+        "SELECT pricing_version, basis FROM postings WHERE currency='USD'"
+    ).fetchone()
+    assert row["basis"] == "pricing_table"  # basis unchanged: canonical selection still works
+    assert row["pricing_version"].endswith(UNPRICED_SUFFIX)
+
+    # A known model is NOT flagged.
+    sink.emit(_event(uid="known"))  # default model is a real, priced one
+    versions = [
+        r["pricing_version"]
+        for r in ledger_conn.execute("SELECT pricing_version FROM postings").fetchall()
+    ]
+    assert any(not v.endswith(UNPRICED_SUFFIX) for v in versions)
+
+
 def test_sync_sink_is_idempotent_on_event_uid(ledger_conn):
     sink = SyncLedgerSink(ledger_path=None)
     sink._conn = ledger_conn

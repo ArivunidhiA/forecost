@@ -6,13 +6,18 @@ from typing import Optional
 __all__ = [
     "calculate_cost",
     "get_provider",
+    "is_priced",
     "FALLBACK_PRICING",
     "DEFAULT_COST",
     "MODEL_TIERS",
     "get_tier",
 ]
 
-# Last verified: March 2026
+# Anthropic rows verified 2026-07-17 against the authoritative models/pricing
+# table; OpenAI/Gemini/others last verified March 2026 and NOT re-verified — any
+# model absent from FALLBACK_PRICING is priced with DEFAULT_COST, a guess. Call
+# is_priced() to tell a real rate from a guess; `forecost pricing-audit` reports
+# which models in the ledger were priced by guess.
 FALLBACK_PRICING: dict[str, dict[str, float]] = {
     # OpenAI
     "gpt-4o": {"input": 2.50, "output": 10.00},
@@ -98,26 +103,63 @@ FALLBACK_PRICING: dict[str, dict[str, float]] = {
         "cache_read": 1.50,
         "cache_write": 18.75,
     },
+    # Haiku 4.5 is $1/$5 per MTok (verified against the Anthropic models table,
+    # cached 2026-06-24). The old $0.80/$4.00 here was Haiku 3.5's rate.
     "claude-haiku-4-5-20251001": {
-        "input": 0.80,
-        "output": 4.00,
-        "cache_read": 0.08,
-        "cache_write": 1.00,
+        "input": 1.00,
+        "output": 5.00,
+        "cache_read": 0.10,
+        "cache_write": 1.25,
     },
-    # Anthropic - Claude 5 family (Fable/Opus/Sonnet 5)
+    "claude-haiku-4-5": {"input": 1.00, "output": 5.00, "cache_read": 0.10, "cache_write": 1.25},
+    # Anthropic - Claude 5 family + current Opus/Sonnet tiers.
+    # Verified 2026-07-17 against the authoritative Anthropic models/pricing table
+    # (claude-api reference, cached 2026-06-24). These correct three wrong rows
+    # that materially overstated/understated ledger spend (deep-audit P0-2):
+    #   opus-4-8 was $15/$75 (a 3x overstatement — it is the dominant model),
+    #   fable-5 was $3/$15 (understated), haiku-4-5 was $0.80/$4 (above).
     "claude-fable-5": {
+        "input": 10.00,
+        "output": 50.00,
+        "cache_read": 1.00,
+        "cache_write": 12.50,
+    },
+    # Project Glasswing; same pricing/behaviour as Fable 5.
+    "claude-mythos-5": {
+        "input": 10.00,
+        "output": 50.00,
+        "cache_read": 1.00,
+        "cache_write": 12.50,
+    },
+    "claude-opus-4-8": {
+        "input": 5.00,
+        "output": 25.00,
+        "cache_read": 0.50,
+        "cache_write": 6.25,
+    },
+    "claude-opus-4-7": {
+        "input": 5.00,
+        "output": 25.00,
+        "cache_read": 0.50,
+        "cache_write": 6.25,
+    },
+    "claude-opus-4-6": {
+        "input": 5.00,
+        "output": 25.00,
+        "cache_read": 0.50,
+        "cache_write": 6.25,
+    },
+    # Sonnet 5 sticker rate is $3/$15; an introductory $2/$10 applies through
+    # 2026-08-31. Without effective-dated pricing (a future enhancement, see
+    # `forecost pricing-audit`), we post the standard rate; a run reconciled
+    # against a provider bill during the intro window will show a known delta.
+    "claude-sonnet-5": {
         "input": 3.00,
         "output": 15.00,
         "cache_read": 0.30,
         "cache_write": 3.75,
     },
-    "claude-opus-4-8": {
-        "input": 15.00,
-        "output": 75.00,
-        "cache_read": 1.50,
-        "cache_write": 18.75,
-    },
-    "claude-sonnet-5": {
+    "claude-sonnet-4-6": {
         "input": 3.00,
         "output": 15.00,
         "cache_read": 0.30,
@@ -248,6 +290,14 @@ def _resolve_model(model: str) -> Optional[dict[str, float]]:
         if stripped in FALLBACK_PRICING:
             return FALLBACK_PRICING[stripped]
     return None
+
+
+def is_priced(model: str) -> bool:
+    """True if this model has a real rate in the table (exact or family match),
+    False if calculate_cost would fall back to the DEFAULT_COST guess. Callers
+    that must not act on a guessed price (hard budget denials, displayed totals)
+    check this first."""
+    return _resolve_model(model) is not None
 
 
 def calculate_cost(

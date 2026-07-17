@@ -12,6 +12,7 @@ across platforms (``Path.home()`` differs between POSIX and Windows).
 
 from __future__ import annotations
 
+import contextlib
 import os
 from pathlib import Path
 
@@ -21,3 +22,23 @@ def forecost_home() -> Path:
     if override:
         return Path(override)
     return Path.home() / ".forecost"
+
+
+def ensure_private_dir(path: Path) -> Path:
+    """Create ``path`` (and parents) and make it owner-only (0700).
+
+    Best-effort and idempotent: the chmod runs even when the directory already
+    existed with looser permissions (the plain ``mkdir(mode=…)`` only applies to
+    newly-created dirs and is masked by umask). The ledger stores spend and
+    project-path metadata, so the tree must not be world-readable."""
+    path.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        path.chmod(0o700)
+    return path
+
+
+def chmod_private(path: Path) -> None:
+    """Make a file owner-only (0600) if it exists. Best-effort, never raises."""
+    with contextlib.suppress(OSError):
+        if path.exists():
+            path.chmod(0o600)
