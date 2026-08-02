@@ -6,7 +6,7 @@ import json
 import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import Literal, cast
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
@@ -18,6 +18,8 @@ from forecost.db import (
     get_recent_usage_logs,
 )
 from forecost.forecaster import ProjectForecaster
+from forecost.ledger.db import get_ledger_db
+from forecost.ledger.receipts import build_receipt
 from forecost.pricing import calculate_cost, get_provider
 
 mcp = FastMCP("forecost_mcp")
@@ -440,6 +442,75 @@ def forecost_track_call(
         return f"Error: Database error — {e}. Ensure ForeCost is initialized (run 'forecost init')."
     except Exception as e:
         return f"Error: Unexpected error ({type(e).__name__}): {e}"
+
+
+# ---------------------------------------------------------------------------
+# Current receipt-ledger tools.  The project/forecast tools above are retained
+# only as v0.2 compatibility APIs; these functions never touch costs.db.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
+def forecost_list_runs(limit: int = 20) -> str:
+    """List graph-aware local runs with evidence and reconciliation summaries."""
+    if limit < 1 or limit > 200:
+        return "Error: limit must be between 1 and 200."
+    try:
+        conn = get_ledger_db()
+        rows = conn.execute(
+            "SELECT run_id, lifecycle, created_at, observed_at FROM causal_runs "
+            "ORDER BY observed_at DESC, run_id ASC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        result = []
+        for row in rows:
+            receipt = build_receipt(conn, row["run_id"])
+            evidence = cast(dict[str, object], receipt["evidence"])
+            outcome = cast(dict[str, object], receipt["outcome"])
+            result.append(
+                {
+                    "run_id": row["run_id"],
+                    "lifecycle": row["lifecycle"],
+                    "observed_at": row["observed_at"],
+                    "evidence_state": evidence["state"],
+                    "outcome": outcome["status"],
+                    "economic_totals_micros": receipt["economic_totals_micros"],
+                }
+            )
+        return json.dumps(result, sort_keys=True, separators=(",", ":"))
+    except sqlite3.Error as error:
+        return f"Error: canonical ledger database error — {error}."
+    except ValueError as error:
+        return f"Error: receipt evidence error — {error}."
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
+def forecost_get_receipt(run_id: str) -> str:
+    """Return a stable, content-free graph/economic receipt for one local run."""
+    if not run_id or len(run_id) > 512:
+        return "Error: run_id must be a bounded identifier."
+    try:
+        return json.dumps(
+            build_receipt(get_ledger_db(), run_id), sort_keys=True, separators=(",", ":")
+        )
+    except sqlite3.Error as error:
+        return f"Error: canonical ledger database error — {error}."
+    except ValueError as error:
+        return f"Error: {error}. Use forecost_list_runs to find available runs."
 
 
 # ---------------------------------------------------------------------------
