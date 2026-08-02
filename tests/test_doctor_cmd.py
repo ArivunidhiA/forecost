@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 from click.testing import CliRunner
@@ -30,3 +31,17 @@ def test_doctor_labels_guessed_spend(ledger_conn, monkeypatch, tmp_path):
     assert "guessed" in result.output
     assert "never trigger hard denials" in result.output
     assert "Not published to PyPI" not in result.output
+
+
+def test_doctor_json_reports_explicit_readiness(ledger_conn, monkeypatch, tmp_path):
+    import forecost.commands.doctor_cmd as doctor_module
+
+    monkeypatch.setattr(doctor_module, "get_ledger_db", lambda: ledger_conn)
+    monkeypatch.setenv("FORECOST_HOME", str(tmp_path))
+
+    result = CliRunner().invoke(doctor, ["--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["readiness"]["claude_code"] == "OBSERVED"
+    assert payload["readiness"]["distributed_enforcement"] == "NOT OBSERVED"

@@ -60,6 +60,16 @@ _CURRENT_COMMANDS: dict[str, _LazyCommand] = {
         "Replay durable failed-write records.",
     ),
     "runs": ("forecost.commands.runs_cmd", "runs", "List and inspect graph-aware agent runs."),
+    "self-test": (
+        "forecost.commands.self_test_cmd",
+        "self_test",
+        "Run deterministic local integration checks.",
+    ),
+    "setup": (
+        "forecost.commands.setup_cmd",
+        "setup",
+        "Prepare integrations without host mutation.",
+    ),
     "verify": ("forecost.commands.verify_cmd", "verify", "Verify receipt snapshot integrity."),
 }
 

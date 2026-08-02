@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 
 import click
 
@@ -17,7 +18,37 @@ _ALL_TIME = "1970-01-01T00:00:00+00:00"
 _SPOOL_NAME = re.compile(r"(?:legacy-)?recovery\.\d+\.\d+\.[0-9a-f]{32}\.jsonl")
 
 
-def _echo_home(home) -> None:
+def _doctor_payload(home: Path, conn) -> dict[str, object]:
+    spend = q.scope_spend(conn, "USD", _ALL_TIME)
+    return {
+        "schema_version": 1,
+        "version": __version__,
+        "home": str(home),
+        "home_exists": home.exists(),
+        "pricing_table": PRICING_SNAPSHOT_VERSION,
+        "ledger": {
+            "usage_events": conn.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0],
+            "canonical_usd_spend": spend.total,
+            "unpriced_events": spend.n_unpriced_events,
+            "receipt_runs": conn.execute("SELECT COUNT(*) FROM causal_runs").fetchone()[0],
+            "receipt_snapshots": conn.execute(
+                "SELECT COUNT(*) FROM receipt_snapshots"
+            ).fetchone()[0],
+        },
+        "readiness": {
+            "claude_code": "OBSERVED",
+            "resource_envelope": "OBSERVED",
+            "provider_billing": "NOT OBSERVED",
+            "distributed_enforcement": "NOT OBSERVED",
+        },
+        "limitations": [
+            "Claude Code hooks are fail-open local observation, not provider-side containment.",
+            "Provider-billed authority requires an imported local export.",
+        ],
+    }
+
+
+def _echo_home(home: Path) -> None:
     override = os.environ.get("FORECOST_HOME")
     click.echo(f"forecost {__version__}")
     click.echo(f"  home: {home}" + (" (via FORECOST_HOME)" if override else " (default)"))
@@ -79,8 +110,19 @@ def _echo_limitations() -> None:
 
 
 @click.command()
-def doctor() -> None:
+@click.option("--json", "json_output", is_flag=True, help="Emit stable machine-readable readiness.")
+def doctor(json_output: bool) -> None:
     """Report where forecost keeps data, what's ingested, and known gaps."""
+    if json_output:
+        import json
+
+        home = forecost_home()
+        click.echo(
+            json.dumps(
+                _doctor_payload(home, get_ledger_db()), sort_keys=True, separators=(",", ":")
+            )
+        )
+        return
     home = forecost_home()
     _echo_home(home)
     _echo_ledger(get_ledger_db())
