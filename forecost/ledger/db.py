@@ -32,13 +32,14 @@ def _row_id(row: sqlite3.Row | tuple) -> int:
 def get_or_create_workspace(
     conn: sqlite3.Connection, root_path: str, *, commit: bool = True
 ) -> int:
-    """Resolve a workspace without splitting a caller-owned transaction."""
+    """Resolve a workspace without retaining its raw path at rest."""
+    root_path = content_free_identifier("workspace", root_path)
     with ledger_write_lock:
         row = conn.execute("SELECT id FROM workspaces WHERE root_path = ?", (root_path,)).fetchone()
         if row:
             return _row_id(row)
         now = datetime.now(timezone.utc).isoformat()
-        name = root_path.rstrip("/").rsplit("/", 1)[-1] or root_path
+        name = f"workspace-{root_path.rsplit(':', 1)[-1][:10]}"
         conn.execute(
             "INSERT OR IGNORE INTO workspaces (name, root_path, created_at) VALUES (?,?,?)",
             (name, root_path, now),

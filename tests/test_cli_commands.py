@@ -78,7 +78,8 @@ def test_ledger_by_workspace(isolated_ledger):
     _seed(isolated_ledger, workspace="/tmp/myproj")
     result = CliRunner().invoke(ledger, ["by-workspace"])
     assert result.exit_code == 0
-    assert "myproj" in result.output
+    assert "workspace-" in result.output
+    assert "/tmp/myproj" not in result.output
 
 
 def test_ledger_by_workspace_distinguishes_missing_basis(isolated_ledger):

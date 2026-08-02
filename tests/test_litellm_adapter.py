@@ -162,3 +162,18 @@ def test_event_sanitizes_content_shaped_gateway_identity():
     assert event.provider is None
     assert event.session_uid is None
     assert event.metadata == {"call_type": None}
+
+
+def test_event_uses_only_explicit_stable_gateway_session_identity():
+    response = SimpleNamespace(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=2))
+    event = _kwargs_to_event(
+        {
+            "litellm_call_id": "call-1",
+            "forecost_session_id": "team-session-1",
+            "model": "gpt-4o",
+        },
+        response,
+    )
+
+    assert event.session_uid == "team-session-1"
+    assert event.run_id is None

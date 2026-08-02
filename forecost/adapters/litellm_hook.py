@@ -131,6 +131,16 @@ def _opaque_call_id(value: object) -> str:
     return f"anon-{digest}"
 
 
+def _caller_session_id(kwargs: dict) -> str | None:
+    """Accept only an explicit caller-owned session key, never prompt metadata.
+
+    LiteLLM has no universal run/session identity.  A gateway integrator can
+    supply ``forecost_session_id``; otherwise Forecost records the call as an
+    ungrouped event rather than pretending a request ID is a workflow run.
+    """
+    return _safe_atom(kwargs.get("forecost_session_id"))
+
+
 def _kwargs_to_event(kwargs: dict, response_obj: Any) -> UsageEvent:
     call_id = _opaque_call_id(kwargs.get("litellm_call_id"))
     tokens_in, tokens_out = _usage_tokens(response_obj)
@@ -144,10 +154,10 @@ def _kwargs_to_event(kwargs: dict, response_obj: Any) -> UsageEvent:
         source="litellm",
         model=_safe_atom(kwargs.get("model"), fallback="unknown") or "unknown",
         provider=_safe_atom(kwargs.get("custom_llm_provider")),
-        # A gateway user is not a run/session. Leave session scope unknown
-        # until LiteLLM exposes a real, documented session identity.
-        session_uid=None,
-        run_id=call_id,
+        session_uid=_caller_session_id(kwargs),
+        # A call id is not an agent run. Keep this unset unless a conformance
+        # adapter supplies graph identity through the causal journal.
+        run_id=None,
         agent="litellm",
         tokens_in=tokens_in,
         tokens_out=tokens_out,

@@ -1,15 +1,11 @@
 """The canary test: proves the content-free ledger invariant (BASEMENT.md L5).
 
-L5 forbids persisting PROMPT TEXT, COMPLETION TEXT, and FILE CONTENTS/tool
-output. It does NOT forbid storing workspace/project paths locally — a
-workspace's root_path is legitimate operational metadata (needed to scope
-budgets and reports per project) and is stored directly by design; only its
-HMAC leaves the machine in the team-sync tier (round3-architecture.md §3.3,
-§8.3). So this test uses an ordinary cwd and plants the sentinel ONLY in
-genuine content fields — the user's prompt text, a tool_use file_path
-argument, and tool_result output — then asserts the sentinel appears NOWHERE
-under ~/.forecost/ after ingestion, estimation, and hook processing. This is
-the single test the product's entire trust story rests on — it must run in CI
+L5 forbids persisting prompt text, completion text, file contents/tool output,
+and raw workspace paths. Workspace identity is irreversibly pseudonymized at
+the ledger boundary. This test plants its sentinel in genuine content fields
+and a path-shaped tool argument, then asserts it appears nowhere under
+~/.forecost/ after ingestion, estimation, and hook processing. This is the
+single test the product's entire trust story rests on — it must run in CI
 forever and must never be weakened.
 """
 
@@ -19,7 +15,7 @@ import sys
 from pathlib import Path
 
 CANARY = "CANARY-9f2e-DO-NOT-PERSIST"
-ORDINARY_CWD = "/tmp/canary-test-project"  # a path is expected metadata, not "content"
+ORDINARY_CWD = "/tmp/canary-test-project"
 
 
 def _write_canary_session(project_dir: Path):

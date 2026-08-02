@@ -128,7 +128,8 @@ def test_sync_sink_resolves_workspace_and_session(ledger_conn):
     sink.emit(_event())
     ws = ledger_conn.execute("SELECT root_path FROM workspaces").fetchone()
     sess = ledger_conn.execute("SELECT session_uid, agent FROM sessions").fetchone()
-    assert ws["root_path"] == "/tmp/proj"
+    assert ws["root_path"].startswith("workspace:")
+    assert "/tmp/proj" not in ws["root_path"]
     assert sess["session_uid"] == content_free_identifier("session", "sess-1")
     assert sess["agent"] == "test"
 
