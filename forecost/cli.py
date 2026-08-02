@@ -96,6 +96,11 @@ class LazyGroup(click.Group):
         if command is not None:
             return command
         spec = _CURRENT_COMMANDS.get(cmd_name)
+        # Compatibility aliases deliberately do not appear in root help.  They
+        # keep existing scripts alive until 1.0 while `forecost legacy ...`
+        # makes the retirement boundary explicit for humans and new docs.
+        if spec is None:
+            spec = _LEGACY_COMMANDS.get(cmd_name)
         if spec is None:
             return None
         module_name, attribute, _help = spec

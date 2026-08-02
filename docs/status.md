@@ -1,6 +1,17 @@
 # Forecost status — 2026-08-02
 
-## Done
+## Current product state
+
+- **Experimental local:** graph-aware run receipts, deterministic offline Run
+  Lab, offline JSON/CSV provider/gateway/OTel import, aggregate reconciliation,
+  and single-host resource envelopes.
+- **Observed only:** Claude Code transcript and LiteLLM adapters. They do not
+  provide full graph identity or a bounded provider-side overrun.
+- **Not claimed:** live provider billing API ingestion, provider-billed cost
+  without an imported export, distributed/resource-provider enforcement,
+  hosted control plane, or task-cost forecasting.
+
+## Earlier audit closure
 
 - Completed the four-lens production audit and consolidated it in
   `docs/audit-1.md`.
@@ -36,14 +47,12 @@
   audit. Publication is a distinct maintainer-controlled action after remote CI
   is green.
 
-## Next product wave
+## Next product gates
 
-1. Migrate MCP reads from the legacy forecast database to the canonical ledger
-   and add idempotent, provenance-bearing writes.
-2. Add authenticated loopback HTTP behavior and remove or harden `init --smart`.
-3. Add aggregate/set-based reconciliation benchmarks at 100k and one million
-   events.
-4. Publish stable synthetic adapter fixtures, then add Codex/OpenCode/OpenClaw
-   adapters against one documented session/run/span identity contract.
-5. Add SBOM/provenance and protect `main`, release tags, and the PyPI
-   environment before the first 0.3.x release.
+1. Add real provider export conformance fixtures from willing operators; do not
+   add live HTTP before the input/authority contract is proven.
+2. Migrate MCP reads to receipt/ledger queries and retire legacy HTTP surfaces.
+3. Benchmark aggregate reconciliation and reservation admission at 100k+ facts.
+4. Publish adapter conformance fixtures, then add runtime adapters against the
+   documented conversation/trace/run/span contract.
+5. Add SBOM/provenance and protect main, release tags, and PyPI before publish.

@@ -28,10 +28,10 @@ def release_versions() -> dict[str, str]:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     plugin = json.loads((ROOT / "plugin/.claude-plugin/plugin.json").read_text(encoding="utf-8"))
     return {
-        "pyproject.toml": pyproject["project"]["version"],
-        "forecost/__init__.py": _match_version(
-            ROOT / "forecost/__init__.py", r'^__version__\s*=\s*["\']([^"\']+)["\']'
+        "forecost/version.py": _match_version(
+            ROOT / "forecost/version.py", r'^__version__\s*=\s*["\']([^"\']+)["\']'
         ),
+        "pyproject.toml": pyproject["project"]["version"],
         "plugin/.claude-plugin/plugin.json": plugin["version"],
         "plugin/scripts/bootstrap.sh": _match_version(
             ROOT / "plugin/scripts/bootstrap.sh", r'^PLUGIN_VERSION="([^"]+)"'

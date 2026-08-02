@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-__version__ = "0.3.0"
+from forecost.version import __version__
 
 if TYPE_CHECKING:
     from forecost.interceptor import get_interceptor_stats as get_interceptor_stats

@@ -1,37 +1,36 @@
 # forecost
 
-**The independent flight recorder for AI agent work.** It records what your coding
-agents actually cost — across every harness and currency — reconciles the meters
-nobody trusts, and (once it has earned the right to) briefs you before you launch an
-expensive run. Local-first. Content-free. `pip install`, no signup, no cloud.
+**The independent economic receipt for AI-agent runs.** Forecost records the
+content-free causal graph behind a run, keeps meter facts separate from their
+valuations, and shows what local runtimes, gateways, and provider exports agree
+or disagree about. Local-first. No signup. No cloud.
 
 [![License: MIT](https://img.shields.io/github/license/ArivunidhiA/forecost)](https://github.com/ArivunidhiA/forecost/blob/main/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/ArivunidhiA/forecost/ci.yml)](https://github.com/ArivunidhiA/forecost/actions)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 
-> **Honest status.** The 0.3.0 ledger, reconciliation, budget gate, and macOS/Linux
-> Claude Code plugin are a release candidate. The pre-execution **estimator runs in
-> shadow mode** — it computes and
-> records estimates but **displays nothing**, because on real data it hasn't yet cleared
-> the accuracy bar we set for it (see [Calibration](#calibration-the-honest-part)).
-> We'd rather show you a trustworthy ledger than an untrustworthy guess.
+> **Honest status.** The graph-aware receipt, offline reconciliation importer,
+> and single-host resource envelope are experimental local features. They are
+> fully synthetic-testable today; live provider HTTP ingestion and distributed
+> enforcement are deliberately not claimed. Calendar forecasting is legacy.
 
 ## What it does that other tools don't
 
 Everyone can meter tokens. Two things are genuinely unoccupied, and forecost does both:
 
-- **It's an independent second set of books.** Your Claude Code session says one number,
-  the dashboard says another, LiteLLM says a third — and no vendor will audit its own
-  meter. forecost reconciles them and shows you the disagreement.
-- **It reads the harnesses where agentic spend actually happens.** It ingests Claude
-  Code transcripts directly (no proxy, no API key), computing cost from tokens ×
-  a bundled pricing table — because those transcripts carry no dollar field.
+- **It keeps evidence separate.** Token observations, gateway estimates,
+  list-rate equivalents, and provider-billed exports are distinct facts—not one
+  misleading “cost” total.
+- **It explains the run shape.** A receipt retains branches, retries, fan-in,
+  waits, finality, outcome evidence, and known blind spots without prompts or
+  tool payloads.
 
 ## Privacy is the whole point (and it's testable)
 
 forecost's **ledger** (the `ingest` / hook path) is **content-free by construction**:
-it stores token counts, models, timestamps, costs, and workspace paths — never your
-prompts, completions, or tool output. This isn't a promise, it's a
+it stores token counts, models, timestamps, valuations, and pseudonymous workspace
+identities — never your prompts, completions, tool output, or raw workspace paths.
+This isn't a promise, it's a
 [CI-enforced test](https://github.com/ArivunidhiA/forecost/blob/main/tests/test_privacy_canary.py): a sentinel string is planted in a
 synthetic transcript's prompt, tool arguments, and output, and the test fails if it can
 be found anywhere under `~/.forecost/`. The ledger has no cloud tier — there is nothing
@@ -46,12 +45,13 @@ not content). Neither touches transcript content.
 ## Quickstart
 
 ```bash
-pip install forecost==0.3.0
+git clone https://github.com/ArivunidhiA/forecost
+cd forecost
+pip install -e .
 
-forecost ingest         # pull new usage from your Claude Code transcripts
-forecost ledger status  # what you've spent, by model
-forecost reconcile      # cross-check the ledger's internal consistency
-forecost burn           # trailing burn rate → time-to-budget
+forecost lab demo       # a complete synthetic graph receipt; no home data read
+forecost lab chaos      # deterministic fan-out/cancellation fixture
+forecost envelope --help
 ```
 
 ```text
@@ -133,11 +133,12 @@ the extractor and backtest; run them against your own history.
 
 | Command | What it does |
 |---|---|
-| `forecost ingest` | Pull new usage from Claude Code transcripts into the ledger |
-| `forecost ledger status` / `by-workspace` | Spend totals, by model or project |
-| `forecost reconcile` | Cross-check the ledger's internal consistency |
-| `forecost calibration` | The estimator's accuracy record (shadow-mode) |
-| `forecost burn` | Trailing burn rate, projected against your budgets |
+| `forecost lab demo` | Create a complete, isolated synthetic receipt |
+| `forecost runs list` / `show` | Inspect a content-free causal graph |
+| `forecost receipt <run>` | Render stable text, JSON, or Markdown evidence |
+| `forecost reconcile import` / `run` | Compare local valuations with offline exports |
+| `forecost envelope` | Exercise experimental local reservations and leases |
+| `forecost ingest` / `ledger` | Existing Claude Code transcript ledger (experimental adapter) |
 
 The optional MCP server is read-only by default. Its legacy `track_call` tool is
 available only when the server process explicitly sets
@@ -147,9 +148,10 @@ that provide stable event identity and provenance.
 <details>
 <summary>Legacy commands (v0.2 — still work, being superseded)</summary>
 
-The earlier calendar-forecasting product (`calc`, `price`, `forecast`, `track`, `watch`,
-`optimize`, `serve`, `demo`, `init`, `export`) still ships and works. It's being
-superseded by the ledger-based commands above; see
+The earlier calendar-forecasting product is quarantined under `forecost legacy`
+(`calc`, `price`, `forecast`, `track`, `watch`, `optimize`, `serve`, `demo`,
+`init`, `export`) and will be removed before 1.0. It is not part of the current
+receipt product; see
 [the repositioning docs](#background) for why.
 
 </details>

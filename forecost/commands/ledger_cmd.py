@@ -1,7 +1,13 @@
+import shutil
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+
 import click
 
 from forecost.ledger import queries as q
-from forecost.ledger.db import get_ledger_db
+from forecost.ledger.db import LEDGER_PATH, _ensure_dir, get_ledger_db
+from forecost.ledger.schema import SCHEMA_VERSION, apply_schema
 
 _BASIS_CHOICE = click.Choice(["canonical", "pricing_table", "source_reported"])
 _ALL_TIME = "1970-01-01T00:00:00+00:00"
@@ -81,3 +87,37 @@ def ledger_by_workspace(currency, basis):
             f"{r['name']:<30} {currency} {r['total']:>10.2f}  "
             f"({r['n']} events{guessed})  {r['root_path']}"
         )
+
+
+@ledger.command("migrate-schema")
+@click.option("--ledger-path", type=click.Path(path_type=Path), default=None)
+@click.option("--dry-run", is_flag=True, help="Report pending migration without changing files.")
+def migrate_schema(ledger_path: Path | None, dry_run: bool) -> None:
+    """Apply forward-only ledger migrations with a timestamped backup."""
+    path = (ledger_path or LEDGER_PATH).expanduser().resolve()
+    if dry_run:
+        if not path.exists():
+            click.echo(f"Would create a new ledger at {path} with schema v{SCHEMA_VERSION}.")
+            return
+        conn = sqlite3.connect(path)
+        try:
+            current = conn.execute("PRAGMA user_version").fetchone()[0]
+        finally:
+            conn.close()
+        click.echo(f"Ledger schema v{current}; target v{SCHEMA_VERSION}; no changes made.")
+        return
+    backup: Path | None = None
+    _ensure_dir(path)
+    if path.exists():
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup = path.with_name(f"{path.name}.pre-v{SCHEMA_VERSION}-{stamp}.bak")
+        shutil.copy2(path, backup)
+    conn = sqlite3.connect(path)
+    try:
+        apply_schema(conn)
+    finally:
+        conn.close()
+    if backup is None:
+        click.echo(f"Created ledger schema v{SCHEMA_VERSION} at {path}.")
+    else:
+        click.echo(f"Migrated ledger to schema v{SCHEMA_VERSION}; backup: {backup}")

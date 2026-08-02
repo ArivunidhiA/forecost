@@ -1,13 +1,7 @@
 """Plugin manifests are valid JSON and versions stay in sync (deep-audit FC-009)."""
 
 import json
-import sys
 from pathlib import Path
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # 3.10 fallback (matches forecost/policy/rules.py)
-    import tomli as tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -18,10 +12,10 @@ def _load_json(rel):
 
 def test_plugin_and_package_versions_agree():
     plugin = _load_json("plugin/.claude-plugin/plugin.json")
-    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     from forecost import __version__
+    from forecost.version import __version__ as source_version
 
-    assert plugin["version"] == pyproject["project"]["version"] == __version__
+    assert plugin["version"] == source_version == __version__
 
 
 def test_hooks_json_is_valid_and_uses_documented_vars():
