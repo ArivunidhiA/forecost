@@ -5,12 +5,13 @@ agents actually cost — across every harness and currency — reconciles the me
 nobody trusts, and (once it has earned the right to) briefs you before you launch an
 expensive run. Local-first. Content-free. `pip install`, no signup, no cloud.
 
-[![License: MIT](https://img.shields.io/github/license/ArivunidhiA/forecost)](LICENSE)
+[![License: MIT](https://img.shields.io/github/license/ArivunidhiA/forecost)](https://github.com/ArivunidhiA/forecost/blob/main/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/ArivunidhiA/forecost/ci.yml)](https://github.com/ArivunidhiA/forecost/actions)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 
-> **Honest status.** The ledger, reconciliation, budget gate, and Claude Code plugin
-> work today. The pre-execution **estimator runs in shadow mode** — it computes and
+> **Honest status.** The 0.3.0 ledger, reconciliation, budget gate, and macOS/Linux
+> Claude Code plugin are a release candidate. The pre-execution **estimator runs in
+> shadow mode** — it computes and
 > records estimates but **displays nothing**, because on real data it hasn't yet cleared
 > the accuracy bar we set for it (see [Calibration](#calibration-the-honest-part)).
 > We'd rather show you a trustworthy ledger than an untrustworthy guess.
@@ -28,18 +29,24 @@ Everyone can meter tokens. Two things are genuinely unoccupied, and forecost doe
 
 ## Privacy is the whole point (and it's testable)
 
-forecost's ledger is **content-free by construction**: it stores token counts, models,
-timestamps, and workspace paths — never your prompts, completions, tool output, or the
-file paths inside tool calls. This isn't a promise, it's a
-[CI-enforced test](tests/test_privacy_canary.py): a sentinel string is planted in a
+forecost's **ledger** (the `ingest` / hook path) is **content-free by construction**:
+it stores token counts, models, timestamps, costs, and workspace paths — never your
+prompts, completions, or tool output. This isn't a promise, it's a
+[CI-enforced test](https://github.com/ArivunidhiA/forecost/blob/main/tests/test_privacy_canary.py): a sentinel string is planted in a
 synthetic transcript's prompt, tool arguments, and output, and the test fails if it can
-be found anywhere under `~/.forecost/`. Nothing leaves your machine — there is no cloud
-tier to leave to.
+be found anywhere under `~/.forecost/`. The ledger has no cloud tier — there is nothing
+to leave to.
+
+**Two exceptions, both local-first opt-outs, not part of the ledger path:** the legacy
+`forecost init --smart` command sends project excerpts (README, code snippets) to an LLM
+provider to estimate scope — it asks for confirmation first and is entirely optional. And
+the LiteLLM gateway adapter records the gateway's own `response_cost` figure (a number,
+not content). Neither touches transcript content.
 
 ## Quickstart
 
 ```bash
-pip install -e .        # from a clone; PyPI release coming
+pip install forecost==0.3.0
 
 forecost ingest         # pull new usage from your Claude Code transcripts
 forecost ledger status  # what you've spent, by model
@@ -48,21 +55,22 @@ forecost burn           # trailing burn rate → time-to-budget
 ```
 
 ```text
+$ # Synthetic example — these are not real usage or engineering values.
 $ forecost ledger status
-Ledger: 38,996 usage events, 70 workspaces, 97 sessions
-Total USD spend (pricing_table + source_reported): 14164.05
+Ledger: 42 usage events, 3 workspaces, 5 sessions
+Total USD spend (canonical): 12.34
 
 Top models by spend:
-  claude-opus-4-8       n=19616   USD 12092.45
-  claude-sonnet-5       n=11367   USD  1394.43
-  claude-haiku-4-5      n=502     USD     5.10
+  example-model-a                          n=30     USD 10.00
+  example-model-b                          n=12     USD 2.34
 ```
 
 ## Budget enforcement for Claude Code (the plugin)
 
 forecost ships a Claude Code plugin (`plugin/`) that installs hooks:
 
-- a **budget gate** — if a session crosses a hard limit you set in `.forecost.toml`, the
+- a **budget gate** — if a session crosses a hard limit you set in
+  `~/.forecost/policy.toml`, the
   next tool call is denied with a reason;
 - a **threshold-gated preflight note** — on fan-out / scope-broadening prompts only
   (never on cheap turns — nobody wants another prompt to rubber-stamp);
@@ -72,7 +80,7 @@ Every hook is **fail-open by law**: if forecost breaks, your agent keeps working
 broken forecost degrades to "no forecost," never to "no Claude Code."
 
 ```toml
-# .forecost.toml
+# ~/.forecost/policy.toml
 [[policy.rules]]
 id = "session-cap"
 scope = "session"
@@ -81,6 +89,10 @@ soft_limit = 5.0
 hard_limit = 10.0
 action = "deny"
 ```
+
+Repository-local `.forecost.toml` policy is ignored by default so a cloned
+repository cannot silently impose enforcement. Set
+`FORECOST_TRUST_PROJECT_POLICY=1` only when you deliberately trust that file.
 
 ## Works with your gateway too
 
@@ -92,21 +104,29 @@ two can be reconciled.
 ## Calibration — the honest part
 
 We ran the estimator against 601 real prompt-turns of one heavy user's history. The
-results, [published in full](experiments/calib/VERDICT.md):
+results, [published in full](https://github.com/ArivunidhiA/forecost/blob/main/experiments/calib/VERDICT.md):
 
 | Target | Coverage of the P90 band | Interval width | Verdict |
 |---|---|---|---|
 | Cost | 88% (want 85–95%) ✓ | 8.5× (want ≤4×) ✗ | **too wide to show** |
 | Duration | 88% ✓ | 10.7× ✗ | **too wide to show** |
 | Files touched | 85% ✓ | 9.6× ✗ | **static flags only** |
-| Mid-run "stuck?" detector | 67% precision at a 2% flag rate | — | **passed** ✓ |
+| Mid-run "error-dense turn?" flag | see caveat below | — | **shadow only** |
 
 So the estimator stays in shadow mode and the brief displays no ranges — that's a
-pre-commitment kept, not a feature missing. The one thing that *did* clear its bar is
-the mid-run stuck-run detector. As real usage accumulates, `forecost calibration`
-tracks whether the bands ever tighten enough to earn a place on screen.
+pre-commitment kept, not a feature missing.
 
-The methodology is fully reproducible — [`experiments/calib/`](experiments/calib/) has
+**About that mid-run flag — the honest caveat.** The backtest reported "67% precision at
+a 2% flag rate," but that number is not yet trustworthy: the detector flags error-dense
+turns, and the weak labels it was scored against were themselves *defined* by errors — so
+numerator and denominator share one signal. Of the 12 flagged turns, 8 were merely
+"ambiguous" and **0** were confirmed failures; there are no independent stuck/failure
+labels in the corpus yet. So the guard ships **shadow-only** (computed, never surfaced)
+until it can be scored against real user marks, exactly like the cost estimator. As real
+usage accumulates, `forecost calibration` tracks whether any of these earn a place on
+screen.
+
+The methodology is fully reproducible — [`experiments/calib/`](https://github.com/ArivunidhiA/forecost/tree/main/experiments/calib) has
 the extractor and backtest; run them against your own history.
 
 ## Command reference
@@ -118,6 +138,11 @@ the extractor and backtest; run them against your own history.
 | `forecost reconcile` | Cross-check the ledger's internal consistency |
 | `forecost calibration` | The estimator's accuracy record (shadow-mode) |
 | `forecost burn` | Trailing burn rate, projected against your budgets |
+
+The optional MCP server is read-only by default. Its legacy `track_call` tool is
+available only when the server process explicitly sets
+`FORECOST_MCP_ALLOW_WRITES=1`; new integrations should prefer harness adapters
+that provide stable event identity and provenance.
 
 <details>
 <summary>Legacy commands (v0.2 — still work, being superseded)</summary>
@@ -139,8 +164,9 @@ lives in the project's internal docs.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Issues and PRs welcome — especially reports of
-how ingestion and the hooks behave on *your* transcripts and harnesses.
+See [CONTRIBUTING.md](https://github.com/ArivunidhiA/forecost/blob/main/CONTRIBUTING.md) and the
+[architecture/product laws](https://github.com/ArivunidhiA/forecost/blob/main/docs/architecture.md). Issues and PRs are especially
+welcome for new harness adapters, using synthetic fixtures—never private transcripts.
 
 ## License
 

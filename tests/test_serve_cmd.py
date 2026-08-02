@@ -29,9 +29,9 @@ def _start_server(port):
 
 def _get(port, path):
     url = f"http://127.0.0.1:{port}{path}"
-    req = urllib.request.Request(url)  # noqa: S310
+    req = urllib.request.Request(url)
     try:
-        resp = urllib.request.urlopen(req, timeout=5)  # noqa: S310
+        resp = urllib.request.urlopen(req, timeout=5)
         body = json.loads(resp.read().decode())
         headers = dict(resp.headers)
         return resp.status, body, headers

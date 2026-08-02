@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "forecost"
-version = "0.2.0"
-description = "Know exactly what your AI project will cost. Local-first LLM cost forecasting that learns from your usage."
+version = "0.3.0"
+description = "A local, content-free ledger for AI agent work: records what your agents actually cost across every harness, reconciles the meters nobody trusts, and gates budgets via fail-open hooks."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [{ name = "Arivunidhi A" }]
-keywords = ["llm", "cost", "forecast", "openai", "anthropic", "cli"]
+keywords = ["llm", "cost", "ledger", "reconciliation", "claude-code", "agents", "anthropic", "cli"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -20,6 +20,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
@@ -32,8 +33,12 @@ dependencies = [
 [project.optional-dependencies]
 forecast = ["statsmodels>=0.14", "numpy>=1.24"]
 tui = ["textual>=0.50", "plotext>=5.0"]
-llm = ["litellm>=1.0"]
-mcp = ["mcp[cli]>=1.0"]
+# 1.91+ stopped shipping a compatible macOS/Python 3.12 wheel and newer
+# releases currently require a Rust toolchain newer than common CI runners.
+llm = ["litellm>=1.80,<1.91"]
+# MCP 2.x removed ``mcp.server.fastmcp``, the public API used by this server.
+# Keep fresh installs on the compatible major until the server is migrated.
+mcp = ["mcp[cli]>=1.0,<2"]
 all = ["forecost[forecast,tui,llm,mcp]"]
 dev = [
     "pytest>=7.0",
@@ -52,7 +57,7 @@ dev = [
     "mypy",
     "statsmodels>=0.14",
     "numpy>=1.24",
-    "mcp[cli]>=1.0",
+    "mcp[cli]>=1.0,<2",
 ]
 
 [project.scripts]
@@ -99,6 +104,7 @@ known-first-party = ["forecost"]
 "tests/test_commands.py" = ["PT018"]
 "tests/test_edge_cases.py" = ["PT011"]
 "tests/test_property_based.py" = ["I001"]
+"tests/test_serve_cmd.py" = ["S310"]
 
 [tool.pyright]
 pythonVersion = "3.10"
@@ -107,6 +113,7 @@ reportMissingImports = true
 reportMissingTypeStubs = false
 venvPath = "."
 venv = ".venv312"
+include = ["forecost", "tests", "scripts/check_release.py"]
 exclude = ["scripts/test_real_sdk.py"]
 
 [tool.bandit]

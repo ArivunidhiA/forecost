@@ -1,18 +1,25 @@
 """Self-correcting pricing module with zero external dependencies."""
 
 import re
+from datetime import date, datetime, timezone
 from typing import Optional
 
 __all__ = [
     "calculate_cost",
     "get_provider",
+    "is_priced",
     "FALLBACK_PRICING",
     "DEFAULT_COST",
     "MODEL_TIERS",
     "get_tier",
+    "get_pricing_period",
 ]
 
-# Last verified: March 2026
+# Anthropic rows verified 2026-07-17 against the authoritative models/pricing
+# table; OpenAI/Gemini/others last verified March 2026 and NOT re-verified — any
+# model absent from FALLBACK_PRICING is priced with DEFAULT_COST, a guess. Call
+# is_priced() to tell a real rate from a guess; `forecost pricing-audit` reports
+# which models in the ledger were priced by guess.
 FALLBACK_PRICING: dict[str, dict[str, float]] = {
     # OpenAI
     "gpt-4o": {"input": 2.50, "output": 10.00},
@@ -98,26 +105,61 @@ FALLBACK_PRICING: dict[str, dict[str, float]] = {
         "cache_read": 1.50,
         "cache_write": 18.75,
     },
+    # Haiku 4.5 is $1/$5 per MTok (verified against the Anthropic models table,
+    # cached 2026-06-24). The old $0.80/$4.00 here was Haiku 3.5's rate.
     "claude-haiku-4-5-20251001": {
-        "input": 0.80,
-        "output": 4.00,
-        "cache_read": 0.08,
-        "cache_write": 1.00,
+        "input": 1.00,
+        "output": 5.00,
+        "cache_read": 0.10,
+        "cache_write": 1.25,
     },
-    # Anthropic - Claude 5 family (Fable/Opus/Sonnet 5)
+    "claude-haiku-4-5": {"input": 1.00, "output": 5.00, "cache_read": 0.10, "cache_write": 1.25},
+    # Anthropic - Claude 5 family + current Opus/Sonnet tiers.
+    # Verified 2026-07-17 against the authoritative Anthropic models/pricing table
+    # (claude-api reference, cached 2026-06-24). These correct three wrong rows
+    # that materially overstated/understated ledger spend (deep-audit P0-2):
+    #   opus-4-8 was $15/$75 (a 3x overstatement — it is the dominant model),
+    #   fable-5 was $3/$15 (understated), haiku-4-5 was $0.80/$4 (above).
     "claude-fable-5": {
+        "input": 10.00,
+        "output": 50.00,
+        "cache_read": 1.00,
+        "cache_write": 12.50,
+    },
+    # Project Glasswing; same pricing/behaviour as Fable 5.
+    "claude-mythos-5": {
+        "input": 10.00,
+        "output": 50.00,
+        "cache_read": 1.00,
+        "cache_write": 12.50,
+    },
+    "claude-opus-4-8": {
+        "input": 5.00,
+        "output": 25.00,
+        "cache_read": 0.50,
+        "cache_write": 6.25,
+    },
+    "claude-opus-4-7": {
+        "input": 5.00,
+        "output": 25.00,
+        "cache_read": 0.50,
+        "cache_write": 6.25,
+    },
+    "claude-opus-4-6": {
+        "input": 5.00,
+        "output": 25.00,
+        "cache_read": 0.50,
+        "cache_write": 6.25,
+    },
+    # Sonnet 5's standard rate. `calculate_cost` replaces this with the
+    # effective introductory rate for events on or before 2026-08-31.
+    "claude-sonnet-5": {
         "input": 3.00,
         "output": 15.00,
         "cache_read": 0.30,
         "cache_write": 3.75,
     },
-    "claude-opus-4-8": {
-        "input": 15.00,
-        "output": 75.00,
-        "cache_read": 1.50,
-        "cache_write": 18.75,
-    },
-    "claude-sonnet-5": {
+    "claude-sonnet-4-6": {
         "input": 3.00,
         "output": 15.00,
         "cache_read": 0.30,
@@ -145,6 +187,15 @@ FALLBACK_PRICING: dict[str, dict[str, float]] = {
 }
 
 DEFAULT_COST = {"input": 5.0, "output": 15.0}
+
+_SONNET_5_MODEL = "claude-sonnet-5"
+_SONNET_5_INTRO_END = date(2026, 8, 31)
+_SONNET_5_INTRO_PRICING = {
+    "input": 2.00,
+    "output": 10.00,
+    "cache_read": 0.20,
+    "cache_write": 2.50,
+}
 
 MODEL_TIERS: dict[str, list[str]] = {
     "Tier 1 (Heavy)": [
@@ -237,17 +288,70 @@ def _log_unknown_model(model: str) -> None:
         log_error("pricing", f"unknown model: {model}")
 
 
-def _resolve_model(model: str) -> Optional[dict[str, float]]:
+def _resolve_model_key(model: str) -> Optional[str]:
     if model in FALLBACK_PRICING:
-        return FALLBACK_PRICING[model]
+        return model
     stripped = _DATE_SUFFIX_RE.sub("", model)
     if stripped in FALLBACK_PRICING:
-        return FALLBACK_PRICING[stripped]
+        return stripped
     while "-" in stripped:
         stripped = stripped.rsplit("-", 1)[0]
         if stripped in FALLBACK_PRICING:
-            return FALLBACK_PRICING[stripped]
+            return stripped
     return None
+
+
+def _resolve_model(model: str) -> Optional[dict[str, float]]:
+    key = _resolve_model_key(model)
+    return FALLBACK_PRICING[key] if key is not None else None
+
+
+def _as_utc_date(as_of: datetime | date | str | None) -> date:
+    """Normalize an event timestamp for effective-dated rate selection."""
+    if as_of is None:
+        return datetime.now(timezone.utc).date()
+    if isinstance(as_of, datetime):
+        if as_of.tzinfo is None:
+            return as_of.date()
+        return as_of.astimezone(timezone.utc).date()
+    if isinstance(as_of, date):
+        return as_of
+    normalized = as_of.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return date.fromisoformat(normalized)
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed.date()
+
+
+def get_pricing_period(model: str, as_of: datetime | date | str | None = None) -> str | None:
+    """Return a stable provenance label when a model has effective-dated rates."""
+    if _resolve_model_key(model) != _SONNET_5_MODEL:
+        return None
+    if _as_utc_date(as_of) <= _SONNET_5_INTRO_END:
+        return "sonnet5-intro-through-2026-08-31"
+    return "sonnet5-standard-from-2026-09-01"
+
+
+def _effective_pricing(
+    model: str, as_of: datetime | date | str | None
+) -> Optional[dict[str, float]]:
+    key = _resolve_model_key(model)
+    if key is None:
+        return None
+    if key == _SONNET_5_MODEL and _as_utc_date(as_of) <= _SONNET_5_INTRO_END:
+        return _SONNET_5_INTRO_PRICING
+    return FALLBACK_PRICING[key]
+
+
+def is_priced(model: str) -> bool:
+    """True if this model has a real rate in the table (exact or family match),
+    False if calculate_cost would fall back to the DEFAULT_COST guess. Callers
+    that must not act on a guessed price (hard budget denials, displayed totals)
+    check this first."""
+    return _resolve_model(model) is not None
 
 
 def calculate_cost(
@@ -256,6 +360,8 @@ def calculate_cost(
     tokens_out: int,
     cache_read_tokens: int = 0,
     cache_write_tokens: int = 0,
+    *,
+    as_of: datetime | date | str | None = None,
 ) -> float:
     """Calculate estimated USD cost for a model invocation.
 
@@ -268,6 +374,8 @@ def calculate_cost(
             on cache-heavy agentic workloads).
         cache_write_tokens: Tokens newly written to a prompt cache (typically priced
             above standard input).
+        as_of: Event timestamp used to select an effective-dated rate. Defaults
+            to the current UTC date when pricing an event without a timestamp.
 
     Returns:
         float: Estimated total call cost in USD.
@@ -276,7 +384,7 @@ def calculate_cost(
     tokens_out = max(0, tokens_out)
     cache_read_tokens = max(0, cache_read_tokens)
     cache_write_tokens = max(0, cache_write_tokens)
-    cost = _resolve_model(model)
+    cost = _effective_pricing(model, as_of)
     if cost is None:
         _log_unknown_model(model)
         cost = DEFAULT_COST

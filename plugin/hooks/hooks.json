@@ -3,14 +3,14 @@
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_DATA}/venv/bin/forecost-hook session-start", "timeout": 10 }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/run-hook.sh session-start", "timeout": 10 }
         ]
       }
     ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_DATA}/venv/bin/forecost-hook prompt-submit", "timeout": 10 }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/run-hook.sh prompt-submit", "timeout": 10 }
         ]
       }
     ],
@@ -18,21 +18,21 @@
       {
         "matcher": "Task|Bash|WebFetch|WebSearch",
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_DATA}/venv/bin/forecost-hook pre-tool", "timeout": 5 }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/run-hook.sh pre-tool", "timeout": 5 }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_DATA}/venv/bin/forecost-hook stop", "timeout": 30, "async": true }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/run-hook.sh stop", "timeout": 30, "async": true }
         ]
       }
     ],
     "SessionEnd": [
       {
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_DATA}/venv/bin/forecost-hook stop", "timeout": 30, "async": true }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/run-hook.sh stop", "timeout": 30, "async": true }
         ]
       }
     ]

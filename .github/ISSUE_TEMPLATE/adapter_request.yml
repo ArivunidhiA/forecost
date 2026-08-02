@@ -1,0 +1,48 @@
+name: Adapter Request
+description: Propose ingestion for another agent harness or billing source
+labels: [adapter]
+body:
+  - type: input
+    id: harness
+    attributes:
+      label: Harness or source
+      placeholder: Codex CLI, OpenCode, provider billing export
+    validations:
+      required: true
+  - type: textarea
+    id: value
+    attributes:
+      label: User value
+      description: What decision becomes possible once this source is independently metered?
+    validations:
+      required: true
+  - type: textarea
+    id: identity
+    attributes:
+      label: Stable event identity
+      description: Which content-free fields can deduplicate one provider response across retries?
+    validations:
+      required: true
+  - type: textarea
+    id: provenance
+    attributes:
+      label: Cost and provenance
+      description: Does the source report money, tokens, quota, or multiple meters? How are guesses identified?
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy boundary
+      description: List the exact operational fields needed. Do not paste a real transcript or secret.
+    validations:
+      required: true
+  - type: checkboxes
+    id: contract
+    attributes:
+      label: Adapter contract
+      options:
+        - label: I can provide synthetic or redacted fixtures.
+          required: true
+        - label: The adapter can avoid prompts, completions, tool payloads, and file contents.
+          required: true

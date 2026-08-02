@@ -14,7 +14,12 @@ else:  # pragma: no cover - py3.10 fallback
 
 Action = Literal["allow", "warn", "ask", "deny"]
 
-VALID_SCOPES = {"run", "session", "day", "week", "month"}
+# "run" is intentionally NOT supported: there is no reliable per-run spend key at
+# policy-evaluation time (the preflight hook has no run/prompt id — see the
+# calibration association note), so a run-scoped rule used to silently measure
+# ALL-TIME spend and over-deny. Reject it at parse time instead. Use "session"
+# for per-session caps; "day"/"week"/"month" for rolling windows.
+VALID_SCOPES = {"session", "day", "week", "month"}
 VALID_ACTIONS = {"warn", "ask", "deny"}
 
 

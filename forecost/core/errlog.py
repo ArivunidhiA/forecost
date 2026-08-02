@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 
-from forecost.core.paths import forecost_home
+from forecost.core.paths import chmod_private, ensure_private_dir, forecost_home
 
 _MAX_LOG_BYTES = 1_000_000
 _MAX_MESSAGE_CHARS = 400
@@ -26,10 +26,13 @@ def _log_path():
 
 
 _REDACT_PATTERNS = [
-    re.compile(r"sk-[A-Za-z0-9]{20,}"),
-    re.compile(r"ghp_[A-Za-z0-9]{36}"),
+    re.compile(r"sk-(?:proj-|svcacct-|ant-[A-Za-z0-9-]*-)?[A-Za-z0-9_-]{16,}"),
+    re.compile(r"(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})"),
     re.compile(r"xox[bpars]-[A-Za-z0-9-]{10,}"),
     re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"AIza[0-9A-Za-z_-]{30,}"),
+    re.compile(r"hf_[A-Za-z0-9]{20,}"),
+    re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{16,}", re.IGNORECASE),
     re.compile(r"eyJ[A-Za-z0-9_-]{20,}(?:\.[A-Za-z0-9_-]{10,}){1,2}"),  # JWT-shaped
     re.compile(r"[A-Za-z0-9+/]{40,}={0,2}"),  # generic long base64 runs
 ]
@@ -54,7 +57,7 @@ def redact(text: str) -> str:
 
 
 def _ensure_dir(log_path) -> None:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(log_path.parent)
 
 
 def _rotate_if_large(log_path) -> None:
@@ -84,6 +87,7 @@ def log_error(component: str, message: str) -> None:
         safe = redact(message)
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"[{component}] {safe}\n")
+        chmod_private(log_path)  # spend/project metadata — never world-readable
     except OSError:
         pass
 

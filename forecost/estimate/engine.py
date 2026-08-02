@@ -1,9 +1,11 @@
 """Estimator v0: hierarchical empirical quantiles with shrinkage toward global.
 
 Matches the method validated (as MARGINAL, not yet PASS) by the calibration
-experiment this session (experiments/calib/backtest.py, VERDICT.md). Consumes
-the ledger read-only via forecost.ledger.queries; writes only to the
-`estimates` table (never to usage_events/postings).
+experiment this session (experiments/calib/backtest.py, VERDICT.md): the category
+log-quantiles are shrunk toward the *global* log-quantiles by weight w = n/(n+k),
+NOT scaled toward zero (the deep-audit P0 bug this file used to have). Consumes the
+ledger read-only via forecost.ledger.queries; writes only to the `estimates`
+table (never to usage_events/postings).
 
 Cold start: fewer than MIN_CELL_N historical values in a category falls back
 to the global distribution and is labeled confidence='low', caveat='cold_start'.
@@ -18,6 +20,7 @@ from datetime import datetime, timezone
 
 from forecost.estimate.types import EstimateRange, TaskContext
 from forecost.ledger import queries as q
+from forecost.ledger.db import ledger_write_lock
 
 SHRINK_K = 10
 MIN_CELL_N = 3
@@ -46,11 +49,9 @@ def estimate_cost(
     conn: sqlite3.Connection, task: TaskContext, category: str, currency: str = "USD"
 ) -> EstimateRange:
     """The v0 estimator: category-conditioned empirical quantiles, shrunk toward
-    global, with cold-start fallback. No point estimate anywhere."""
-    # v0: shrinkage target is the category's own distribution (a true global pool
-    # across all categories needs a separate query — left for v2 once the
-    # shadow-mode estimator has enough production data for pooling to matter).
+    the global pool, with cold-start fallback. No point estimate anywhere."""
     cell_values = q.history_by_category(conn, category, currency=currency)
+    global_values = q.global_history(conn, currency=currency)
 
     n = len(cell_values)
     if n < MIN_CELL_N:
@@ -68,10 +69,18 @@ def estimate_cost(
         )
 
     q10, q50, q90 = _log_quantiles(cell_values)
+    # Empirical-Bayes shrinkage toward the global log-quantiles (the backtested
+    # M1). With no global pool yet, there is nothing to shrink toward, so the
+    # category's own quantiles stand. This is a convex blend in log space — it
+    # never collapses the estimate toward zero the way the old `w * q` did.
+    if global_values:
+        g10, g50, g90 = _log_quantiles(global_values)
+    else:
+        g10, g50, g90 = q10, q50, q90
     w = n / (n + SHRINK_K)
-    # shrink toward itself when no larger pool exists yet (v0); the weight still
-    # communicates confidence via n_samples and the confidence label below.
-    p10, p50, p90 = _expm1(w * q10), _expm1(w * q50), _expm1(w * q90)
+    p10 = _expm1(w * q10 + (1 - w) * g10)
+    p50 = _expm1(w * q50 + (1 - w) * g50)
+    p90 = _expm1(w * q90 + (1 - w) * g90)
 
     if n >= GLOBAL_CATEGORY_FALLBACK_N:
         confidence = "high"
@@ -107,28 +116,29 @@ def record_estimate(
     """Persist an estimate for later reconciliation. Returns the estimate_uid."""
     estimate_uid = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
-    conn.execute(
-        """
-        INSERT INTO estimates (
-            estimate_uid, session_id, workspace_id, run_id, created_at, currency,
-            p10, p50, p90, method, n_samples, category, shadow
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """,
-        (
-            estimate_uid,
-            session_id,
-            workspace_id,
-            run_id,
-            now,
-            estimate.currency,
-            estimate.p10,
-            estimate.p50,
-            estimate.p90,
-            estimate.method,
-            estimate.n_samples,
-            estimate.category,
-            int(shadow),
-        ),
-    )
-    conn.commit()
+    with ledger_write_lock:
+        conn.execute(
+            """
+            INSERT INTO estimates (
+                estimate_uid, session_id, workspace_id, run_id, created_at, currency,
+                p10, p50, p90, method, n_samples, category, shadow
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                estimate_uid,
+                session_id,
+                workspace_id,
+                run_id,
+                now,
+                estimate.currency,
+                estimate.p10,
+                estimate.p50,
+                estimate.p90,
+                estimate.method,
+                estimate.n_samples,
+                estimate.category,
+                int(shadow),
+            ),
+        )
+        conn.commit()
     return estimate_uid

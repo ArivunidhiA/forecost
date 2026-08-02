@@ -20,13 +20,17 @@ _COMMANDS = {
     "pre-tool": "handle_gate",
     "stop": "handle_reconcile",
 }
+_MAX_STDIN_CHARS = 1_048_576
 
 
 def _read_payload() -> dict | None:
     """Returns the parsed stdin payload, or None on any parse failure."""
     try:
-        raw = sys.stdin.read()
-        return json.loads(raw) if raw.strip() else {}
+        raw = sys.stdin.read(_MAX_STDIN_CHARS + 1)
+        if len(raw) > _MAX_STDIN_CHARS:
+            return None
+        parsed = json.loads(raw) if raw.strip() else {}
+        return parsed if isinstance(parsed, dict) else None
     except Exception:
         return None
 

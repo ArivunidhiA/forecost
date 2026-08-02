@@ -11,11 +11,12 @@ import pytest
 from click.testing import CliRunner
 
 import forecost.ledger.db as ledger_db
-from forecost.adapters.base import UsageEvent
+from forecost.adapters.base import Money, UsageEvent
 from forecost.commands.burn_cmd import burn
 from forecost.commands.calibration_cmd import calibration
 from forecost.commands.ingest_cmd import ingest
 from forecost.commands.ledger_cmd import ledger
+from forecost.commands.pricing_audit_cmd import pricing_audit
 from forecost.commands.reconcile_cmd import reconcile
 from forecost.ledger.sink import SyncLedgerSink
 
@@ -62,11 +63,32 @@ def test_ledger_status_with_data(isolated_ledger):
     assert "Total USD spend" in result.output
 
 
+def test_ledger_status_labels_guessed_pricing(isolated_ledger, tmp_path, monkeypatch):
+    monkeypatch.setenv("FORECOST_HOME", str(tmp_path))
+    _seed(isolated_ledger, model="provider-model-not-in-table")
+
+    result = CliRunner().invoke(ledger, ["status"])
+
+    assert result.exit_code == 0
+    assert "guessed across 1 event" in result.output
+    assert "not safe for hard budget decisions" in result.output
+
+
 def test_ledger_by_workspace(isolated_ledger):
     _seed(isolated_ledger, workspace="/tmp/myproj")
     result = CliRunner().invoke(ledger, ["by-workspace"])
     assert result.exit_code == 0
     assert "myproj" in result.output
+
+
+def test_ledger_by_workspace_distinguishes_missing_basis(isolated_ledger):
+    _seed(isolated_ledger, workspace="/tmp/myproj")
+
+    result = CliRunner().invoke(ledger, ["by-workspace", "--basis", "source_reported"])
+
+    assert result.exit_code == 0
+    assert "No USD source_reported postings" in result.output
+    assert "1 recorded workspace" in result.output
 
 
 def test_reconcile_empty(isolated_ledger):
@@ -83,6 +105,23 @@ def test_reconcile_no_drift(isolated_ledger):
     assert "Phase 3" in result.output  # honest deferral message
 
 
+def test_reconcile_uses_rate_effective_at_event_timestamp(isolated_ledger, monkeypatch):
+    _seed(isolated_ledger)
+    seen_as_of = []
+
+    def event_effective_cost(*args, as_of=None):
+        seen_as_of.append(as_of)
+        return 25.0
+
+    monkeypatch.setattr("forecost.commands.reconcile_cmd.calculate_cost", event_effective_cost)
+
+    result = CliRunner().invoke(reconcile, [])
+
+    assert result.exit_code == 0
+    assert seen_as_of
+    assert seen_as_of[0] == isolated_ledger.execute("SELECT ts FROM usage_events").fetchone()[0]
+
+
 def test_reconcile_flags_drift(isolated_ledger):
     """When a stored posting's amount disagrees with the current pricing table
     (e.g. a stale pricing_version), reconcile flags it."""
@@ -96,6 +135,33 @@ def test_reconcile_flags_drift(isolated_ledger):
     assert result.exit_code == 0
     assert "FLAGS" in result.output
     assert "drift" in result.output
+
+
+def test_reconcile_flags_nonzero_table_against_zero_source(isolated_ledger):
+    sink = SyncLedgerSink(ledger_path=None)
+    sink._conn = isolated_ledger
+    sink.emit(
+        UsageEvent(
+            event_uid="source-zero",
+            ts=datetime.now(timezone.utc),
+            source="gateway",
+            model="claude-opus-4-8",
+            tokens_out=1_000,
+            reported_cost=Money(amount=0.0, currency="USD"),
+        )
+    )
+
+    result = CliRunner().invoke(reconcile, [])
+
+    assert result.exit_code == 0
+    assert "1 disagree by >3.0%" in result.output
+
+
+def test_pricing_audit_rejects_non_usd_until_supported(isolated_ledger):
+    result = CliRunner().invoke(pricing_audit, ["--currency", "EUR"])
+
+    assert result.exit_code == 2
+    assert "Invalid value for '--currency'" in result.output
 
 
 def test_burn_no_budgets(isolated_ledger):
@@ -127,8 +193,10 @@ def test_calibration_empty(isolated_ledger):
 
 
 def test_calibration_with_record(isolated_ledger):
+    from forecost.estimate.calibration import reconcile_estimates
     from forecost.estimate.engine import record_estimate
     from forecost.estimate.types import EstimateRange
+    from forecost.ledger.sink import _get_or_create_session
 
     est = EstimateRange(
         currency="USD",
@@ -141,10 +209,13 @@ def test_calibration_with_record(isolated_ledger):
         confidence="medium",
         category="bugfix-debug",
     )
-    record_estimate(isolated_ledger, est, None, None, "run-1", shadow=True)
-    _seed(isolated_ledger, uid="run-1-actual", tokens_out=4_000)  # ~$0.30, in band
-    isolated_ledger.execute("UPDATE usage_events SET run_id='run-1' WHERE event_uid='run-1-actual'")
-    isolated_ledger.commit()
+    # Real path: an estimate in a session, that session's actuals, then reconcile.
+    sess_id = _get_or_create_session(
+        isolated_ledger, "s-cal", None, "test", datetime.now(timezone.utc).isoformat()
+    )
+    record_estimate(isolated_ledger, est, sess_id, None, "s-cal", shadow=True)
+    _seed(isolated_ledger, uid="s-cal", tokens_out=4_000)  # ~$0.30, in band, session s-cal
+    reconcile_estimates(isolated_ledger)
 
     result = CliRunner().invoke(calibration, [])
     assert result.exit_code == 0

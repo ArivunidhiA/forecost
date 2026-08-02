@@ -33,6 +33,14 @@ def test_read_payload_malformed(monkeypatch):
     assert fastpath._read_payload() is None
 
 
+def test_read_payload_rejects_oversized_or_non_object_input(monkeypatch):
+    monkeypatch.setattr("sys.stdin", io.StringIO("x" * (fastpath._MAX_STDIN_CHARS + 1)))
+    assert fastpath._read_payload() is None
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("[]"))
+    assert fastpath._read_payload() is None
+
+
 def test_dispatch_prints_result(capsys):
     fastpath._dispatch("session-start", {"session_id": "s", "cwd": "/tmp/p"})
     # session-start returns {}, so nothing is printed

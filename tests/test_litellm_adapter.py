@@ -8,7 +8,7 @@ import pytest
 
 litellm = pytest.importorskip("litellm")
 
-from forecost.adapters.litellm_hook import ForecostLogger  # noqa: E402
+from forecost.adapters.litellm_hook import ForecostLogger, _kwargs_to_event  # noqa: E402
 
 
 def _run(coro):
@@ -24,6 +24,28 @@ def test_pre_call_allows_when_no_policy(tmp_path, ledger_conn, monkeypatch):
     data = {"model": "gpt-4o", "messages": []}
     result = _run(logger.async_pre_call_hook(None, None, data, "acompletion"))
     assert result == data  # allowed, data passed through unchanged
+
+
+def test_pre_call_reuses_one_custom_ledger_connection(tmp_path, ledger_conn, monkeypatch):
+    import forecost.adapters.litellm_hook as hook_mod
+
+    calls = 0
+
+    def connection(_path=None):
+        nonlocal calls
+        calls += 1
+        return ledger_conn
+
+    monkeypatch.setattr(hook_mod, "get_ledger_db", connection)
+    logger = ForecostLogger(
+        policy_path=tmp_path / "nonexistent.toml", ledger_path=tmp_path / "x.db"
+    )
+    data = {"model": "gpt-4o", "messages": []}
+
+    _run(logger.async_pre_call_hook(None, None, data, "acompletion"))
+    _run(logger.async_pre_call_hook(None, None, data, "acompletion"))
+
+    assert calls == 1
 
 
 def test_pre_call_denies_over_budget(tmp_path, ledger_conn, monkeypatch):
@@ -120,3 +142,23 @@ def test_success_event_never_raises(ledger_conn, monkeypatch):
     monkeypatch.setattr(logger, "_get_sink", _boom)
     # Malformed everything; must not raise (gateway safety)
     _run(logger.async_log_success_event({}, None, None, None))
+
+
+def test_event_sanitizes_content_shaped_gateway_identity():
+    response = SimpleNamespace(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=2))
+    event = _kwargs_to_event(
+        {
+            "litellm_call_id": "secret prompt-shaped call id",
+            "model": "secret prompt-shaped model",
+            "custom_llm_provider": "provider with spaces",
+            "call_type": "call type with content",
+            "litellm_params": {"metadata": {"user_api_key_user_id": "private-user"}},
+        },
+        response,
+    )
+
+    assert event.event_uid.startswith("litellm:anon-")
+    assert event.model == "unknown"
+    assert event.provider is None
+    assert event.session_uid is None
+    assert event.metadata == {"call_type": None}
