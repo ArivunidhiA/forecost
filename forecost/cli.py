@@ -42,6 +42,7 @@ _CURRENT_COMMANDS: dict[str, _LazyCommand] = {
         "pricing_audit",
         "Find guessed or stale pricing.",
     ),
+    "privacy": ("forecost.commands.privacy_cmd", "privacy", "Inspect local privacy boundaries."),
     "purge": ("forecost.commands.purge_cmd", "purge", "Safely remove Forecost-owned data."),
     "reconcile": (
         "forecost.commands.reconcile_cmd",
@@ -59,6 +60,7 @@ _CURRENT_COMMANDS: dict[str, _LazyCommand] = {
         "Replay durable failed-write records.",
     ),
     "runs": ("forecost.commands.runs_cmd", "runs", "List and inspect graph-aware agent runs."),
+    "verify": ("forecost.commands.verify_cmd", "verify", "Verify receipt snapshot integrity."),
 }
 
 _LEGACY_COMMANDS: dict[str, _LazyCommand] = {
