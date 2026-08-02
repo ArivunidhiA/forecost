@@ -29,6 +29,7 @@ _CURRENT_COMMANDS: dict[str, _LazyCommand] = {
         "Manage experimental local resource envelopes.",
     ),
     "ingest": ("forecost.commands.ingest_cmd", "ingest", "Ingest agent usage into the ledger."),
+    "import": ("forecost.commands.import_cmd", "import_data", "Import offline runtime evidence."),
     "ledger": ("forecost.commands.ledger_cmd", "ledger", "Inspect the local usage ledger."),
     "lab": ("forecost.commands.lab_cmd", "lab", "Run deterministic offline receipt scenarios."),
     "mark": (
