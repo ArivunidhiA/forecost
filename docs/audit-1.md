@@ -18,12 +18,12 @@ reconciliation layer for AI-agent usage. Its strongest assets are the
 content-free Claude transcript adapter, multi-basis ledger, fail-open policy
 law, honest shadow-mode estimator, and unusually broad cross-platform tests.
 
-The audited branch is now a local release candidate. The implementation pass
+The audited branch is now a code-complete release candidate. The implementation pass
 closed the transaction, queue acknowledgement, recovery, guessed-price policy,
 plugin supply-chain, destructive-command, privacy, and release-pipeline
-blockers described below. The remaining merge gate is evidence from the remote
-CI matrix; publishing 0.3.0 remains intentionally blocked while its changelog
-entry is marked `Unreleased`.
+blockers described below. The complete remote CI matrix is green; publishing
+0.3.0 remains intentionally blocked while its changelog entry is marked
+`Unreleased`.
 
 The path to thousands of stars is not a larger feature list. It is:
 
@@ -35,9 +35,9 @@ The path to thousands of stars is not a larger feature list. It is:
 
 ## Evidence and verification
 
-- GitHub: PR #1 is merged. PR #2 is open and mergeable. The previously failing
-  Xenon paths now satisfy the gate; the updated branch still needs to be pushed
-  and verified by the remote CI matrix.
+- GitHub: PR #1 is merged. PR #2 is open and mergeable. The replacement remote
+  run `30758731742` passed lint, security, coverage, all 12 Python/OS test jobs,
+  and Linux/macOS built-wheel plus plugin smoke jobs.
 - PR #2 automated review: 12 unresolved inline threads plus three additional
   out-of-diff correctness/security findings.
 - Current public release: PyPI/GitHub `0.1.1`; local/plugin branch `0.3.0`.
@@ -141,12 +141,12 @@ million-event scale, and new Codex/OpenCode/OpenClaw adapters.
   dependencies as an interim measure. Either support Windows with an executable
   launcher and first-run test or state the platform limitation honestly.
 
-- [ ] **P0-8 — Restore a fully green PR gate.**
+- [x] **P0-8 — Restore a fully green PR gate.**
   Refactor the three Xenon failures, add tests for the new command branches,
   meet the 90% diff-coverage gate, and run smoke only after lint/security/test/
   coverage all pass. Do not merge based only on the 12 green OS/Python legs.
-  The complete local equivalent now passes; this stays open until the pushed
-  commit completes the remote matrix, coverage, and artifact-smoke jobs.
+  The complete local equivalent and GitHub Actions run `30758731742` pass,
+  including the remote matrix, diff coverage, security, and artifact-smoke jobs.
 
 ### P1 — production trust and release readiness
 

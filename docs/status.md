@@ -21,10 +21,10 @@
 - Re-ran the 12-thread/3,600-event integrity probe: all 3,600 events were
   accepted with zero exceptions, orphan events, or duplicate posting keys.
 
-## Pending release evidence
+## Release evidence
 
-- Push the audit-remediation commit and require the complete GitHub Actions
-  matrix, coverage, security, and built-artifact smoke jobs to pass.
+- GitHub Actions run `30758731742` is fully green: lint, security, diff coverage,
+  12 Python/OS test jobs, and built-wheel/plugin smoke on Linux and macOS.
 - No local release blockers remain after the final independent security,
   architecture, and test/performance closure reviews.
 
