@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS workspaces (
@@ -182,8 +182,36 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     """
     conn.executescript(_DDL)
     (current_version,) = conn.execute("PRAGMA user_version").fetchone()
-    if current_version < SCHEMA_VERSION:
-        # No prior versions exist yet (this is the initial ledger v2 schema);
-        # the ladder below is where future `if current_version < N` steps go.
+    if current_version < 3:
+        _migrate_reconciliation_uniqueness(conn)
+
+
+def _migrate_reconciliation_uniqueness(conn: sqlite3.Connection) -> None:
+    """Make estimate reconciliation idempotent across concurrent processes.
+
+    Earlier databases allowed duplicate rows for one estimate. Keep the oldest
+    deterministic receipt before adding the unique index; the whole migration
+    is transactional so a failed index build cannot leave a partially-deduped
+    database or an advanced schema version.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(
+            """
+            DELETE FROM reconciliations
+            WHERE EXISTS (
+                SELECT 1 FROM reconciliations older
+                WHERE older.estimate_id = reconciliations.estimate_id
+                  AND older.id < reconciliations.id
+            )
+            """
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
+            "idx_reconciliations_estimate ON reconciliations(estimate_id)"
+        )
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-    conn.commit()
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise

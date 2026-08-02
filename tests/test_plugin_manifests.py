@@ -26,10 +26,16 @@ def test_plugin_and_package_versions_agree():
 
 def test_hooks_json_is_valid_and_uses_documented_vars():
     hooks = _load_json("plugin/hooks/hooks.json")["hooks"]
-    # SessionStart must bootstrap (CLAUDE_PLUGIN_ROOT) before invoking the venv.
+    # No lifecycle hook may install packages; SessionStart uses only the
+    # shared fail-open launcher after the user explicitly installs Forecost.
     cmds = [h["command"] for h in hooks["SessionStart"][0]["hooks"]]
-    assert any("CLAUDE_PLUGIN_ROOT" in c and "bootstrap.sh" in c for c in cmds)
-    assert any("CLAUDE_PLUGIN_DATA" in c and "forecost-hook session-start" in c for c in cmds)
+    assert all("bootstrap.sh" not in c for c in cmds)
+    assert any("CLAUDE_PLUGIN_ROOT" in c and "run-hook.sh session-start" in c for c in cmds)
+    for groups in hooks.values():
+        for group in groups:
+            for hook in group["hooks"]:
+                assert "bootstrap.sh" not in hook["command"]
+                assert "run-hook.sh" in hook["command"]
     # Stop is async (documented field).
     assert hooks["Stop"][0]["hooks"][0]["async"] is True
 
@@ -44,3 +50,6 @@ def test_bootstrap_pin_matches_plugin_version():
     boot = (ROOT / "plugin/scripts/bootstrap.sh").read_text(encoding="utf-8")
     plugin = _load_json("plugin/.claude-plugin/plugin.json")
     assert f'PLUGIN_VERSION="{plugin["version"]}"' in boot
+    assert 'INSTALL_SPEC="forecost==$PLUGIN_VERSION"' in boot
+    assert "git+" not in boot
+    assert "@main" not in boot

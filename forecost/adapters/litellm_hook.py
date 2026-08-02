@@ -27,6 +27,9 @@ lazy-imported so the core package stays lightweight).
 
 from __future__ import annotations
 
+import hashlib
+import re
+import sqlite3
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -62,18 +65,24 @@ class ForecostLogger(CustomLogger):
         self._policy_path = policy_path or (forecost_home() / "policy.toml")
         self._ledger_path = ledger_path
         self._sink: SyncLedgerSink | None = None
+        self._conn: sqlite3.Connection | None = None
 
     def _get_sink(self) -> SyncLedgerSink:
         if self._sink is None:
             self._sink = SyncLedgerSink(ledger_path=self._ledger_path)
         return self._sink
 
+    def _get_connection(self) -> sqlite3.Connection:
+        if self._conn is None:
+            self._conn = get_ledger_db(self._ledger_path)
+        return self._conn
+
     async def async_pre_call_hook(
         self, user_api_key_dict: Any, cache: Any, data: dict, call_type: str
     ):
         """Budget gate. Returns an error string to reject, or the data to allow."""
         try:
-            conn = get_ledger_db(self._ledger_path)
+            conn = self._get_connection()
             policy = load_policy_file(self._policy_path)
             decision = evaluate(conn, policy, agent="litellm")
             if decision.action == "deny":
@@ -95,31 +104,53 @@ def _usage_tokens(response_obj: Any) -> tuple[int, int]:
     raw_usage = getattr(response_obj, "usage", None) if response_obj is not None else None
     if raw_usage is None:
         return 0, 0
-    return (
+    values = (
         getattr(raw_usage, "prompt_tokens", 0) or 0,
         getattr(raw_usage, "completion_tokens", 0) or 0,
     )
+    if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in values):
+        raise ValueError("LiteLLM returned invalid token counts")
+    return values
+
+
+_SAFE_ATOM = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$")
+
+
+def _safe_atom(value: object, *, fallback: str | None = None) -> str | None:
+    if isinstance(value, str) and len(value) <= 256 and _SAFE_ATOM.fullmatch(value):
+        return value
+    return fallback
+
+
+def _opaque_call_id(value: object) -> str:
+    if isinstance(value, str) and len(value) <= 256 and _SAFE_ATOM.fullmatch(value):
+        return value
+    if value is None:
+        return str(uuid.uuid4())
+    digest = hashlib.sha256(str(value).encode("utf-8", errors="replace")).hexdigest()
+    return f"anon-{digest}"
 
 
 def _kwargs_to_event(kwargs: dict, response_obj: Any) -> UsageEvent:
-    call_id = kwargs.get("litellm_call_id") or str(uuid.uuid4())
+    call_id = _opaque_call_id(kwargs.get("litellm_call_id"))
     tokens_in, tokens_out = _usage_tokens(response_obj)
     response_cost = kwargs.get("response_cost")
     reported = (
         Money(amount=float(response_cost), currency="USD") if response_cost is not None else None
     )
-    user_id = (kwargs.get("litellm_params", {}).get("metadata") or {}).get("user_api_key_user_id")
     return UsageEvent(
         event_uid=f"litellm:{call_id}",
         ts=datetime.now(timezone.utc),
         source="litellm",
-        model=kwargs.get("model") or "unknown",
-        provider=kwargs.get("custom_llm_provider"),
-        session_uid=str(user_id) if user_id else None,
+        model=_safe_atom(kwargs.get("model"), fallback="unknown") or "unknown",
+        provider=_safe_atom(kwargs.get("custom_llm_provider")),
+        # A gateway user is not a run/session. Leave session scope unknown
+        # until LiteLLM exposes a real, documented session identity.
+        session_uid=None,
         run_id=call_id,
         agent="litellm",
         tokens_in=tokens_in,
         tokens_out=tokens_out,
         reported_cost=reported,
-        metadata={"call_type": kwargs.get("call_type")},
+        metadata={"call_type": _safe_atom(kwargs.get("call_type"))},
     )

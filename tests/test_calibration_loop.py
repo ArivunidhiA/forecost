@@ -5,6 +5,10 @@ these tests drive the real production path: a session is created, an estimate is
 recorded against it, that session's events are ingested, then reconcile runs.
 """
 
+import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 
 from forecost.adapters.base import UsageEvent
@@ -81,6 +85,56 @@ def test_reconcile_estimates_is_idempotent(ledger_conn):
     _record_run(ledger_conn, "s-x", _estimate(), 0.30, "e3")
     assert reconcile_estimates(ledger_conn) == 1
     assert reconcile_estimates(ledger_conn) == 0  # already scored, never re-scored
+
+
+def test_reconcile_estimates_is_idempotent_across_two_connections(tmp_path, monkeypatch):
+    """Two async hook processes may select the same pending estimate before
+    either inserts it. The database uniqueness constraint is the final arbiter:
+    exactly one process reports and persists the reconciliation."""
+    from forecost.ledger.db import _apply_pragmas
+    from forecost.ledger.schema import apply_schema
+
+    path = tmp_path / "concurrent-ledger.db"
+    seed = sqlite3.connect(path)
+    seed.row_factory = sqlite3.Row
+    _apply_pragmas(seed)
+    apply_schema(seed)
+    _record_run(seed, "s-concurrent", _estimate(), 0.30, "e-concurrent")
+    seed.close()
+
+    barrier = threading.Barrier(2)
+    original_window_spend = q.session_window_spend
+
+    def synchronized_window_spend(*args, **kwargs):
+        result = original_window_spend(*args, **kwargs)
+        barrier.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(q, "session_window_spend", synchronized_window_spend)
+    # Independent hook processes do not share the in-process RLock. Bypass it
+    # here to force both connections past the stale candidate snapshot and
+    # exercise the database uniqueness constraint that arbitrates that race.
+    monkeypatch.setattr("forecost.estimate.calibration.ledger_write_lock", nullcontext())
+
+    def reconcile_once() -> int:
+        conn = sqlite3.connect(path, timeout=5)
+        conn.row_factory = sqlite3.Row
+        _apply_pragmas(conn)
+        try:
+            return reconcile_estimates(conn)
+        finally:
+            conn.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _index: reconcile_once(), range(2)))
+
+    verify = sqlite3.connect(path)
+    try:
+        count = verify.execute("SELECT COUNT(*) FROM reconciliations").fetchone()[0]
+    finally:
+        verify.close()
+    assert sorted(results) == [0, 1]
+    assert count == 1
 
 
 def test_reconcile_cold_start_records_actual_but_no_band(ledger_conn):

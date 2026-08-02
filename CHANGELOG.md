@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.0] - 2026-07-17
+## [0.3.0] - Unreleased
 
 Repositioning: forecost is now a local, content-free **ledger** for AI agent
 work — it records what your agents actually cost across every harness,
@@ -33,9 +33,23 @@ The legacy calendar-spend forecaster (`forecast`/`track`/`watch`/`demo`/
 - **Estimator**: shrinkage now blends toward the global pool (was collapsing
   toward zero); estimate↔actual calibration associates by session + time window.
 - **Ingest durability**: the byte cursor advances only past newline-terminated,
-  successfully-emitted lines; the async flush is a real drain barrier.
+  successfully-emitted lines; schema-invalid complete records are skipped
+  without pinning the cursor; the async flush is a real drain barrier.
+- **Recovery durability**: failed batches publish immutable per-batch spools;
+  replay preserves the original amount, basis, and pricing provenance and
+  cannot overwrite a concurrently spilled batch.
+- **Transaction integrity**: every writer sharing the process connection uses
+  one transaction lock; reconciliation is unique and conflict-safe per estimate.
 - **Policy**: `scope="run"` is rejected at parse time; a session-scoped rule with
   no active session no longer measures all-time spend.
+- **Privacy and deletion**: all persisted event fields are bounded and validated;
+  custom data roots are never claimed or purged without an ownership marker.
+- **Plugin supply chain**: Claude lifecycle hooks never install packages. The
+  pinned package install is an explicit user action and every hook remains
+  fail-open when the executable is absent.
+- **Packaging**: the optional LiteLLM extra is bounded to the wheel-tested
+  compatibility line, avoiding an undeclared modern Rust requirement in CI and
+  on macOS/Python 3.12 installs.
 
 ## [0.2.0] - 2026-03-12
 

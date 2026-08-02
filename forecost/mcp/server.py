@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Literal
@@ -33,7 +34,7 @@ class CostSummaryInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     project_id: int = Field(
-        description="ForeCost project ID. Use forecost_list_projects to find it."
+        gt=0, description="ForeCost project ID. Use forecost_list_projects to find it."
     )
     group_by: Literal["day", "model", "provider"] | None = Field(
         default="day",
@@ -52,7 +53,7 @@ class ForecastInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     project_id: int = Field(
-        description="ForeCost project ID. Use forecost_list_projects to find it."
+        gt=0, description="ForeCost project ID. Use forecost_list_projects to find it."
     )
 
 
@@ -62,7 +63,7 @@ class AnomalyInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     project_id: int = Field(
-        description="ForeCost project ID. Use forecost_list_projects to find it."
+        gt=0, description="ForeCost project ID. Use forecost_list_projects to find it."
     )
 
 
@@ -72,7 +73,7 @@ class RecentCallsInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     project_id: int = Field(
-        description="ForeCost project ID. Use forecost_list_projects to find it."
+        gt=0, description="ForeCost project ID. Use forecost_list_projects to find it."
     )
     limit: int | None = Field(
         default=20,
@@ -88,17 +89,19 @@ class TrackCallInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     project_id: int = Field(
-        description="ForeCost project ID. Use forecost_list_projects to find it."
+        gt=0, description="ForeCost project ID. Use forecost_list_projects to find it."
     )
     model: str = Field(
         min_length=1,
+        max_length=200,
         description="Model name, e.g. 'gpt-4o', 'claude-sonnet-4-20250514'",
     )
-    tokens_in: int = Field(ge=0, description="Input/prompt token count")
-    tokens_out: int = Field(ge=0, description="Output/completion token count")
+    tokens_in: int = Field(ge=0, le=1_000_000_000_000, description="Input/prompt token count")
+    tokens_out: int = Field(ge=0, le=1_000_000_000_000, description="Output/completion token count")
     cost_usd: float | None = Field(
         default=None,
         ge=0,
+        le=1_000_000_000,
         description="Cost in USD. If omitted, auto-calculated from ForeCost's pricing database.",
     )
 
@@ -374,7 +377,12 @@ def forecost_track_call(
     tokens_out: int,
     cost_usd: float | None = None,
 ) -> str:
-    """Log an LLM API call to ForeCost's usage database."""
+    """Log an LLM API call when MCP mutation is explicitly enabled."""
+    if os.environ.get("FORECOST_MCP_ALLOW_WRITES") != "1":
+        return (
+            "Error: MCP is read-only by default. Set FORECOST_MCP_ALLOW_WRITES=1 "
+            "in the server environment to enable this legacy mutation tool."
+        )
     try:
         params = TrackCallInput(
             project_id=project_id,

@@ -17,8 +17,13 @@ from forecost.pricing import DEFAULT_COST
 
 
 @click.command("pricing-audit")
-@click.option("--currency", default="USD")
-def pricing_audit(currency):
+@click.option(
+    "--currency",
+    type=click.Choice(["USD"], case_sensitive=False),
+    default="USD",
+    help="Posting currency to audit (currently USD only).",
+)
+def pricing_audit(currency: str) -> None:
     """Report unknown/guessed-price models in the ledger and table freshness."""
     conn = get_ledger_db()
     click.echo(f"Pricing table: {PRICING_SNAPSHOT_VERSION}")

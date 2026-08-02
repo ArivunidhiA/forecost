@@ -2,7 +2,7 @@
 
 The old calendar-spend product wrote ~/.forecost/costs.db (usage_logs + projects).
 This re-emits each legacy usage row into the ledger as a usage_event + a
-pricing_table posting computed with the *current* pricing table (the legacy
+pricing_table posting computed with the event-effective pricing table (the legacy
 cost_usd was computed with the old, since-corrected prices, so it is not carried
 over — the tokens are the source of truth). Idempotent: each row keys on
 `legacy:{id}`, so re-running migrates only new rows. The legacy costs.db is left
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 
 import click
 
@@ -21,14 +22,18 @@ from forecost.core.paths import forecost_home
 from forecost.ledger.sink import SyncLedgerSink
 
 
-def _parse_ts(raw: str):
+def _parse_ts(raw: object) -> datetime | None:
+    """Parse a legacy timestamp as aware UTC; invalid timestamps stay invalid."""
     try:
-        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
     except (ValueError, TypeError):
-        return datetime.now(timezone.utc)
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
-def _legacy_rows(costs_db):
+def _legacy_rows(costs_db: Path) -> tuple[list[sqlite3.Row], dict[int, str]]:
     conn = sqlite3.connect(str(costs_db))
     conn.row_factory = sqlite3.Row
     try:
@@ -61,12 +66,16 @@ def migrate() -> None:
         click.echo("Legacy costs.db has no usage rows — nothing to migrate.")
         return
 
-    sink = SyncLedgerSink()  # re-prices via the current table; INSERT OR IGNORE dedups
-    migrated = duplicate = 0
+    sink = SyncLedgerSink()  # re-prices at event time; event_uid dedups
+    migrated = duplicate = invalid_timestamp = 0
     for r in rows:
+        timestamp = _parse_ts(r["timestamp"])
+        if timestamp is None:
+            invalid_timestamp += 1
+            continue
         event = UsageEvent(
             event_uid=f"legacy:{r['id']}",
-            ts=_parse_ts(r["timestamp"]),
+            ts=timestamp,
             source="legacy-costs-db",
             model=r["model"],
             provider=r["provider"],
@@ -83,6 +92,7 @@ def migrate() -> None:
 
     click.echo(
         f"Migrated {migrated} legacy usage row(s) into the ledger "
-        f"({duplicate} already present). Legacy costs.db left untouched; re-priced "
-        "with the current table (run `forecost ledger status` to see the result)."
+        f"({duplicate} already present, {invalid_timestamp} skipped: invalid timestamp). "
+        "Legacy costs.db left untouched; re-priced with the event-effective table "
+        "(run `forecost ledger status` to see the result)."
     )

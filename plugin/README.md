@@ -9,7 +9,7 @@ exits 0 on error.
 
 | Hook event | What forecost does |
 |---|---|
-| `SessionStart` | Bootstraps a private venv (first run) and registers the session/workspace. |
+| `SessionStart` | Registers the session/workspace using the explicitly installed `forecost-hook`. |
 | `UserPromptSubmit` | Classifies the turn, records a shadow estimate, evaluates budget policy (can `block` on a hard cap). |
 | `PreToolUse` (Task/Bash/WebFetch/WebSearch) | Cheap budget check; `ask`/`deny` only on an explicit, healthy policy decision. |
 | `Stop` / `SessionEnd` | Ingests the transcript delta, reconciles estimates, logs the shadow guard. |
@@ -17,14 +17,20 @@ exits 0 on error.
 ## Install (marketplace)
 
 ```
+python3 -m pip install "forecost==0.3.0"
 /plugin marketplace add ArivunidhiA/forecost
 /plugin install forecost@forecost
 ```
 
-On first `SessionStart`, `scripts/bootstrap.sh` creates a venv in the plugin's
-persistent data dir (`${CLAUDE_PLUGIN_DATA}/venv`) and installs forecost from git
-(there is no PyPI release yet). Subsequent hooks reuse it. Requires `python3` (or
-`uv`) on your `PATH`.
+Installation is deliberately explicit: no Claude lifecycle hook downloads or
+executes packages. `scripts/run-hook.sh` first uses an existing isolated plugin
+venv, then the `forecost-hook` on `PATH`, and otherwise exits successfully as a
+no-op. `scripts/bootstrap.sh` remains an optional, manually invoked macOS/Linux
+helper that installs exactly `forecost==0.3.0`; it is never run automatically.
+
+The marketplace launcher currently supports macOS and Linux. Windows users
+should use the manual installation below until a native launcher has passed the
+same lifecycle tests.
 
 ## Budget policy
 

@@ -4,86 +4,37 @@ pricing.py, and hands (UsageEvent, postings) to the LedgerWriteQueue.
 
 from __future__ import annotations
 
-import sqlite3
-from datetime import datetime, timezone
+from forecost.adapters.base import (
+    LedgerSink,
+    PostingSpec,
+    UsageEvent,
+    normalize_posting_spec,
+    normalize_usage_event,
+    validate_usage_event,
+)
+from forecost.ledger.db import (
+    get_ledger_db,
+    get_or_create_session,
+    get_or_create_workspace,
+    ledger_write_lock,
+)
+from forecost.ledger.writer import LedgerWriteError, LedgerWriteQueue, _insert_batch
+from forecost.pricing import calculate_cost, get_pricing_period, is_priced
 
-from forecost.adapters.base import LedgerSink, PostingSpec, UsageEvent
-from forecost.ledger.db import get_ledger_db
-from forecost.ledger.writer import LedgerWriteQueue
-from forecost.pricing import calculate_cost, is_priced
-
-PRICING_SNAPSHOT_VERSION = "bundled-2026-07"
+PRICING_SNAPSHOT_VERSION = "bundled-2026-08"
 # Marker appended to pricing_version when the model was not in the pricing table
 # and its cost is a DEFAULT_COST guess. Kept as a version suffix (not a new
 # basis) so canonical spend selection is unaffected; `forecost pricing-audit`
 # and reconcile can surface these as low-confidence.
 UNPRICED_SUFFIX = "/unpriced-guess"
 
-
-def _get_or_create_workspace(conn: sqlite3.Connection, root_path: str) -> int:
-    row = conn.execute("SELECT id FROM workspaces WHERE root_path = ?", (root_path,)).fetchone()
-    if row:
-        return row["id"]
-    now = datetime.now(timezone.utc).isoformat()
-    name = root_path.rstrip("/").rsplit("/", 1)[-1] or root_path
-    cur = conn.execute(
-        "INSERT INTO workspaces (name, root_path, created_at) VALUES (?,?,?)",
-        (name, root_path, now),
-    )
-    conn.commit()
-    if cur.lastrowid is None:  # pragma: no cover - unreachable after a successful INSERT
-        raise RuntimeError("INSERT into workspaces did not yield a rowid")
-    return cur.lastrowid
+# Backward-compatible internal imports used by hooks and focused tests.
+_get_or_create_session = get_or_create_session
+_get_or_create_workspace = get_or_create_workspace
 
 
-def _get_or_create_session(
-    conn: sqlite3.Connection, session_uid: str, workspace_id: int | None, agent: str, ts: str
-) -> int:
-    row = conn.execute("SELECT id FROM sessions WHERE session_uid = ?", (session_uid,)).fetchone()
-    if row:
-        return row["id"]
-    cur = conn.execute(
-        "INSERT INTO sessions (session_uid, workspace_id, agent, started_at) VALUES (?,?,?,?)",
-        (session_uid, workspace_id, agent, ts),
-    )
-    conn.commit()
-    if cur.lastrowid is None:  # pragma: no cover - unreachable after a successful INSERT
-        raise RuntimeError("INSERT into sessions did not yield a rowid")
-    return cur.lastrowid
-
-
-def _resolve_and_price(
-    conn: sqlite3.Connection, event: UsageEvent
-) -> tuple[UsageEvent, list[PostingSpec]]:
-    workspace_id = None
-    if event.workspace_path:
-        workspace_id = _get_or_create_workspace(conn, event.workspace_path)
-    session_id = None
-    if event.session_uid:
-        session_id = _get_or_create_session(
-            conn, event.session_uid, workspace_id, event.agent or event.source, event.ts.isoformat()
-        )
-
-    resolved = UsageEvent(
-        event_uid=event.event_uid,
-        ts=event.ts,
-        source=event.source,
-        model=event.model,
-        provider=event.provider,
-        session_uid=event.session_uid,
-        run_id=event.run_id,
-        agent=event.agent,
-        workspace_path=event.workspace_path,
-        tokens_in=event.tokens_in,
-        tokens_out=event.tokens_out,
-        tokens_cache_read=event.tokens_cache_read,
-        tokens_cache_write=event.tokens_cache_write,
-        reported_cost=event.reported_cost,
-        metadata=event.metadata,
-        session_db_id=session_id,
-        workspace_db_id=workspace_id,
-    )
-
+def _price_event(event: UsageEvent) -> list[PostingSpec]:
+    validate_usage_event(event)
     postings: list[PostingSpec] = []
     usd_cost = calculate_cost(
         event.model,
@@ -91,8 +42,12 @@ def _resolve_and_price(
         event.tokens_out,
         event.tokens_cache_read,
         event.tokens_cache_write,
+        as_of=event.ts,
     )
     pricing_version = PRICING_SNAPSHOT_VERSION
+    period = get_pricing_period(event.model, event.ts)
+    if period:
+        pricing_version += f"/{period}"
     if not is_priced(event.model):
         pricing_version += UNPRICED_SUFFIX  # cost is a DEFAULT_COST guess, flag it
     postings.append(
@@ -111,84 +66,68 @@ def _resolve_and_price(
                 basis="source_reported",
             )
         )
-    return resolved, postings
+    return [normalize_posting_spec(posting) for posting in postings]
 
 
 class SyncLedgerSink(LedgerSink):
     """Direct, synchronous writes — correct-by-default for CLI batch ingestion
     (e.g. `forecost ingest`, reading a few hundred JSONL turns in one pass).
     Uses INSERT OR IGNORE on event_uid for idempotent re-ingest, same as the
-    async path. Not for the hook hot path — use DefaultLedgerSink there."""
+    async path. This is the supported sink for CLI, hooks, and gateways."""
 
     def __init__(self, ledger_path=None) -> None:
         self._conn = get_ledger_db(ledger_path)
 
     def emit(self, event: UsageEvent) -> bool:
-        resolved, postings = _resolve_and_price(self._conn, event)
-        cur = self._conn.execute(
-            """
-            INSERT OR IGNORE INTO usage_events (
-                event_uid, ts, source, session_id, workspace_id, run_id,
-                provider, model, tokens_in, tokens_out, tokens_cache_read,
-                tokens_cache_write, metadata
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                resolved.event_uid,
-                resolved.ts.isoformat(),
-                resolved.source,
-                resolved.session_db_id,
-                resolved.workspace_db_id,
-                resolved.run_id,
-                resolved.provider,
-                resolved.model,
-                resolved.tokens_in,
-                resolved.tokens_out,
-                resolved.tokens_cache_read,
-                resolved.tokens_cache_write,
-                __import__("json").dumps(resolved.metadata) if resolved.metadata else None,
-            ),
-        )
-        if cur.rowcount == 0:
-            return False  # duplicate event_uid — nothing new recorded
-        event_db_id = cur.lastrowid
-        now = datetime.now(timezone.utc).isoformat()
-        for p in postings:
-            self._conn.execute(
-                "INSERT INTO postings "
-                "(event_id, currency, amount, basis, pricing_version, created_at) "
-                "VALUES (?,?,?,?,?,?)",
-                (event_db_id, p.currency, p.amount, p.basis, p.pricing_version, now),
-            )
-        self._conn.commit()
-        return True
+        # A shared check_same_thread=False connection still needs application
+        # serialization: without this lock, one thread could commit another
+        # thread's half-written event. _insert_batch wraps resolution, event,
+        # postings, and commit in one rollback-safe transaction.
+        normalized = normalize_usage_event(event)
+        with ledger_write_lock:
+            return _insert_batch(self._conn, [(normalized, _price_event(normalized))]) == 1
+
+    def emit_with_postings(self, event: UsageEvent, postings: list[PostingSpec]) -> bool:
+        """Replay already-durable postings without re-pricing or losing provenance."""
+        normalized = normalize_usage_event(event)
+        normalized_postings = [normalize_posting_spec(posting) for posting in postings]
+        with ledger_write_lock:
+            return _insert_batch(self._conn, [(normalized, normalized_postings)]) == 1
 
     def flush(self, timeout: float = 2.0) -> None:
-        self._conn.commit()
+        del timeout
+        with ledger_write_lock:
+            self._conn.commit()
 
 
 class DefaultLedgerSink(LedgerSink):
-    """Resolves ids, computes a pricing_table posting for every event, and
-    writes through the async queue. If the event carries a source-reported
-    cost, that becomes an additional, higher-precedence posting."""
+    """Internal asynchronous sink retained for compatibility and stress tests.
+
+    Supported integrations use ``SyncLedgerSink`` so returning from ``emit``
+    means the event is durable. This class guarantees durability on explicit
+    ``flush`` and normal process exit, but queued duplicate status is unknown.
+    """
 
     def __init__(self, ledger_path=None) -> None:
         from forecost.ledger.db import LEDGER_PATH
 
-        self._conn = get_ledger_db(ledger_path)
-        self._queue = LedgerWriteQueue(ledger_path or LEDGER_PATH)
+        self._queue = LedgerWriteQueue(ledger_path if ledger_path is not None else LEDGER_PATH)
 
     def emit(self, event: UsageEvent) -> bool:
-        resolved, postings = _resolve_and_price(self._conn, event)
-        self._queue.put(resolved, postings)
+        normalized = normalize_usage_event(event)
+        accepted = self._queue.put(normalized, _price_event(normalized))
+        if not accepted:
+            raise LedgerWriteError(self._queue.last_error or "ledger queue refused event")
         # Queued for the async worker; duplicate detection happens at write time.
         # Report True (accepted for writing) — the DB's INSERT OR IGNORE is the
         # source of truth for idempotency, so callers must not treat this as a
         # guaranteed new-row count.
-        return True
+        return accepted
 
     def flush(self, timeout: float = 5.0) -> None:
         # Real drain barrier (not a sleep): returns once every queued event has
         # been committed, so a subsequent read (e.g. calibration reconcile) sees
-        # its own writes. Fail-open: a drain timeout just means we proceed.
-        self._queue.drain(timeout)
+        # its own writes. Callers that need read-your-writes must see a drain or
+        # spill failure rather than silently continuing with stale aggregates.
+        if not self._queue.drain(timeout):
+            raise LedgerWriteError(self._queue.last_error or "ledger drain failed")

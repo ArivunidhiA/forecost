@@ -146,9 +146,16 @@ def test_create_project_duplicate_path_raises(db_path):
 
 
 def test_write_queue_on_exit_handles_full_queue(db_path):
-    """_on_exit doesn't raise even if the internal queue is at capacity."""
+    """_on_exit durably drains even if the internal queue is at capacity."""
+    pid = create_project(
+        name="exit-drain",
+        path="/tmp/exit-drain",
+        baseline_daily_cost=1.0,
+        baseline_total_days=1,
+        baseline_total_cost=1.0,
+    )
     q = WriteQueue()
-    dummy = (1, "2026-01-01T00:00:00Z", "m", "p", 0, 0, 0.0, None)
+    dummy = (pid, "2026-01-01T00:00:00Z", "m", "p", 0, 0, 0.0, None)
     for _ in range(10_000):
         try:
             q._queue.put_nowait(dummy)

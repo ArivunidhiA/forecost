@@ -29,8 +29,16 @@ CANONICAL_BASIS_ORDER = ("source_reported", "pricing_table")
 # Selects exactly one posting per (event_id, currency): the highest-precedence
 # basis available. Static SQL (no interpolation) — bind :currency once.
 _CANONICAL_CTE = """
-    SELECT event_id, currency, amount FROM (
-        SELECT p.event_id, p.currency, p.amount,
+    SELECT event_id, currency, amount, basis, pricing_version,
+           CASE
+               WHEN basis = 'source_reported' THEN 1
+               WHEN basis = 'pricing_table'
+                    AND pricing_version IS NOT NULL
+                    AND pricing_version NOT LIKE '%/unpriced-guess' THEN 1
+               ELSE 0
+           END AS pricing_confident
+    FROM (
+        SELECT p.event_id, p.currency, p.amount, p.basis, p.pricing_version,
                ROW_NUMBER() OVER (
                    PARTITION BY p.event_id, p.currency
                    ORDER BY CASE p.basis
@@ -43,7 +51,17 @@ _CANONICAL_CTE = """
     ) WHERE _rn = 1
 """
 
-_BASIS_CTE = "SELECT event_id, currency, amount FROM postings WHERE currency = ? AND basis = ?"
+_BASIS_CTE = """
+    SELECT event_id, currency, amount, basis, pricing_version,
+           CASE
+               WHEN basis = 'source_reported' THEN 1
+               WHEN basis = 'pricing_table'
+                    AND pricing_version IS NOT NULL
+                    AND pricing_version NOT LIKE '%/unpriced-guess' THEN 1
+               ELSE 0
+           END AS pricing_confident
+    FROM postings WHERE currency = ? AND basis = ?
+"""
 
 
 def _posting_source(currency: str, basis: str) -> tuple[str, tuple]:
@@ -74,6 +92,39 @@ class ScopeSpend:
     currency: str
     total: float
     n_events: int
+    confident_total: float = 0.0
+    unpriced_total: float = 0.0
+    n_unpriced_events: int = 0
+
+    @property
+    def fully_priced(self) -> bool:
+        """Whether every selected posting has an independently known valuation."""
+        return self.n_unpriced_events == 0
+
+    @property
+    def n_confident_events(self) -> int:
+        return self.n_events - self.n_unpriced_events
+
+
+_SPEND_AGGREGATES = (
+    "COALESCE(SUM(src.amount), 0) AS total, COUNT(*) AS n, "
+    "COALESCE(SUM(CASE WHEN src.pricing_confident = 1 THEN src.amount ELSE 0 END), 0) "
+    "AS confident_total, "
+    "COALESCE(SUM(CASE WHEN src.pricing_confident = 0 THEN src.amount ELSE 0 END), 0) "
+    "AS unpriced_total, "
+    "COALESCE(SUM(CASE WHEN src.pricing_confident = 0 THEN 1 ELSE 0 END), 0) AS n_unpriced"
+)
+
+
+def _scope_spend_from_row(currency: str, row: sqlite3.Row) -> ScopeSpend:
+    return ScopeSpend(
+        currency=currency,
+        total=row["total"],
+        n_events=row["n"],
+        confident_total=row["confident_total"],
+        unpriced_total=row["unpriced_total"],
+        n_unpriced_events=row["n_unpriced"],
+    )
 
 
 def scope_spend(
@@ -85,28 +136,36 @@ def scope_spend(
 ) -> ScopeSpend:
     """Canonical spend in one currency since a timestamp, optionally scoped to a workspace."""
     src_sql, src_params = _posting_source(currency, basis)
-    body = (
-        "SELECT COALESCE(SUM(src.amount), 0) AS total, COUNT(*) AS n "
-        "FROM src JOIN usage_events e ON e.id = src.event_id WHERE e.ts >= ?"
-    )
+    # `_SPEND_AGGREGATES` is a module constant, never caller input.
+    body = f"SELECT {_SPEND_AGGREGATES} FROM src JOIN usage_events e ON e.id = src.event_id "  # nosec B608  # noqa: S608
+    body += "WHERE e.ts >= ?"
     params: list = [*src_params, since_iso]
     if workspace_id is not None:
         body += " AND e.workspace_id = ?"
         params.append(workspace_id)
     row = conn.execute(_with_src(src_sql, body), params).fetchone()
-    return ScopeSpend(currency=currency, total=row["total"], n_events=row["n"])
+    return _scope_spend_from_row(currency, row)
+
+
+def session_spend_breakdown(
+    conn: sqlite3.Connection,
+    session_id: int,
+    currency: str = "USD",
+    basis: str = "canonical",
+) -> ScopeSpend:
+    """Session spend with pricing confidence preserved for policy decisions."""
+    src_sql, src_params = _posting_source(currency, basis)
+    # `_SPEND_AGGREGATES` is a module constant, never caller input.
+    body = f"SELECT {_SPEND_AGGREGATES} FROM src JOIN usage_events e ON e.id = src.event_id "  # nosec B608  # noqa: S608
+    body += "WHERE e.session_id = ?"
+    row = conn.execute(_with_src(src_sql, body), [*src_params, session_id]).fetchone()
+    return _scope_spend_from_row(currency, row)
 
 
 def session_spend(
     conn: sqlite3.Connection, session_id: int, currency: str = "USD", basis: str = "canonical"
 ) -> float:
-    src_sql, src_params = _posting_source(currency, basis)
-    body = (
-        "SELECT COALESCE(SUM(src.amount), 0) AS total "
-        "FROM src JOIN usage_events e ON e.id = src.event_id WHERE e.session_id = ?"
-    )
-    row = conn.execute(_with_src(src_sql, body), [*src_params, session_id]).fetchone()
-    return row["total"]
+    return session_spend_breakdown(conn, session_id, currency, basis).total
 
 
 def spend_by_model(
@@ -115,7 +174,10 @@ def spend_by_model(
     """Top models by canonical spend (event count + summed canonical amount)."""
     src_sql, src_params = _posting_source(currency, basis)
     body = (
-        "SELECT e.model AS model, COUNT(*) AS n, COALESCE(SUM(src.amount), 0) AS total "
+        "SELECT e.model AS model, COUNT(*) AS n, COALESCE(SUM(src.amount), 0) AS total, "
+        "COALESCE(SUM(CASE WHEN src.pricing_confident = 0 THEN src.amount ELSE 0 END), 0) "
+        "AS unpriced_total, SUM(CASE WHEN src.pricing_confident = 0 THEN 1 ELSE 0 END) "
+        "AS n_unpriced "
         "FROM src JOIN usage_events e ON e.id = src.event_id "
         "GROUP BY e.model ORDER BY total DESC LIMIT ?"
     )
@@ -129,7 +191,10 @@ def spend_by_workspace(
     src_sql, src_params = _posting_source(currency, basis)
     body = (
         "SELECT w.name AS name, w.root_path AS root_path, "
-        "COUNT(*) AS n, COALESCE(SUM(src.amount), 0) AS total "
+        "COUNT(*) AS n, COALESCE(SUM(src.amount), 0) AS total, "
+        "COALESCE(SUM(CASE WHEN src.pricing_confident = 0 THEN src.amount ELSE 0 END), 0) "
+        "AS unpriced_total, SUM(CASE WHEN src.pricing_confident = 0 THEN 1 ELSE 0 END) "
+        "AS n_unpriced "
         "FROM src JOIN usage_events e ON e.id = src.event_id "
         "JOIN workspaces w ON w.id = e.workspace_id GROUP BY w.id ORDER BY total DESC"
     )

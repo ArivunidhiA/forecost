@@ -151,6 +151,37 @@ def test_scan_transcript_errors_is_content_free_and_fires_on_streak(tmp_path):
     assert scan_transcript_errors("/does/not/exist.jsonl") is None
 
 
+def test_scan_transcript_uses_current_streak_and_final_tail_result(tmp_path):
+    import json
+
+    from forecost.estimate.guard import scan_transcript_errors
+
+    transcript = tmp_path / "recovered.jsonl"
+    with open(transcript, "w", encoding="utf-8") as stream:
+        # This historical streak is still inside the five-result window, but
+        # clean progress followed it. Neither rule describes the current tail.
+        for is_error in (True, True, True, False, False):
+            stream.write(json.dumps(_err_result(is_error)) + "\n")
+
+    assert scan_transcript_errors(str(transcript)) is None
+
+
+def test_scan_transcript_reads_a_bounded_suffix_of_large_history(tmp_path):
+    import json
+
+    from forecost.estimate.guard import scan_transcript_errors
+
+    transcript = tmp_path / "large.jsonl"
+    with transcript.open("wb") as stream:
+        stream.write(b"x" * (5 * 1024 * 1024) + b"\n")
+        for _ in range(3):
+            stream.write(json.dumps(_err_result(True)).encode() + b"\n")
+
+    evidence = scan_transcript_errors(str(transcript))
+    assert evidence is not None
+    assert evidence.rule_id == "consec_tool_errors"
+
+
 def test_record_guard_flag_writes_shadow_row(ledger_conn):
     from forecost.estimate.guard import GuardEvidence, record_guard_flag
 

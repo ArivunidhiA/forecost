@@ -227,10 +227,11 @@ def test_recent_calls_returns_list(mock_logs: MagicMock) -> None:
 @patch("forecost.mcp.server.get_provider", return_value="openai")
 @patch("forecost.mcp.server.calculate_cost", return_value=0.025)
 def test_track_call_auto_calculates_cost(
-    mock_calc: MagicMock, mock_provider: MagicMock, mock_db: MagicMock
+    mock_calc: MagicMock, mock_provider: MagicMock, mock_db: MagicMock, monkeypatch
 ) -> None:
     """forecost_track_call with cost_usd=None auto-calculates cost."""
     mock_conn = MagicMock()
+    monkeypatch.setenv("FORECOST_MCP_ALLOW_WRITES", "1")
     mock_db.return_value = mock_conn
     # First execute returns project existence check, second is the INSERT
     mock_conn.execute.return_value.fetchone.return_value = {"id": 1}
@@ -249,10 +250,11 @@ def test_track_call_auto_calculates_cost(
 @patch("forecost.mcp.server.get_provider", return_value="anthropic")
 @patch("forecost.mcp.server.calculate_cost")
 def test_track_call_explicit_cost(
-    mock_calc: MagicMock, mock_provider: MagicMock, mock_db: MagicMock
+    mock_calc: MagicMock, mock_provider: MagicMock, mock_db: MagicMock, monkeypatch
 ) -> None:
     """forecost_track_call with explicit cost_usd uses that value."""
     mock_conn = MagicMock()
+    monkeypatch.setenv("FORECOST_MCP_ALLOW_WRITES", "1")
     mock_db.return_value = mock_conn
     mock_conn.execute.return_value.fetchone.return_value = {"id": 1}
 
@@ -283,6 +285,15 @@ def test_validation_limit_zero() -> None:
     """limit=0 raises validation error."""
     with pytest.raises(ValidationError):
         RecentCallsInput(project_id=1, limit=0)
+
+
+def test_track_call_is_read_only_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("FORECOST_MCP_ALLOW_WRITES", raising=False)
+
+    result = forecost_track_call(project_id=1, model="gpt-4o", tokens_in=1_000, tokens_out=500)
+
+    assert "read-only by default" in result
+    assert "FORECOST_MCP_ALLOW_WRITES=1" in result
 
 
 # ---------------------------------------------------------------------------
@@ -393,10 +404,11 @@ def test_anomalies_zero_baseline(mock_forecaster_cls: MagicMock) -> None:
 @patch("forecost.mcp.server.get_provider", return_value="openai")
 @patch("forecost.mcp.server.calculate_cost", return_value=0.01)
 def test_track_call_nonexistent_project(
-    mock_calc: MagicMock, mock_provider: MagicMock, mock_db: MagicMock
+    mock_calc: MagicMock, mock_provider: MagicMock, mock_db: MagicMock, monkeypatch
 ) -> None:
     """forecost_track_call with nonexistent project returns error."""
     mock_conn = MagicMock()
+    monkeypatch.setenv("FORECOST_MCP_ALLOW_WRITES", "1")
     mock_db.return_value = mock_conn
     mock_conn.execute.return_value.fetchone.return_value = None
 

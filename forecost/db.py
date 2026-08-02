@@ -5,13 +5,16 @@ Zero-maintenance SQLite database module for forecost cost tracking.
 import atexit
 import json
 import logging
-import os
 import sqlite3
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from queue import Empty, Full, Queue
+
+from forecost.core.errlog import log_exception
+from forecost.core.paths import chmod_private, ensure_private_dir, forecost_home
+from forecost.core.spool import write_immutable_spool
 
 logger = logging.getLogger(__name__)
 
@@ -28,17 +31,29 @@ __all__ = [
     "WriteQueue",
 ]
 
-_DB_PATH = Path.home() / ".forecost" / "costs.db"
+_INITIAL_DB_PATH = forecost_home() / "costs.db"
+_DB_PATH = _INITIAL_DB_PATH
 _BATCH_SIZE = 100
 _FLUSH_INTERVAL = 2.0
-_EXIT_TIMEOUT = 1.0
 
 _conn: sqlite3.Connection | None = None
 _conn_lock = threading.Lock()
 
 
+def _active_db_path() -> Path:
+    """Honor late FORECOST_HOME overrides while preserving test injection."""
+    if _DB_PATH == _INITIAL_DB_PATH:
+        return forecost_home() / "costs.db"
+    return _DB_PATH
+
+
 def _ensure_dir() -> None:
-    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(_active_db_path().parent)
+
+
+def _lock_down_db_files(path: Path) -> None:
+    for candidate in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
+        chmod_private(candidate)
 
 
 def _apply_pragmas(conn: sqlite3.Connection) -> None:
@@ -101,7 +116,8 @@ def get_or_create_db() -> sqlite3.Connection:
         if _conn is not None:
             return _conn
         _ensure_dir()
-        _conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
+        db_path = _active_db_path()
+        _conn = sqlite3.connect(str(db_path), check_same_thread=False)
         _conn.row_factory = sqlite3.Row
         _apply_pragmas(_conn)
         _init_schema(_conn)
@@ -109,6 +125,7 @@ def get_or_create_db() -> sqlite3.Connection:
         if "source" not in cols:
             _conn.execute("ALTER TABLE usage_logs ADD COLUMN source TEXT DEFAULT 'api'")
             _conn.commit()
+        _lock_down_db_files(db_path)
         return _conn
 
 
@@ -401,8 +418,10 @@ class WriteQueue:
 
     def _worker(self) -> None:
         _ensure_dir()
-        writer_conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
+        db_path = _active_db_path()
+        writer_conn = sqlite3.connect(str(db_path), check_same_thread=False)
         _apply_pragmas(writer_conn)
+        _lock_down_db_files(db_path)
         batch: list[tuple] = []
         last_flush = time.monotonic()
         while True:
@@ -429,50 +448,38 @@ class WriteQueue:
     def _flush(self, batch: list[tuple], conn: sqlite3.Connection) -> None:
         if not batch:
             return
-        log_path = Path.home() / ".forecost" / "error.log"
-        recovery_path = Path.home() / ".forecost" / "recovery.jsonl"
+        recovery_path = _active_db_path().parent / "legacy-recovery.jsonl"
         try:
             _insert_usage_logs_batch(conn, batch)
         except Exception as e:
             _ensure_dir()
-            try:
-                with open(log_path, "a", encoding="utf-8") as f:
-                    f.write(f"[db] {e!r}\n")
-            except OSError:
-                pass
+            log_exception("legacy-db", e)
             time.sleep(0.5)
             try:
                 _insert_usage_logs_batch(conn, batch)
             except Exception:
                 try:
-                    try:
-                        if os.path.getsize(recovery_path) > 1_000_000:
-                            with open(recovery_path, "r", encoding="utf-8") as rf:
-                                lines = rf.readlines()[-100:]
-                            with open(recovery_path, "w", encoding="utf-8") as wf:
-                                wf.writelines(lines)
-                    except OSError:
-                        pass
-                    with open(recovery_path, "a", encoding="utf-8") as f:
-                        for item in batch:
-                            d = {
-                                "project_id": item[0],
-                                "timestamp": item[1],
-                                "model": item[2],
-                                "provider": item[3],
-                                "tokens_in": item[4],
-                                "tokens_out": item[5],
-                                "cost_usd": item[6],
-                                "metadata": item[7],
-                                "source": item[8] if len(item) > 8 else "api",
-                            }
-                            f.write(json.dumps(d) + "\n")
+                    rows = [
+                        {
+                            "project_id": item[0],
+                            "timestamp": item[1],
+                            "model": item[2],
+                            "provider": item[3],
+                            "tokens_in": item[4],
+                            "tokens_out": item[5],
+                            "cost_usd": item[6],
+                            "metadata": item[7],
+                            "source": item[8] if len(item) > 8 else "api",
+                        }
+                        for item in batch
+                    ]
+                    write_immutable_spool(recovery_path, rows)
                 except OSError:
                     pass
 
     def _on_exit(self) -> None:
-        try:
-            self._queue.put(None, timeout=_EXIT_TIMEOUT)
-        except Exception:
-            return
-        self._thread.join(timeout=_EXIT_TIMEOUT)
+        # Sentinel ordering plus an unbounded normal-exit join prevents records
+        # already accepted into memory from being terminated before DB/spool.
+        if self._thread.is_alive():
+            self._queue.put(None)
+            self._thread.join()

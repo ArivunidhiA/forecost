@@ -22,6 +22,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from forecost.ledger import queries as q
+from forecost.ledger.db import ledger_write_lock
 
 
 def reconcile_estimates(conn: sqlite3.Connection) -> int:
@@ -30,6 +31,15 @@ def reconcile_estimates(conn: sqlite3.Connection) -> int:
     Returns the number of new reconciliations written. Idempotent: an estimate
     with an existing reconciliation row is never re-scored.
     """
+    # The process-wide connection is shared with hook/state writers. Hold the
+    # same lock from the initial candidate snapshot through commit so another
+    # local thread cannot commit or roll back this reconciliation transaction.
+    # The UNIQUE constraint remains the cross-process final arbiter.
+    with ledger_write_lock:
+        return _reconcile_estimates_locked(conn)
+
+
+def _reconcile_estimates_locked(conn: sqlite3.Connection) -> int:
     candidates = conn.execute(
         """
         SELECT est.id, est.session_id, est.created_at, est.currency,
@@ -65,15 +75,16 @@ def reconcile_estimates(conn: sqlite3.Connection) -> int:
         else:
             within_band = 1 if est["p10"] <= actual <= est["p90"] else 0
             abs_pct_error = abs(actual - est["p50"]) / max(actual, 0.001)
-        conn.execute(
+        cursor = conn.execute(
             """
             INSERT INTO reconciliations
                 (estimate_id, actual_amount, currency, within_band, abs_pct_error, reconciled_at)
             VALUES (?,?,?,?,?,?)
+            ON CONFLICT(estimate_id) DO NOTHING
             """,
             (est["id"], actual, est["currency"], within_band, abs_pct_error, now),
         )
-        written += 1
+        written += cursor.rowcount
     conn.commit()
     return written
 

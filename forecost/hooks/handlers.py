@@ -162,8 +162,7 @@ def handle_reconcile(payload: dict) -> dict:
     from forecost.estimate.calibration import reconcile_estimates
 
     transcript_path = payload.get("transcript_path")
-    claude_dir = Path(transcript_path).parent.parent if transcript_path else None
-    adapter = ClaudeCodeAdapter(claude_dir=claude_dir) if claude_dir else ClaudeCodeAdapter()
+    adapter = ClaudeCodeAdapter()
     conn = get_ledger_db()
     state = LedgerIngestStateStore(conn)
     # Synchronous sink: it shares this connection and commits each event before we
@@ -171,11 +170,23 @@ def handle_reconcile(payload: dict) -> dict:
     # (The hook is marked async in hooks.json, so the extra latency is irrelevant.)
     # This replaces the old async DefaultLedgerSink + sleep-based flush race.
     sink = SyncLedgerSink()
-    n = adapter.poll(state, sink)
+    if transcript_path:
+        n = adapter.poll_paths(_session_transcript_paths(Path(transcript_path)), state, sink)
+    else:
+        n = adapter.poll(state, sink)
     sink.flush()
     scored = reconcile_estimates(conn)
     _shadow_guard_scan(conn, payload, transcript_path)
     return {"ingested": n, "estimates_reconciled": scored}
+
+
+def _session_transcript_paths(primary: Path) -> list[Path]:
+    """Return one session transcript plus only its own subagent transcripts."""
+    paths = [primary]
+    subagents = primary.with_suffix("") / "subagents"
+    if subagents.is_dir():
+        paths.extend(subagents.rglob("*.jsonl"))
+    return paths
 
 
 def _shadow_guard_scan(conn, payload: dict, transcript_path) -> None:

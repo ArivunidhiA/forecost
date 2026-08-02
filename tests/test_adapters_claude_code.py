@@ -1,6 +1,8 @@
 import json
 
-from forecost.adapters.base import LedgerSink, UsageEvent
+import pytest
+
+from forecost.adapters.base import LedgerSink, UsageEvent, content_free_identifier
 from forecost.adapters.claude_code import ClaudeCodeAdapter
 from forecost.ledger.state_store import LedgerIngestStateStore
 
@@ -127,6 +129,62 @@ def test_adapter_tolerates_corrupt_lines(tmp_path, ledger_conn):
     state = LedgerIngestStateStore(ledger_conn)
     n = adapter.poll(state, sink)
     assert n == 1  # the corrupt line was skipped, not fatal
+
+
+@pytest.mark.parametrize(
+    "invalid_message",
+    [
+        "prompt-shaped string",
+        {"model": "claude-sonnet-4-20250514", "usage": "not-an-object"},
+        {
+            "model": "claude-sonnet-4-20250514",
+            "usage": {"input_tokens": "many", "output_tokens": 5},
+        },
+        {
+            "model": "secret prompt text with spaces",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        },
+    ],
+)
+def test_schema_invalid_record_is_skipped_without_pinning_cursor(
+    tmp_path, ledger_conn, invalid_message
+):
+    project_dir = tmp_path / "-invalid-shape"
+    project_dir.mkdir()
+    session_file = project_dir / "sess-invalid.jsonl"
+    valid = {
+        "type": "assistant",
+        "requestId": "valid-after-invalid",
+        "sessionId": "sess-invalid",
+        "cwd": "/synthetic/project",
+        "timestamp": "2026-07-01T00:00:01Z",
+        "message": {
+            "model": "claude-sonnet-4-20250514",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        },
+    }
+    _write_session(
+        session_file,
+        [
+            {
+                "type": "assistant",
+                "requestId": "invalid",
+                "sessionId": "sess-invalid",
+                "cwd": "/synthetic/project",
+                "timestamp": "2026-07-01T00:00:00Z",
+                "message": invalid_message,
+            },
+            valid,
+        ],
+    )
+
+    adapter = ClaudeCodeAdapter(claude_dir=tmp_path)
+    sink = _CollectingSink()
+    state = LedgerIngestStateStore(ledger_conn)
+
+    assert adapter.poll(state, sink) == 1
+    assert [event.event_uid for event in sink.events] == ["cc:valid-after-invalid"]
+    assert adapter.poll(state, sink) == 0
 
 
 def test_adapter_resume_is_idempotent(tmp_path, ledger_conn):
@@ -357,3 +415,102 @@ def test_adapter_ingests_subagent_files_too(tmp_path, ledger_conn):
     assert n == 2
     models = {e.model for e in sink.events}
     assert "claude-haiku-4-5-20251001" in models
+
+
+def test_identifier_less_records_get_stable_distinct_ids(tmp_path, ledger_conn):
+    """Missing requestId/uuid records must not collapse onto one empty key."""
+    from forecost.ledger.sink import SyncLedgerSink
+
+    project_dir = tmp_path / "-proj"
+    project_dir.mkdir()
+    records = [
+        {
+            "type": "assistant",
+            "sessionId": "sess-anon",
+            "agentId": "agent-1",
+            "promptId": "prompt-1",
+            "timestamp": f"2026-07-01T00:00:0{second}Z",
+            "message": {
+                "model": "claude-haiku-4-5-20251001",
+                "usage": {"input_tokens": 100 + second, "output_tokens": 20},
+            },
+        }
+        for second in (1, 2)
+    ]
+    _write_session(project_dir / "sess-anon.jsonl", records)
+    adapter = ClaudeCodeAdapter(claude_dir=tmp_path)
+    sink = SyncLedgerSink(ledger_path=None)
+    sink._conn = ledger_conn
+
+    assert adapter.poll(LedgerIngestStateStore(ledger_conn), sink) == 2
+    ids = [row["event_uid"] for row in ledger_conn.execute("SELECT event_uid FROM usage_events")]
+    assert len(set(ids)) == 2
+    assert all(event_id.startswith("event:") for event_id in ids)
+    assert all(event_id != content_free_identifier("event", "cc:uuid:") for event_id in ids)
+
+
+def test_identifier_less_repeated_content_blocks_still_dedupe(tmp_path, ledger_conn):
+    from forecost.ledger.sink import SyncLedgerSink
+
+    project_dir = tmp_path / "-proj"
+    project_dir.mkdir()
+    record = {
+        "type": "assistant",
+        "sessionId": "sess-anon-blocks",
+        "agentId": "agent-1",
+        "promptId": "prompt-1",
+        "timestamp": "2026-07-01T00:00:01Z",
+        "message": {
+            "model": "claude-haiku-4-5-20251001",
+            "usage": {"input_tokens": 100, "output_tokens": 20},
+        },
+    }
+    _write_session(project_dir / "sess-anon-blocks.jsonl", [record, record])
+    adapter = ClaudeCodeAdapter(claude_dir=tmp_path)
+    sink = SyncLedgerSink(ledger_path=None)
+    sink._conn = ledger_conn
+
+    assert adapter.poll(LedgerIngestStateStore(ledger_conn), sink) == 1
+    assert ledger_conn.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0] == 1
+
+
+def test_prompt_identity_survives_incremental_poll_boundary(tmp_path, ledger_conn):
+    """An assistant append inherits the prompt consumed by the previous poll."""
+    project_dir = tmp_path / "-proj"
+    project_dir.mkdir()
+    session_file = project_dir / "sess-incremental.jsonl"
+    _write_session(
+        session_file,
+        [
+            {
+                "type": "user",
+                "promptId": "persisted-prompt",
+                "timestamp": "2026-07-01T00:00:00Z",
+                "message": {"content": "never persisted"},
+            }
+        ],
+    )
+    adapter = ClaudeCodeAdapter(claude_dir=tmp_path)
+    state = LedgerIngestStateStore(ledger_conn)
+    sink = _CollectingSink()
+    assert adapter.poll(state, sink) == 0
+
+    with open(session_file, "a", encoding="utf-8") as transcript:
+        transcript.write(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "requestId": "incremental-request",
+                    "sessionId": "sess-incremental",
+                    "timestamp": "2026-07-01T00:00:01Z",
+                    "message": {
+                        "model": "claude-sonnet-4-20250514",
+                        "usage": {"input_tokens": 10, "output_tokens": 5},
+                    },
+                }
+            )
+            + "\n"
+        )
+
+    assert adapter.poll(state, sink) == 1
+    assert sink.events[0].run_id == "persisted-prompt"

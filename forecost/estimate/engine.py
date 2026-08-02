@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 
 from forecost.estimate.types import EstimateRange, TaskContext
 from forecost.ledger import queries as q
+from forecost.ledger.db import ledger_write_lock
 
 SHRINK_K = 10
 MIN_CELL_N = 3
@@ -115,28 +116,29 @@ def record_estimate(
     """Persist an estimate for later reconciliation. Returns the estimate_uid."""
     estimate_uid = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
-    conn.execute(
-        """
-        INSERT INTO estimates (
-            estimate_uid, session_id, workspace_id, run_id, created_at, currency,
-            p10, p50, p90, method, n_samples, category, shadow
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """,
-        (
-            estimate_uid,
-            session_id,
-            workspace_id,
-            run_id,
-            now,
-            estimate.currency,
-            estimate.p10,
-            estimate.p50,
-            estimate.p90,
-            estimate.method,
-            estimate.n_samples,
-            estimate.category,
-            int(shadow),
-        ),
-    )
-    conn.commit()
+    with ledger_write_lock:
+        conn.execute(
+            """
+            INSERT INTO estimates (
+                estimate_uid, session_id, workspace_id, run_id, created_at, currency,
+                p10, p50, p90, method, n_samples, category, shadow
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                estimate_uid,
+                session_id,
+                workspace_id,
+                run_id,
+                now,
+                estimate.currency,
+                estimate.p10,
+                estimate.p50,
+                estimate.p90,
+                estimate.method,
+                estimate.n_samples,
+                estimate.category,
+                int(shadow),
+            ),
+        )
+        conn.commit()
     return estimate_uid

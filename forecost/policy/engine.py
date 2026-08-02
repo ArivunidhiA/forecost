@@ -40,6 +40,51 @@ def _since_iso(scope: str) -> str:
     return (datetime.now(timezone.utc) - window).isoformat()
 
 
+def _confirmed_hard_decision(rule: PolicyRule, spend: q.ScopeSpend) -> Decision | None:
+    if rule.hard_limit is None:
+        return None
+    if spend.n_confident_events == 0:
+        return None
+    if spend.confident_total < rule.hard_limit:
+        return None
+    estimate_note = ""
+    if spend.n_unpriced_events:
+        estimate_note = (
+            f"; excluded {rule.currency} {spend.unpriced_total:.2f} from unpriced models"
+        )
+    reason = (
+        f"{rule.currency} confirmed spend {spend.confident_total:.2f} >= hard limit "
+        f"{rule.hard_limit:.2f} (rule {rule.rule_id}{estimate_note})"
+    )
+    return Decision(rule.action, rule.rule_id, reason, spend.confident_total, rule.hard_limit)
+
+
+def _unpriced_hard_warning(rule: PolicyRule, spend: q.ScopeSpend) -> Decision | None:
+    if rule.hard_limit is None or spend.total < rule.hard_limit:
+        return None
+    # The configured hard boundary is crossed only when guessed prices are
+    # counted. Surface the risk, but never block an agent on an invented rate.
+    reason = (
+        f"{rule.currency} estimated spend {spend.total:.2f} >= hard limit "
+        f"{rule.hard_limit:.2f}, but {spend.unpriced_total:.2f} is based on "
+        f"unpriced models; hard action suppressed (rule {rule.rule_id})"
+    )
+    return Decision("warn", rule.rule_id, reason, spend.total, rule.hard_limit)
+
+
+def _soft_warning(rule: PolicyRule, spend: q.ScopeSpend) -> Decision | None:
+    if rule.soft_limit is None or spend.total < rule.soft_limit:
+        return None
+    estimate_note = ""
+    if spend.n_unpriced_events:
+        estimate_note = f"; includes {spend.unpriced_total:.2f} from unpriced models"
+    reason = (
+        f"{rule.currency} estimated spend {spend.total:.2f} >= soft limit "
+        f"{rule.soft_limit:.2f} (rule {rule.rule_id}{estimate_note})"
+    )
+    return Decision("warn", rule.rule_id, reason, spend.total, rule.soft_limit)
+
+
 def _evaluate_rule(
     conn: sqlite3.Connection, rule: PolicyRule, workspace_id: int | None, session_id: int | None
 ) -> Decision:
@@ -50,24 +95,16 @@ def _evaluate_rule(
             return Decision(
                 "allow", rule.rule_id, "session scope: no active session to measure", 0.0
             )
-        measured = q.session_spend(conn, session_id, rule.currency)
+        spend = q.session_spend_breakdown(conn, session_id, rule.currency)
     else:
         since = _since_iso(rule.scope)
-        measured = q.scope_spend(conn, rule.currency, since, workspace_id).total
+        spend = q.scope_spend(conn, rule.currency, since, workspace_id)
 
-    if rule.hard_limit is not None and measured >= rule.hard_limit:
-        reason = (
-            f"{rule.currency} spend {measured:.2f} >= hard limit {rule.hard_limit:.2f} "
-            f"(rule {rule.rule_id})"
-        )
-        return Decision(rule.action, rule.rule_id, reason, measured, rule.hard_limit)
-    if rule.soft_limit is not None and measured >= rule.soft_limit:
-        reason = (
-            f"{rule.currency} spend {measured:.2f} >= soft limit {rule.soft_limit:.2f} "
-            f"(rule {rule.rule_id})"
-        )
-        return Decision("warn", rule.rule_id, reason, measured, rule.soft_limit)
-    return Decision("allow", rule.rule_id, "within limits", measured, rule.hard_limit)
+    for threshold_check in (_confirmed_hard_decision, _unpriced_hard_warning, _soft_warning):
+        decision = threshold_check(rule, spend)
+        if decision is not None:
+            return decision
+    return Decision("allow", rule.rule_id, "within limits", spend.total, rule.hard_limit)
 
 
 def evaluate(

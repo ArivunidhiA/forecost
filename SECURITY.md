@@ -2,7 +2,11 @@
 
 ## Supported Versions
 
-The latest `main` branch and the latest published release are actively supported with security fixes.
+| Version | Supported |
+|---|---|
+| Latest published release | Yes |
+| `main` | Best effort; not a release |
+| Older releases | No |
 
 ## Reporting a Vulnerability
 
@@ -10,6 +14,10 @@ If you discover a security issue, please report it privately:
 
 - Open a **private security advisory** on GitHub for this repository, or
 - Email the maintainer listed in the project profile.
+
+Please do **not** open a public issue for a vulnerability and do not attach a
+real transcript, ledger database, policy file, API key, or absolute workspace
+path. A synthetic reproducer is strongly preferred.
 
 Please include:
 
@@ -30,5 +38,10 @@ Please include:
 This policy applies to:
 
 - The `forecost` Python package
-- CLI entrypoints and local database interactions
-- Bundled GitHub Actions workflows
+- CLI entrypoints, local databases, recovery files, and destructive commands
+- Claude Code plugin hooks and the LiteLLM callback
+- Bundled GitHub Actions and package-release workflows
+
+The legacy `init --smart` cloud-assisted scope analysis is opt-in and is not
+part of the content-free ledger path. Security reports about its outbound-data
+preview, prompt injection, or secret detection remain in scope.

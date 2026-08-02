@@ -5,6 +5,7 @@ import sqlite3
 from click.testing import CliRunner
 
 from forecost.cli import main
+from forecost.commands.migrate_cmd import _legacy_rows, _parse_ts
 from forecost.ledger.db import get_ledger_db
 
 
@@ -62,3 +63,89 @@ def test_migrate_no_legacy_db(tmp_path, monkeypatch):
     result = CliRunner().invoke(main, ["migrate"])
     assert result.exit_code == 0
     assert "No legacy costs.db" in result.output
+
+
+def test_migrate_skips_malformed_timestamp_instead_of_fabricating_now(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORECOST_HOME", str(tmp_path))
+    from forecost.ledger import db as ledger_db
+
+    monkeypatch.setattr(ledger_db, "LEDGER_PATH", tmp_path / "ledger.db")
+    ledger_db.reset_connection_for_tests()
+    _make_legacy_db(tmp_path / "costs.db")
+    conn = sqlite3.connect(tmp_path / "costs.db")
+    conn.execute(
+        "INSERT INTO usage_logs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (3, 1, "not-a-timestamp", "claude-opus-4-8", "anthropic", 10, 20, 0.1),
+    )
+    conn.commit()
+    conn.close()
+
+    result = CliRunner().invoke(main, ["migrate"])
+
+    assert result.exit_code == 0, result.output
+    assert "1 skipped: invalid timestamp" in result.output
+    ledger = get_ledger_db()
+    assert ledger.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0] == 2
+    assert (
+        ledger.execute("SELECT COUNT(*) FROM usage_events WHERE event_uid='legacy:3'").fetchone()[0]
+        == 0
+    )
+    ledger_db.reset_connection_for_tests()
+
+
+def test_parse_ts_treats_naive_legacy_timestamp_as_utc():
+    parsed = _parse_ts("2026-03-01T12:34:56")
+
+    assert parsed is not None
+    assert parsed.isoformat() == "2026-03-01T12:34:56+00:00"
+
+
+def test_legacy_rows_tolerates_missing_projects_table(tmp_path):
+    costs_db = tmp_path / "costs.db"
+    conn = sqlite3.connect(costs_db)
+    conn.execute(
+        """
+        CREATE TABLE usage_logs (
+            id INTEGER PRIMARY KEY, project_id INTEGER, timestamp TEXT, model TEXT,
+            provider TEXT, tokens_in INTEGER, tokens_out INTEGER, cost_usd REAL
+        )
+        """
+    )
+    conn.execute("INSERT INTO usage_logs VALUES (1, 99, '2026-03-01T00:00:00Z', 'm', 'p', 1, 2, 3)")
+    conn.commit()
+    conn.close()
+
+    rows, projects = _legacy_rows(costs_db)
+
+    assert len(rows) == 1
+    assert projects == {}
+
+
+def test_migrate_reports_unreadable_legacy_schema(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORECOST_HOME", str(tmp_path))
+    (tmp_path / "costs.db").write_text("not a sqlite database")
+
+    result = CliRunner().invoke(main, ["migrate"])
+
+    assert result.exit_code == 0
+    assert "Could not read legacy costs.db" in result.output
+
+
+def test_migrate_reports_empty_usage_table(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORECOST_HOME", str(tmp_path))
+    conn = sqlite3.connect(tmp_path / "costs.db")
+    conn.executescript(
+        """
+        CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT, path TEXT);
+        CREATE TABLE usage_logs (
+            id INTEGER PRIMARY KEY, project_id INTEGER, timestamp TEXT, model TEXT,
+            provider TEXT, tokens_in INTEGER, tokens_out INTEGER, cost_usd REAL
+        );
+        """
+    )
+    conn.close()
+
+    result = CliRunner().invoke(main, ["migrate"])
+
+    assert result.exit_code == 0
+    assert "has no usage rows" in result.output

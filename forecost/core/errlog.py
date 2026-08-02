@@ -26,10 +26,13 @@ def _log_path():
 
 
 _REDACT_PATTERNS = [
-    re.compile(r"sk-[A-Za-z0-9]{20,}"),
-    re.compile(r"ghp_[A-Za-z0-9]{36}"),
+    re.compile(r"sk-(?:proj-|svcacct-|ant-[A-Za-z0-9-]*-)?[A-Za-z0-9_-]{16,}"),
+    re.compile(r"(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})"),
     re.compile(r"xox[bpars]-[A-Za-z0-9-]{10,}"),
     re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"AIza[0-9A-Za-z_-]{30,}"),
+    re.compile(r"hf_[A-Za-z0-9]{20,}"),
+    re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{16,}", re.IGNORECASE),
     re.compile(r"eyJ[A-Za-z0-9_-]{20,}(?:\.[A-Za-z0-9_-]{10,}){1,2}"),  # JWT-shaped
     re.compile(r"[A-Za-z0-9+/]{40,}={0,2}"),  # generic long base64 runs
 ]

@@ -1,6 +1,7 @@
 """Self-correcting pricing module with zero external dependencies."""
 
 import re
+from datetime import date, datetime, timezone
 from typing import Optional
 
 __all__ = [
@@ -11,6 +12,7 @@ __all__ = [
     "DEFAULT_COST",
     "MODEL_TIERS",
     "get_tier",
+    "get_pricing_period",
 ]
 
 # Anthropic rows verified 2026-07-17 against the authoritative models/pricing
@@ -149,10 +151,8 @@ FALLBACK_PRICING: dict[str, dict[str, float]] = {
         "cache_read": 0.50,
         "cache_write": 6.25,
     },
-    # Sonnet 5 sticker rate is $3/$15; an introductory $2/$10 applies through
-    # 2026-08-31. Without effective-dated pricing (a future enhancement, see
-    # `forecost pricing-audit`), we post the standard rate; a run reconciled
-    # against a provider bill during the intro window will show a known delta.
+    # Sonnet 5's standard rate. `calculate_cost` replaces this with the
+    # effective introductory rate for events on or before 2026-08-31.
     "claude-sonnet-5": {
         "input": 3.00,
         "output": 15.00,
@@ -187,6 +187,15 @@ FALLBACK_PRICING: dict[str, dict[str, float]] = {
 }
 
 DEFAULT_COST = {"input": 5.0, "output": 15.0}
+
+_SONNET_5_MODEL = "claude-sonnet-5"
+_SONNET_5_INTRO_END = date(2026, 8, 31)
+_SONNET_5_INTRO_PRICING = {
+    "input": 2.00,
+    "output": 10.00,
+    "cache_read": 0.20,
+    "cache_write": 2.50,
+}
 
 MODEL_TIERS: dict[str, list[str]] = {
     "Tier 1 (Heavy)": [
@@ -279,17 +288,62 @@ def _log_unknown_model(model: str) -> None:
         log_error("pricing", f"unknown model: {model}")
 
 
-def _resolve_model(model: str) -> Optional[dict[str, float]]:
+def _resolve_model_key(model: str) -> Optional[str]:
     if model in FALLBACK_PRICING:
-        return FALLBACK_PRICING[model]
+        return model
     stripped = _DATE_SUFFIX_RE.sub("", model)
     if stripped in FALLBACK_PRICING:
-        return FALLBACK_PRICING[stripped]
+        return stripped
     while "-" in stripped:
         stripped = stripped.rsplit("-", 1)[0]
         if stripped in FALLBACK_PRICING:
-            return FALLBACK_PRICING[stripped]
+            return stripped
     return None
+
+
+def _resolve_model(model: str) -> Optional[dict[str, float]]:
+    key = _resolve_model_key(model)
+    return FALLBACK_PRICING[key] if key is not None else None
+
+
+def _as_utc_date(as_of: datetime | date | str | None) -> date:
+    """Normalize an event timestamp for effective-dated rate selection."""
+    if as_of is None:
+        return datetime.now(timezone.utc).date()
+    if isinstance(as_of, datetime):
+        if as_of.tzinfo is None:
+            return as_of.date()
+        return as_of.astimezone(timezone.utc).date()
+    if isinstance(as_of, date):
+        return as_of
+    normalized = as_of.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return date.fromisoformat(normalized)
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed.date()
+
+
+def get_pricing_period(model: str, as_of: datetime | date | str | None = None) -> str | None:
+    """Return a stable provenance label when a model has effective-dated rates."""
+    if _resolve_model_key(model) != _SONNET_5_MODEL:
+        return None
+    if _as_utc_date(as_of) <= _SONNET_5_INTRO_END:
+        return "sonnet5-intro-through-2026-08-31"
+    return "sonnet5-standard-from-2026-09-01"
+
+
+def _effective_pricing(
+    model: str, as_of: datetime | date | str | None
+) -> Optional[dict[str, float]]:
+    key = _resolve_model_key(model)
+    if key is None:
+        return None
+    if key == _SONNET_5_MODEL and _as_utc_date(as_of) <= _SONNET_5_INTRO_END:
+        return _SONNET_5_INTRO_PRICING
+    return FALLBACK_PRICING[key]
 
 
 def is_priced(model: str) -> bool:
@@ -306,6 +360,8 @@ def calculate_cost(
     tokens_out: int,
     cache_read_tokens: int = 0,
     cache_write_tokens: int = 0,
+    *,
+    as_of: datetime | date | str | None = None,
 ) -> float:
     """Calculate estimated USD cost for a model invocation.
 
@@ -318,6 +374,8 @@ def calculate_cost(
             on cache-heavy agentic workloads).
         cache_write_tokens: Tokens newly written to a prompt cache (typically priced
             above standard input).
+        as_of: Event timestamp used to select an effective-dated rate. Defaults
+            to the current UTC date when pricing an event without a timestamp.
 
     Returns:
         float: Estimated total call cost in USD.
@@ -326,7 +384,7 @@ def calculate_cost(
     tokens_out = max(0, tokens_out)
     cache_read_tokens = max(0, cache_read_tokens)
     cache_write_tokens = max(0, cache_write_tokens)
-    cost = _resolve_model(model)
+    cost = _effective_pricing(model, as_of)
     if cost is None:
         _log_unknown_model(model)
         cost = DEFAULT_COST

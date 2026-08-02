@@ -29,7 +29,7 @@ def _start_server(port):
 
 def _get(port, path):
     url = f"http://127.0.0.1:{port}{path}"
-    req = urllib.request.Request(url)  # noqa: S310
+    req = urllib.request.Request(url)  # noqa: S310 - fixed localhost test URL
     try:
         resp = urllib.request.urlopen(req, timeout=5)  # noqa: S310
         body = json.loads(resp.read().decode())

@@ -75,9 +75,24 @@ def test_handler_reconcile_ingests_from_transcript_path(hook_ledger, tmp_path):
         )
         + "\n"
     )
-    # transcript_path -> parent.parent is the projects dir the adapter scans
+    # A stop hook must ingest only this session, not every historical sibling.
+    (proj / "unrelated.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "assistant",
+                "requestId": "unrelated",
+                "timestamp": "2026-07-01T00:00:00Z",
+                "message": {
+                    "model": "claude-sonnet-4-20250514",
+                    "usage": {"input_tokens": 99, "output_tokens": 9},
+                },
+            }
+        )
+        + "\n"
+    )
     out = handlers.handle_reconcile({"transcript_path": str(proj / "s.jsonl")})
-    assert out["ingested"] >= 1
+    assert out["ingested"] == 1
+    assert hook_ledger.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0] == 1
 
 
 def _run_hook(command, payload, env):

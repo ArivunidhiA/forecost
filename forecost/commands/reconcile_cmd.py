@@ -10,7 +10,7 @@ the ledger itself — flag any model whose pricing_version varies across its
 own postings (evidence of a pricing snapshot change mid-history, which is
 exactly the kind of drift that makes numbers hard to trust) and recompute
 each posting from its event's raw tokens to confirm the stored amount matches
-what the current pricing table would produce for it right now.
+the table rate effective at the event timestamp.
 """
 
 from __future__ import annotations
@@ -19,6 +19,12 @@ import click
 
 from forecost.ledger.db import get_ledger_db
 from forecost.pricing import calculate_cost
+
+
+def _percent_difference(actual: float, reference: float) -> float:
+    if reference == 0:
+        return 0.0 if actual == 0 else float("inf")
+    return abs(actual - reference) / abs(reference) * 100
 
 
 def _analyze_rows(rows, tolerance_pct):
@@ -33,12 +39,10 @@ def _analyze_rows(rows, tolerance_pct):
             r["tokens_out"],
             r["tokens_cache_read"],
             r["tokens_cache_write"],
+            as_of=r["ts"],
         )
         stored = r["amount"]
-        if stored > 0:
-            pct_diff = abs(recomputed - stored) / stored * 100
-        else:
-            pct_diff = 0.0 if recomputed == 0 else 100.0
+        pct_diff = _percent_difference(recomputed, stored)
         if pct_diff > tolerance_pct:
             drift_events.append((r["id"], r["model"], stored, recomputed, pct_diff))
         version = r["pricing_version"] or "unknown"
@@ -50,11 +54,11 @@ def _print_drift_report(drift_events, tolerance_pct):
     if not drift_events:
         click.echo(
             f"No drift beyond {tolerance_pct}% — every stored posting matches what the "
-            "current pricing table would compute today."
+            "pricing table effective at its event timestamp would compute."
         )
         return
     click.echo(
-        f"FLAGS ({len(drift_events)}) — stored amount vs. current pricing table disagrees "
+        f"FLAGS ({len(drift_events)}) — stored amount vs. event-effective pricing disagrees "
         f"by more than {tolerance_pct}%:"
     )
     for event_id, model, stored, recomputed, pct in drift_events[:20]:
@@ -111,8 +115,7 @@ def _print_source_vs_table_report(conn, currency, tolerance_pct):
     disagreements = [
         r
         for r in rows
-        if r["source_amount"] > 0
-        and abs(r["table_amount"] - r["source_amount"]) / r["source_amount"] * 100 > tolerance_pct
+        if _percent_difference(r["table_amount"], r["source_amount"]) > tolerance_pct
     ]
     click.echo(
         f"\nSource-reported vs forecost pricing_table on {len(rows)} shared events: "
@@ -133,7 +136,7 @@ def reconcile(currency, tolerance_pct):
     conn = get_ledger_db()
     rows = conn.execute(
         """
-        SELECT e.id, e.model, e.tokens_in, e.tokens_out, e.tokens_cache_read,
+        SELECT e.id, e.ts, e.model, e.tokens_in, e.tokens_out, e.tokens_cache_read,
                e.tokens_cache_write, p.amount, p.pricing_version, p.basis
         FROM usage_events e
         JOIN postings p ON p.event_id = e.id

@@ -31,6 +31,11 @@ def ledger_status(currency, basis):
 
     click.echo(f"Ledger: {n_events} usage events, {n_ws} workspaces, {n_sessions} sessions")
     click.echo(f"Total {currency} spend ({basis}): {spend.total:.2f}")
+    if spend.n_unpriced_events:
+        click.echo(
+            f"  Includes {currency} {spend.unpriced_total:.2f} guessed across "
+            f"{spend.n_unpriced_events} event(s); not safe for hard budget decisions."
+        )
     if n_events == 0:
         click.echo("\nLedger is empty. Run `forecost ingest` to pull your Claude Code history.")
         return
@@ -39,7 +44,13 @@ def ledger_status(currency, basis):
     if rows:
         click.echo("\nTop models by spend:")
         for r in rows:
-            click.echo(f"  {r['model']:<40} n={r['n']:<6} {currency} {r['total']:.2f}")
+            guessed = (
+                f" (includes {currency} {r['unpriced_total']:.2f} guessed across "
+                f"{r['n_unpriced']} event(s))"
+                if r["n_unpriced"]
+                else ""
+            )
+            click.echo(f"  {r['model']:<40} n={r['n']:<6} {currency} {r['total']:.2f}{guessed}")
 
 
 @ledger.command("by-workspace")
@@ -50,9 +61,23 @@ def ledger_by_workspace(currency, basis):
     conn = get_ledger_db()
     rows = q.spend_by_workspace(conn, currency, basis=basis)
     if not rows:
-        click.echo("No workspaces recorded yet. Run `forecost ingest` first.")
+        workspace_count = conn.execute("SELECT COUNT(*) FROM workspaces").fetchone()[0]
+        if workspace_count == 0:
+            click.echo("No workspaces recorded yet. Run `forecost ingest` first.")
+        else:
+            click.echo(
+                f"No {currency} {basis} postings are associated with the "
+                f"{workspace_count} recorded workspace(s)."
+            )
         return
     for r in rows:
+        guessed = (
+            f"; includes {currency} {r['unpriced_total']:.2f} guessed across "
+            f"{r['n_unpriced']} event(s)"
+            if r["n_unpriced"]
+            else ""
+        )
         click.echo(
-            f"{r['name']:<30} {currency} {r['total']:>10.2f}  ({r['n']} events)  {r['root_path']}"
+            f"{r['name']:<30} {currency} {r['total']:>10.2f}  "
+            f"({r['n']} events{guessed})  {r['root_path']}"
         )
