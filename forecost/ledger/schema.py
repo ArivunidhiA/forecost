@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 6
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS workspaces (
@@ -290,6 +290,79 @@ CREATE TABLE IF NOT EXISTS receipt_snapshots (
     UNIQUE(run_id, schema_version, generated_at)
 );
 CREATE INDEX IF NOT EXISTS idx_receipts_run ON receipt_snapshots(run_id, generated_at DESC);
+
+-- v5: reproducible, source-aware reconciliation.  Aggregate provider exports
+-- are evidence too; they are not force-matched to a local callback.
+CREATE TABLE IF NOT EXISTS reconciliation_batches (
+    batch_id          TEXT PRIMARY KEY,
+    schema_version    INTEGER NOT NULL,
+    run_id            TEXT,
+    source_set_json   TEXT NOT NULL,
+    account_scope     TEXT,
+    dimensions_json   TEXT NOT NULL,
+    window_start      TEXT NOT NULL,
+    window_end        TEXT NOT NULL,
+    watermarks_json   TEXT NOT NULL,
+    expected_count    INTEGER NOT NULL,
+    observed_count    INTEGER NOT NULL,
+    unmatched_local_count INTEGER NOT NULL,
+    unmatched_provider_count INTEGER NOT NULL,
+    local_amount_micros INTEGER NOT NULL,
+    provider_amount_micros INTEGER NOT NULL,
+    residual_micros   INTEGER NOT NULL,
+    tolerance_micros  INTEGER NOT NULL,
+    finality          TEXT NOT NULL,
+    state             TEXT NOT NULL,
+    created_at        TEXT NOT NULL,
+    supersedes_batch_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_reconciliation_batches_run
+    ON reconciliation_batches(run_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS reconciliation_evidence (
+    batch_id          TEXT NOT NULL REFERENCES reconciliation_batches(batch_id),
+    observation_id    TEXT NOT NULL,
+    source_role       TEXT NOT NULL,
+    match_state       TEXT NOT NULL,
+    PRIMARY KEY(batch_id, observation_id)
+);
+
+-- v6: local, reservation-based resource envelopes.  This is intentionally a
+-- single-host SQLite boundary, never a provider-side or distributed guarantee.
+CREATE TABLE IF NOT EXISTS resource_scopes (
+    scope_id          TEXT PRIMARY KEY,
+    parent_scope_id   TEXT REFERENCES resource_scopes(scope_id),
+    dimension         TEXT NOT NULL,
+    capacity_micros   INTEGER NOT NULL,
+    settled_micros    INTEGER NOT NULL DEFAULT 0,
+    reserved_micros   INTEGER NOT NULL DEFAULT 0,
+    returned_micros   INTEGER NOT NULL DEFAULT 0,
+    adjustment_micros INTEGER NOT NULL DEFAULT 0,
+    mode              TEXT NOT NULL DEFAULT 'shadow',
+    created_at        TEXT NOT NULL,
+    metadata_json     TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_resource_scopes_parent ON resource_scopes(parent_scope_id);
+
+CREATE TABLE IF NOT EXISTS resource_reservations (
+    reservation_id    TEXT PRIMARY KEY,
+    scope_id          TEXT NOT NULL REFERENCES resource_scopes(scope_id),
+    child_scope_id    TEXT,
+    dimension         TEXT NOT NULL,
+    requested_micros  INTEGER NOT NULL,
+    granted_micros    INTEGER NOT NULL,
+    settled_micros    INTEGER NOT NULL DEFAULT 0,
+    state             TEXT NOT NULL,
+    idempotency_key   TEXT NOT NULL,
+    lease_expires_at  TEXT,
+    fencing_token     INTEGER NOT NULL,
+    provenance_json   TEXT NOT NULL DEFAULT '{}',
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    UNIQUE(scope_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_resource_reservations_live
+    ON resource_reservations(scope_id, state, lease_expires_at);
 """
 
 
@@ -306,6 +379,12 @@ def apply_schema(conn: sqlite3.Connection) -> None:
         current_version = 3
     if current_version < 4:
         _migrate_v4_receipt_kernel(conn)
+        current_version = 4
+    if current_version < 5:
+        _migrate_v5_reconciliation_batches(conn)
+        current_version = 5
+    if current_version < 6:
+        _migrate_v6_resource_envelopes(conn)
 
 
 def _migrate_reconciliation_uniqueness(conn: sqlite3.Connection) -> None:
@@ -349,6 +428,28 @@ def _migrate_v4_receipt_kernel(conn: sqlite3.Connection) -> None:
     conn.execute("BEGIN IMMEDIATE")
     try:
         conn.execute("PRAGMA user_version = 4")
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _migrate_v5_reconciliation_batches(conn: sqlite3.Connection) -> None:
+    """Mark additive reconciliation evidence tables as available."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("PRAGMA user_version = 5")
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _migrate_v6_resource_envelopes(conn: sqlite3.Connection) -> None:
+    """Mark additive local resource-envelope tables as available."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("PRAGMA user_version = 6")
         conn.commit()
     except BaseException:
         conn.rollback()

@@ -23,6 +23,11 @@ _CURRENT_COMMANDS: dict[str, _LazyCommand] = {
         "Inspect shadow-estimator calibration.",
     ),
     "doctor": ("forecost.commands.doctor_cmd", "doctor", "Inspect local setup and paths."),
+    "envelope": (
+        "forecost.commands.envelope_cmd",
+        "envelope",
+        "Manage experimental local resource envelopes.",
+    ),
     "ingest": ("forecost.commands.ingest_cmd", "ingest", "Ingest agent usage into the ledger."),
     "ledger": ("forecost.commands.ledger_cmd", "ledger", "Inspect the local usage ledger."),
     "lab": ("forecost.commands.lab_cmd", "lab", "Run deterministic offline receipt scenarios."),

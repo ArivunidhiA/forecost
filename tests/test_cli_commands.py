@@ -102,7 +102,7 @@ def test_reconcile_no_drift(isolated_ledger):
     result = CliRunner().invoke(reconcile, [])
     assert result.exit_code == 0
     assert "No drift" in result.output
-    assert "Phase 3" in result.output  # honest deferral message
+    assert "reconcile import" in result.output
 
 
 def test_reconcile_uses_rate_effective_at_event_timestamp(isolated_ledger, monkeypatch):

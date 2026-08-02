@@ -15,10 +15,13 @@ the table rate effective at the event timestamp.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import click
 
 from forecost.ledger.db import get_ledger_db
 from forecost.pricing import calculate_cost
+from forecost.reconciliation import import_bill_file, reconcile_run
 
 
 def _percent_difference(actual: float, reference: float) -> float:
@@ -128,11 +131,14 @@ def _print_source_vs_table_report(conn, currency, tolerance_pct):
         )
 
 
-@click.command()
+@click.group(invoke_without_command=True)
 @click.option("--currency", default="USD")
 @click.option("--tolerance-pct", default=3.0, help="Yellow-flag threshold, percent")
-def reconcile(currency, tolerance_pct):
-    """Cross-check the ledger's internal consistency (external sources: Phase 3)."""
+@click.pass_context
+def reconcile(ctx: click.Context, currency: str, tolerance_pct: float) -> None:
+    """Cross-check internal valuations, or import/reconcile independent evidence."""
+    if ctx.invoked_subcommand is not None:
+        return
     conn = get_ledger_db()
     rows = conn.execute(
         """
@@ -163,7 +169,53 @@ def reconcile(currency, tolerance_pct):
     _print_source_vs_table_report(conn, currency, tolerance_pct)
 
     click.echo(
-        "\nExternal cross-checks against provider/admin bills (Anthropic Admin API, "
-        "OpenRouter) are not wired up yet — that requires per-source adapters and real "
-        "credentials (Phase 3)."
+        "\nFor independent offline evidence, use `forecost reconcile import` then "
+        "`forecost reconcile run`. Live HTTP/API ingestion remains deliberately deferred."
+    )
+
+
+@reconcile.command("import")
+@click.option(
+    "--source", type=click.Choice(["openai", "anthropic", "gateway", "otel"]), required=True
+)
+@click.option("--file", "file_path", type=click.Path(exists=True, dir_okay=False), required=True)
+@click.option("--run", "run_id", default=None, help="Attach aggregate evidence to an existing run.")
+def import_export(source: str, file_path: str, run_id: str | None) -> None:
+    """Import a representative local provider/gateway/OTel JSON or CSV export."""
+    try:
+        imported_run, imported = import_bill_file(
+            get_ledger_db(),
+            Path(file_path),
+            source,
+            run_id=run_id,
+        )
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(f"Imported {imported} {source} billing record(s) into {imported_run}.")
+
+
+@reconcile.command("run")
+@click.option(
+    "--run", "run_id", default=None, help="Run to reconcile; omit for all imported evidence."
+)
+@click.option("--tolerance-micros", default=1_000, show_default=True, type=click.IntRange(0))
+@click.option("--json-output", "json_output", is_flag=True)
+def reconcile_evidence(run_id: str | None, tolerance_micros: int, json_output: bool) -> None:
+    """Compare local valuations with provider-billed aggregate evidence."""
+    try:
+        result = reconcile_run(get_ledger_db(), run_id, tolerance_micros=tolerance_micros)
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
+    if json_output:
+        import json
+
+        click.echo(json.dumps(result, sort_keys=True, separators=(",", ":")))
+        return
+    click.echo(
+        f"Reconciliation {result['state']}: local={result['local_total']} micros, "
+        f"provider={result['provider_total']} micros, residual={result['residual']} micros."
+    )
+    click.echo(
+        f"Evidence: {result['observed']} of {result['expected']} source roles; "
+        f"finality={result['finality']}."
     )
