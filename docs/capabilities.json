@@ -1,0 +1,34 @@
+{
+  "$schema": "https://forecost.dev/schemas/capabilities/v1.json",
+  "schema_version": 1,
+  "product_state": "experimental-local",
+  "adapters": {
+    "claude_code": {
+      "identity": "session-only; graph identity not yet observed",
+      "graph": false,
+      "live_usage": "best-effort local transcript/hook observation",
+      "billing_authority": "list-rate equivalent only",
+      "enforcement_boundary": "local hook, fail-open; no provider-side guarantee",
+      "finality": "provisional until a later transcript ingest",
+      "maximum_overrun": "not bounded"
+    },
+    "litellm": {
+      "identity": "call identifier when supplied; session identity is caller-owned",
+      "graph": false,
+      "live_usage": "callback observation",
+      "billing_authority": "gateway estimate when response_cost is supplied; otherwise list-rate equivalent",
+      "enforcement_boundary": "caller integration; no distributed guarantee",
+      "finality": "source-dependent",
+      "maximum_overrun": "not bounded"
+    },
+    "offline_lab": {
+      "identity": "versioned causal fixture identity",
+      "graph": true,
+      "live_usage": "deterministic synthetic observations",
+      "billing_authority": "synthetic only",
+      "enforcement_boundary": "none",
+      "finality": "fixture-defined",
+      "maximum_overrun": "not applicable"
+    }
+  }
+}

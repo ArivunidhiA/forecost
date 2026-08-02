@@ -1,0 +1,312 @@
+"""Append-only causal/economic journal and deterministic rebuildable projections."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from collections.abc import Mapping
+from datetime import datetime, timezone
+
+from forecost.ledger.contracts import CausalIdentity, Observation, canonical_json, opaque_id
+
+_PROJECTION_TABLES = (
+    "outcome_evidence",
+    "charges",
+    "meter_facts",
+    "span_links",
+    "causal_spans",
+    "causal_runs",
+)
+
+
+def _iso(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat()
+
+
+def append_observation(conn: sqlite3.Connection, observation: Observation) -> bool:
+    """Append exactly one observation, then rebuild projections deterministically.
+
+    ``producer + idempotency_key`` is a durable replay boundary.  A duplicate
+    with different evidence is rejected instead of silently overwriting the
+    first fact.
+    """
+    item = observation.normalized()
+    causal_json = canonical_json(item.causal.to_dict())
+    payload_json = canonical_json(item.payload)
+    existing = conn.execute(
+        "SELECT observation_id, causal_json, payload_json, event_kind "
+        "FROM journal_observations WHERE producer = ? AND idempotency_key = ?",
+        (item.producer, item.causal.idempotency_key),
+    ).fetchone()
+    if existing is not None:
+        if (
+            existing["causal_json"] != causal_json
+            or existing["payload_json"] != payload_json
+            or existing["event_kind"] != item.event_kind
+        ):
+            raise ValueError("idempotency key already belongs to different evidence")
+        return False
+
+    nested = conn.in_transaction
+    if nested:
+        conn.execute("SAVEPOINT forecost_append_observation")
+    else:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(
+            """
+            INSERT INTO journal_observations(
+                observation_id, schema_version, producer, source_sequence,
+                idempotency_key, event_kind, occurred_at, observed_at,
+                causal_json, payload_json, supersedes_observation_id
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                item.observation_id,
+                item.schema_version,
+                item.producer,
+                item.causal.source_sequence,
+                item.causal.idempotency_key,
+                item.event_kind,
+                _iso(item.occurred_at),
+                _iso(item.observed_at),
+                causal_json,
+                payload_json,
+                item.supersedes_observation_id,
+            ),
+        )
+        rebuild_projections(conn)
+        if nested:
+            conn.execute("RELEASE SAVEPOINT forecost_append_observation")
+        else:
+            conn.commit()
+    except BaseException:
+        if nested:
+            conn.execute("ROLLBACK TO SAVEPOINT forecost_append_observation")
+            conn.execute("RELEASE SAVEPOINT forecost_append_observation")
+        else:
+            conn.rollback()
+        raise
+    return True
+
+
+def _causal(row: sqlite3.Row) -> dict[str, object]:
+    value = json.loads(row["causal_json"])
+    if not isinstance(value, dict):  # pragma: no cover - stored by canonical serializer
+        raise ValueError("invalid causal envelope")
+    return value
+
+
+def _payload(row: sqlite3.Row) -> dict[str, object]:
+    value = json.loads(row["payload_json"])
+    if not isinstance(value, dict):  # pragma: no cover - stored by canonical serializer
+        raise ValueError("invalid observation payload")
+    return value
+
+
+def rebuild_projections(conn: sqlite3.Connection) -> None:
+    """Rebuild query tables from journal order, never arrival order or row ID."""
+    for table in _PROJECTION_TABLES:
+        conn.execute(f"DELETE FROM {table}")  # noqa: S608 - fixed internal table names
+    rows = conn.execute(
+        """
+        SELECT * FROM journal_observations
+        ORDER BY producer ASC, source_sequence ASC, idempotency_key ASC
+        """
+    ).fetchall()
+    for row in rows:
+        causal = _causal(row)
+        payload = _payload(row)
+        source_order = f"{row['producer']}:{row['source_sequence']:020d}:{row['idempotency_key']}"
+        if row["event_kind"] == "span":
+            _project_span(conn, row, causal, payload, source_order)
+        elif row["event_kind"] == "meter":
+            _project_meter(conn, row, causal, payload)
+        elif row["event_kind"] == "charge":
+            _project_charge(conn, row, causal, payload)
+        elif row["event_kind"] == "outcome":
+            _project_outcome(conn, row, causal, payload)
+        else:  # pragma: no cover - append validates event kinds
+            raise ValueError(f"unsupported event kind: {row['event_kind']}")
+
+
+def _project_span(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    causal: dict[str, object],
+    payload: Mapping[str, object],
+    source_order: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO causal_runs(run_id, conversation_id, trace_id, lifecycle, created_at,
+                                observed_at, stop_reason, source_coverage_json)
+        VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(run_id) DO UPDATE SET
+            lifecycle=excluded.lifecycle, observed_at=excluded.observed_at,
+            stop_reason=excluded.stop_reason
+        """,
+        (
+            causal["run_id"],
+            causal["conversation_id"],
+            causal["trace_id"],
+            payload["lifecycle"],
+            row["occurred_at"],
+            row["observed_at"],
+            payload.get("stop_reason"),
+            "{}",
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO causal_spans(
+            span_id, run_id, conversation_id, trace_id, parent_span_id, operation_kind,
+            lifecycle, agent_id, workflow_node_id, branch_id, attempt_of_span_id,
+            checkpoint_id, occurred_at, observed_at, source_order
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(span_id) DO UPDATE SET
+            lifecycle=excluded.lifecycle, observed_at=excluded.observed_at,
+            source_order=excluded.source_order
+        """,
+        (
+            causal["span_id"],
+            causal["run_id"],
+            causal["conversation_id"],
+            causal["trace_id"],
+            causal.get("parent_span_id"),
+            payload["operation_kind"],
+            payload["lifecycle"],
+            payload.get("agent_id"),
+            payload.get("workflow_node_id"),
+            payload.get("branch_id"),
+            payload.get("attempt_of_span_id"),
+            payload.get("checkpoint_id"),
+            row["occurred_at"],
+            row["observed_at"],
+            source_order,
+        ),
+    )
+    links = causal.get("links", [])
+    if not isinstance(links, list):  # pragma: no cover - causal contract validation
+        raise ValueError("causal links must be a list")
+    for linked_span_id in links:
+        if not isinstance(linked_span_id, str):  # pragma: no cover - causal contract validation
+            raise ValueError("causal link must be an identifier")
+        conn.execute(
+            "INSERT INTO span_links(span_id, linked_span_id, link_type, observation_id) "
+            "VALUES (?,?,?,?)",
+            (causal["span_id"], linked_span_id, "fan_in", row["observation_id"]),
+        )
+
+
+def _project_meter(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    causal: dict[str, object],
+    payload: dict[str, object],
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO meter_facts(
+            fact_id, span_id, meter_name, unit, quantity_micros, aggregation,
+            dimensions_json, source, finality, occurred_at, observed_at, observation_id
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            opaque_id("fact", row["observation_id"]),
+            causal["span_id"],
+            payload["meter_name"],
+            payload["unit"],
+            payload["quantity_micros"],
+            payload["aggregation"],
+            canonical_json(payload.get("dimensions", {})),
+            row["producer"],
+            payload["finality"],
+            row["occurred_at"],
+            row["observed_at"],
+            row["observation_id"],
+        ),
+    )
+
+
+def _project_charge(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    causal: dict[str, object],
+    payload: dict[str, object],
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO charges(
+            charge_id, fact_id, span_id, amount_micros, currency, authority, line_item,
+            tariff_json, account_scope, billing_period, finality, occurred_at, observed_at,
+            supersedes_charge_id, observation_id
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            opaque_id("charge", row["observation_id"]),
+            payload.get("fact_id"),
+            causal["span_id"],
+            payload["amount_micros"],
+            payload["currency"],
+            payload["authority"],
+            payload["line_item"],
+            canonical_json(payload.get("tariff", {})),
+            payload.get("account_scope"),
+            payload.get("billing_period"),
+            payload["finality"],
+            row["occurred_at"],
+            row["observed_at"],
+            payload.get("supersedes_charge_id"),
+            row["observation_id"],
+        ),
+    )
+
+
+def _project_outcome(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    causal: dict[str, object],
+    payload: dict[str, object],
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO outcome_evidence(
+            evidence_id, run_id, outcome_status, reason_code, evidence_type, source,
+            confidence, observed_at, supersedes_evidence_id, observation_id
+        ) VALUES (?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            opaque_id("outcome", row["observation_id"]),
+            causal["run_id"],
+            payload["outcome_status"],
+            payload.get("reason_code"),
+            payload["evidence_type"],
+            row["producer"],
+            payload["confidence"],
+            row["observed_at"],
+            payload.get("supersedes_evidence_id"),
+            row["observation_id"],
+        ),
+    )
+
+
+def observation(
+    *,
+    producer: str,
+    event_kind: str,
+    causal: CausalIdentity,
+    payload: Mapping[str, object],
+    occurred_at: datetime | None = None,
+    observed_at: datetime | None = None,
+) -> Observation:
+    """Small ergonomic factory used by adapters and the offline conformance lab."""
+    now = datetime.now(timezone.utc)
+    return Observation(
+        producer=producer,
+        event_kind=event_kind,
+        causal=causal,
+        payload=dict(payload),
+        occurred_at=occurred_at or now,
+        observed_at=observed_at or now,
+    )

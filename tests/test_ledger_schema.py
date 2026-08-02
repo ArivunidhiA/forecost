@@ -46,3 +46,27 @@ def test_schema_v3_deduplicates_reconciliations_before_unique_index(tmp_path):
             """
         )
     conn.close()
+
+
+def test_schema_v4_creates_append_only_receipt_kernel(tmp_path):
+    conn = sqlite3.connect(tmp_path / "fresh.db")
+    apply_schema(conn)
+
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%_observations' "
+            "OR name IN ('causal_runs', 'causal_spans', 'meter_facts', 'charges', "
+            "'receipt_snapshots')"
+        )
+    }
+    assert {
+        "journal_observations",
+        "causal_runs",
+        "causal_spans",
+        "meter_facts",
+        "charges",
+        "receipt_snapshots",
+    } <= tables
+    conn.close()

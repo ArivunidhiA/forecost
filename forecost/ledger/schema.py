@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS workspaces (
@@ -171,6 +171,125 @@ CREATE TABLE IF NOT EXISTS guard_flags (
     shadow        INTEGER NOT NULL DEFAULT 1,
     user_action   TEXT
 );
+
+-- v4: immutable, content-free causal/economic evidence.  These tables are
+-- intentionally additive: v3 usage_events/postings remain readable while
+-- adapters graduate to the receipt kernel.
+CREATE TABLE IF NOT EXISTS journal_observations (
+    observation_id TEXT PRIMARY KEY,
+    schema_version INTEGER NOT NULL,
+    producer       TEXT NOT NULL,
+    source_sequence INTEGER NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    event_kind     TEXT NOT NULL,
+    occurred_at    TEXT NOT NULL,
+    observed_at    TEXT NOT NULL,
+    causal_json    TEXT NOT NULL,
+    payload_json   TEXT NOT NULL,
+    supersedes_observation_id TEXT,
+    UNIQUE(producer, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_journal_projection_order
+    ON journal_observations(producer, source_sequence, idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_journal_occurred_at ON journal_observations(occurred_at);
+
+CREATE TABLE IF NOT EXISTS causal_runs (
+    run_id          TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    trace_id        TEXT NOT NULL,
+    lifecycle       TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    observed_at     TEXT NOT NULL,
+    stop_reason     TEXT,
+    source_coverage_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS causal_spans (
+    span_id          TEXT PRIMARY KEY,
+    run_id           TEXT NOT NULL,
+    conversation_id  TEXT NOT NULL,
+    trace_id         TEXT NOT NULL,
+    parent_span_id   TEXT,
+    operation_kind   TEXT NOT NULL,
+    lifecycle        TEXT NOT NULL,
+    agent_id         TEXT,
+    workflow_node_id TEXT,
+    branch_id        TEXT,
+    attempt_of_span_id TEXT,
+    checkpoint_id    TEXT,
+    occurred_at      TEXT NOT NULL,
+    observed_at      TEXT NOT NULL,
+    source_order     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_causal_spans_run ON causal_spans(run_id, source_order);
+
+CREATE TABLE IF NOT EXISTS span_links (
+    span_id          TEXT NOT NULL,
+    linked_span_id   TEXT NOT NULL,
+    link_type        TEXT NOT NULL,
+    observation_id   TEXT NOT NULL,
+    PRIMARY KEY(span_id, linked_span_id, link_type, observation_id)
+);
+
+CREATE TABLE IF NOT EXISTS meter_facts (
+    fact_id          TEXT PRIMARY KEY,
+    span_id          TEXT NOT NULL,
+    meter_name       TEXT NOT NULL,
+    unit             TEXT NOT NULL,
+    quantity_micros  INTEGER NOT NULL,
+    aggregation      TEXT NOT NULL,
+    dimensions_json  TEXT NOT NULL,
+    source           TEXT NOT NULL,
+    finality         TEXT NOT NULL,
+    occurred_at      TEXT NOT NULL,
+    observed_at      TEXT NOT NULL,
+    observation_id   TEXT NOT NULL UNIQUE
+);
+CREATE INDEX IF NOT EXISTS idx_meter_facts_span ON meter_facts(span_id, meter_name);
+
+CREATE TABLE IF NOT EXISTS charges (
+    charge_id        TEXT PRIMARY KEY,
+    fact_id          TEXT,
+    span_id          TEXT NOT NULL,
+    amount_micros    INTEGER NOT NULL,
+    currency         TEXT NOT NULL,
+    authority        TEXT NOT NULL,
+    line_item        TEXT NOT NULL,
+    tariff_json      TEXT NOT NULL,
+    account_scope    TEXT,
+    billing_period   TEXT,
+    finality         TEXT NOT NULL,
+    occurred_at      TEXT NOT NULL,
+    observed_at      TEXT NOT NULL,
+    supersedes_charge_id TEXT,
+    observation_id   TEXT NOT NULL UNIQUE
+);
+CREATE INDEX IF NOT EXISTS idx_charges_span ON charges(span_id, currency, authority);
+
+CREATE TABLE IF NOT EXISTS outcome_evidence (
+    evidence_id      TEXT PRIMARY KEY,
+    run_id           TEXT NOT NULL,
+    outcome_status   TEXT NOT NULL,
+    reason_code      TEXT,
+    evidence_type    TEXT NOT NULL,
+    source           TEXT NOT NULL,
+    confidence       TEXT NOT NULL,
+    observed_at      TEXT NOT NULL,
+    supersedes_evidence_id TEXT,
+    observation_id   TEXT NOT NULL UNIQUE
+);
+CREATE INDEX IF NOT EXISTS idx_outcome_evidence_run ON outcome_evidence(run_id, observed_at);
+
+CREATE TABLE IF NOT EXISTS receipt_snapshots (
+    receipt_id       TEXT PRIMARY KEY,
+    run_id           TEXT NOT NULL,
+    schema_version   INTEGER NOT NULL,
+    generated_at     TEXT NOT NULL,
+    evidence_state   TEXT NOT NULL,
+    payload_json     TEXT NOT NULL,
+    UNIQUE(run_id, schema_version, generated_at)
+);
+CREATE INDEX IF NOT EXISTS idx_receipts_run ON receipt_snapshots(run_id, generated_at DESC);
 """
 
 
@@ -184,6 +303,9 @@ def apply_schema(conn: sqlite3.Connection) -> None:
     (current_version,) = conn.execute("PRAGMA user_version").fetchone()
     if current_version < 3:
         _migrate_reconciliation_uniqueness(conn)
+        current_version = 3
+    if current_version < 4:
+        _migrate_v4_receipt_kernel(conn)
 
 
 def _migrate_reconciliation_uniqueness(conn: sqlite3.Connection) -> None:
@@ -210,7 +332,23 @@ def _migrate_reconciliation_uniqueness(conn: sqlite3.Connection) -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS "
             "idx_reconciliations_estimate ON reconciliations(estimate_id)"
         )
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.execute("PRAGMA user_version = 3")
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _migrate_v4_receipt_kernel(conn: sqlite3.Connection) -> None:
+    """Mark the additive receipt kernel migration complete transactionally.
+
+    The DDL is idempotent and runs before this marker.  We still use an
+    immediate transaction so a failed version update cannot advertise a schema
+    that was only partly initialized.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("PRAGMA user_version = 4")
         conn.commit()
     except BaseException:
         conn.rollback()

@@ -62,7 +62,7 @@ dev = [
 
 [project.scripts]
 forecost = "forecost.cli:main"
-forecost-mcp = "forecost.mcp.server:main"
+forecost-mcp = "forecost.mcp_launcher:main"
 forecost-hook = "forecost.hooks.fastpath:main"
 
 [project.entry-points.pytest11]
