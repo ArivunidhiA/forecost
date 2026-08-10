@@ -10,10 +10,10 @@ publication remains a separate founder action.
 - Wheel: `forecost-0.3.0-py3-none-any.whl`
 - Wheel SHA-256:
   `49b6e822453d60e56aaa2df2840e81d2980a9ce681bc8610c0fe7e25901262f6`
-- Source distribution SHA-256:
-  `43ff1ae812089bdb5ec8f71d15b0f7c0c57d83dca671658a64f8f59b62932850`
-- Build mode: local, offline, deterministic timestamp, clean commit
-  `7ab03a8100e0ffa1458d94fe88c7022c243c3dec`
+- Build mode: local, offline, deterministic timestamp, clean committed source.
+  The generated provenance records the exact source commit and both artifact
+  hashes; they are not embedded here because this report is itself part of the
+  source distribution.
 - Metadata: Twine passed; wheel paths and entry points passed custom inspection;
   the five required Claude plugin assets are present.
 
