@@ -249,7 +249,13 @@ def reconcile_run(
             WHERE authority IN ('provider_estimate', 'gateway_estimate', 'list_rate')
         ),
         local AS (SELECT * FROM ranked_local WHERE authority_rank = 1),
-        provider AS (SELECT * FROM active WHERE authority = 'billed')
+        provider AS (SELECT * FROM active WHERE authority = 'billed'),
+        local_keys AS (
+            SELECT DISTINCT fact_id, currency, line_item FROM local WHERE fact_id IS NOT NULL
+        ),
+        provider_keys AS (
+            SELECT DISTINCT fact_id, currency, line_item FROM provider WHERE fact_id IS NOT NULL
+        )
     """
     stats_sql = (
         cte  # noqa: S608 - composed exclusively from static SQL literals
@@ -259,24 +265,12 @@ def reconcile_run(
             (SELECT COUNT(*) FROM provider) AS provider_count,
             COALESCE((SELECT SUM(amount_micros) FROM local), 0) AS local_total,
             COALESCE((SELECT SUM(amount_micros) FROM provider), 0) AS provider_total,
+            (SELECT COUNT(*) FROM local_keys l
+             JOIN provider_keys p USING(fact_id, currency, line_item)) AS exact_match_count,
             (SELECT COUNT(*) FROM local l
-             WHERE l.fact_id IS NOT NULL AND EXISTS (
-                 SELECT 1 FROM provider p
-                 WHERE p.fact_id = l.fact_id AND p.currency = l.currency
-                   AND p.line_item = l.line_item
-             )) AS exact_match_count,
-            (SELECT COUNT(*) FROM local l
-             WHERE l.fact_id IS NULL OR NOT EXISTS (
-                 SELECT 1 FROM provider p
-                 WHERE p.fact_id = l.fact_id AND p.currency = l.currency
-                   AND p.line_item = l.line_item
-             )) AS unmatched_local_count,
+             JOIN provider_keys p USING(fact_id, currency, line_item)) AS matched_local_count,
             (SELECT COUNT(*) FROM provider p
-             WHERE p.fact_id IS NULL OR NOT EXISTS (
-                 SELECT 1 FROM local l
-                 WHERE l.fact_id = p.fact_id AND l.currency = p.currency
-                   AND l.line_item = p.line_item
-             )) AS unmatched_provider_count,
+             JOIN local_keys l USING(fact_id, currency, line_item)) AS matched_provider_count,
             COALESCE((SELECT MIN(finality = 'final') FROM (
                 SELECT finality FROM local UNION ALL SELECT finality FROM provider
             )), 0) AS all_inputs_final,
@@ -294,8 +288,8 @@ def reconcile_run(
     local_total = int(stats["local_total"])
     provider_total = int(stats["provider_total"])
     exact_match_count = int(stats["exact_match_count"])
-    unmatched_local_count = int(stats["unmatched_local_count"])
-    unmatched_provider_count = int(stats["unmatched_provider_count"])
+    unmatched_local_count = local_count - int(stats["matched_local_count"])
+    unmatched_provider_count = provider_count - int(stats["matched_provider_count"])
     residual = provider_total - local_total
     expected = 2
     observed = int(local_count > 0) + int(provider_count > 0)
@@ -314,21 +308,17 @@ def reconcile_run(
     evidence_sql = (
         cte  # noqa: S608 - composed exclusively from static SQL literals
         + """
-        SELECT observation_id, 'local' AS source_role,
-               CASE WHEN fact_id IS NOT NULL AND EXISTS (
-                   SELECT 1 FROM provider p
-                   WHERE p.fact_id = local.fact_id AND p.currency = local.currency
-                     AND p.line_item = local.line_item
-               ) THEN 'exact_identity' ELSE 'aggregate_constraint' END AS match_state
-        FROM local
+        SELECT l.observation_id, 'local' AS source_role,
+               CASE WHEN p.fact_id IS NOT NULL
+                    THEN 'exact_identity' ELSE 'aggregate_constraint' END AS match_state
+        FROM local l
+        LEFT JOIN provider_keys p USING(fact_id, currency, line_item)
         UNION ALL
-        SELECT observation_id, 'provider_bill' AS source_role,
-               CASE WHEN fact_id IS NOT NULL AND EXISTS (
-                   SELECT 1 FROM local l
-                   WHERE l.fact_id = provider.fact_id AND l.currency = provider.currency
-                     AND l.line_item = provider.line_item
-               ) THEN 'exact_identity' ELSE 'aggregate_constraint' END AS match_state
-        FROM provider
+        SELECT p.observation_id, 'provider_bill' AS source_role,
+               CASE WHEN l.fact_id IS NOT NULL
+                    THEN 'exact_identity' ELSE 'aggregate_constraint' END AS match_state
+        FROM provider p
+        LEFT JOIN local_keys l USING(fact_id, currency, line_item)
         ORDER BY source_role, observation_id
         """
     )

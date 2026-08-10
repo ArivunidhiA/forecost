@@ -276,6 +276,9 @@ CREATE TABLE IF NOT EXISTS charges (
     observation_id   TEXT NOT NULL UNIQUE
 );
 CREATE INDEX IF NOT EXISTS idx_charges_span ON charges(span_id, currency, authority);
+CREATE INDEX IF NOT EXISTS idx_charges_supersedes ON charges(supersedes_charge_id);
+CREATE INDEX IF NOT EXISTS idx_charges_authority_fact
+    ON charges(authority, fact_id, currency, line_item, observed_at);
 
 CREATE TABLE IF NOT EXISTS outcome_evidence (
     evidence_id      TEXT PRIMARY KEY,
