@@ -7,7 +7,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
@@ -16,6 +16,8 @@ from forecost.ledger.contracts import CausalIdentity, canonical_json, opaque_id
 from forecost.ledger.evidence import append_observation, observation
 
 _SOURCES = frozenset({"openai", "anthropic", "gateway", "otel"})
+
+
 def _as_micros(value: object) -> int:
     if isinstance(value, bool):
         raise ValueError("billing amount must be numeric")
@@ -48,19 +50,23 @@ def _records_from_json(value: object) -> list[Mapping[str, object]]:
         raise ValueError("billing JSON must be an object or array")
     data = value.get("data", value.get("results", value))
     if isinstance(data, list):
-        records: list[Mapping[str, object]] = []
-        for item in data:
-            if not isinstance(item, Mapping):
-                continue
-            nested = item.get("results")
-            if isinstance(nested, list):
-                for child in nested:
-                    if isinstance(child, Mapping):
-                        records.append({**item, **child})
-            else:
-                records.append(item)
-        return records
+        return _flatten_records(data)
     return [value]
+
+
+def _flatten_records(values: list[object]) -> list[Mapping[str, object]]:
+    records: list[Mapping[str, object]] = []
+    for item in values:
+        if isinstance(item, Mapping):
+            records.extend(_flatten_record(item))
+    return records
+
+
+def _flatten_record(item: Mapping[str, object]) -> list[Mapping[str, object]]:
+    nested = item.get("results")
+    if not isinstance(nested, list):
+        return [item]
+    return [{**item, **child} for child in nested if isinstance(child, Mapping)]
 
 
 def _load_records(path: Path) -> list[Mapping[str, object]]:
@@ -97,6 +103,118 @@ def _stable_file_digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _existing_import_root(conn: sqlite3.Connection, run_id: str | None) -> sqlite3.Row | None:
+    if run_id is None:
+        return None
+    return conn.execute(
+        "SELECT * FROM causal_spans WHERE run_id = ? ORDER BY source_order LIMIT 1",
+        (opaque_id("run", run_id),),
+    ).fetchone()
+
+
+def _new_import_identity(digest: str, source: str) -> CausalIdentity:
+    return CausalIdentity(
+        conversation_id=f"import-conversation-{digest}",
+        trace_id=digest[:32],
+        run_id=f"import-{source}-{digest}",
+        span_id=digest[32:48],
+        source_sequence=0,
+        idempotency_key=f"import-root-{digest}",
+    )
+
+
+def _stored_import_identity(existing: sqlite3.Row, digest: str) -> CausalIdentity:
+    return CausalIdentity(
+        conversation_id=existing["conversation_id"],
+        trace_id=existing["trace_id"],
+        run_id=existing["run_id"],
+        span_id=existing["span_id"],
+        source_sequence=0,
+        idempotency_key=f"import-root-{digest}",
+    )
+
+
+def _import_root(
+    conn: sqlite3.Connection,
+    source: str,
+    digest: str,
+    records: list[Mapping[str, object]],
+    run_id: str | None,
+) -> CausalIdentity:
+    existing = _existing_import_root(conn, run_id)
+    if existing is not None:
+        return _stored_import_identity(existing, digest)
+    root = _new_import_identity(digest, source)
+    occurred_at = _record_timestamp(records[0])
+    append_observation(
+        conn,
+        observation(
+            producer=f"billing-{source}",
+            event_kind="span",
+            causal=root,
+            payload={
+                "operation_kind": "custom",
+                "lifecycle": "completed",
+                "branch_id": "billing",
+            },
+            occurred_at=occurred_at,
+            observed_at=occurred_at,
+        ),
+    )
+    return root
+
+
+def _line_item(record: Mapping[str, object]) -> str:
+    value = record.get("line_item", record.get("model", "model_inference"))
+    return value if isinstance(value, str) else "model_inference"
+
+
+def _account_scope(record: Mapping[str, object]) -> str | None:
+    value = record.get("project_id", record.get("workspace_id", record.get("account_id")))
+    if value is None or isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _fact_id(record: Mapping[str, object]) -> str | None:
+    value = record.get("fact_id")
+    if value is not None and not isinstance(value, str):
+        raise ValueError("fact_id must be a string when supplied")
+    return value
+
+
+def _append_import_record(
+    conn: sqlite3.Connection,
+    root: CausalIdentity,
+    source: str,
+    digest: str,
+    index: int,
+    record: Mapping[str, object],
+) -> bool:
+    occurred_at = _record_timestamp(record)
+    causal = replace(root, source_sequence=index, idempotency_key=f"import-{digest}-{index}")
+    return append_observation(
+        conn,
+        observation(
+            producer=f"billing-{source}",
+            event_kind="charge",
+            causal=causal,
+            payload={
+                "fact_id": _fact_id(record),
+                "amount_micros": _record_amount(record),
+                "currency": "USD",
+                "authority": "billed",
+                "line_item": _line_item(record),
+                "tariff": {},
+                "account_scope": _account_scope(record),
+                "finality": "final",
+            },
+            occurred_at=occurred_at,
+            observed_at=occurred_at,
+        ),
+    )
+
+
 def import_bill_file(
     conn: sqlite3.Connection,
     path: Path,
@@ -120,108 +238,15 @@ def import_bill_file(
     records = _load_records(path)
     if not records:
         raise ValueError("billing file contains no records")
-    raw_run = run_id or f"import-{source}-{digest}"
-    existing = (
-        conn.execute(
-            "SELECT * FROM causal_spans WHERE run_id = ? ORDER BY source_order LIMIT 1",
-            (opaque_id("run", raw_run),),
-        ).fetchone()
-        if run_id is not None
-        else None
+    root = _import_root(conn, source, digest, records, run_id)
+    imported = sum(
+        _append_import_record(conn, root, source, digest, index, record)
+        for index, record in enumerate(records, start=1)
     )
-    if existing is None:
-        root = CausalIdentity(
-            conversation_id=f"import-conversation-{digest}",
-            trace_id=digest[:32],
-            run_id=raw_run,
-            span_id=digest[32:48],
-            source_sequence=0,
-            idempotency_key=f"import-root-{digest}",
-        )
-        append_observation(
-            conn,
-            observation(
-                producer=f"billing-{source}",
-                event_kind="span",
-                causal=root,
-                payload={
-                    "operation_kind": "custom",
-                    "lifecycle": "completed",
-                    "branch_id": "billing",
-                },
-                occurred_at=_record_timestamp(records[0]),
-                observed_at=_record_timestamp(records[0]),
-            ),
-        )
-    else:
-        root = CausalIdentity(
-            conversation_id=existing["conversation_id"],
-            trace_id=existing["trace_id"],
-            run_id=existing["run_id"],
-            span_id=existing["span_id"],
-            source_sequence=0,
-            idempotency_key=f"import-root-{digest}",
-        )
-    imported = 0
-    for index, record in enumerate(records, start=1):
-        amount = _record_amount(record)
-        occurred_at = _record_timestamp(record)
-        line_item = record.get("line_item", record.get("model", "model_inference"))
-        if not isinstance(line_item, str):
-            line_item = "model_inference"
-        account_scope = record.get(
-            "project_id", record.get("workspace_id", record.get("account_id"))
-        )
-        if account_scope is not None and not isinstance(account_scope, str):
-            account_scope = str(account_scope)
-        fact_id = record.get("fact_id")
-        if fact_id is not None and not isinstance(fact_id, str):
-            raise ValueError("fact_id must be a string when supplied")
-        causal = replace(
-            root,
-            source_sequence=index,
-            idempotency_key=f"import-{digest}-{index}",
-        )
-        if append_observation(
-            conn,
-            observation(
-                producer=f"billing-{source}",
-                event_kind="charge",
-                causal=causal,
-                payload={
-                    "fact_id": fact_id,
-                    "amount_micros": amount,
-                    "currency": "USD",
-                    "authority": "billed",
-                    "line_item": line_item,
-                    "tariff": {},
-                    "account_scope": account_scope,
-                    "finality": "final",
-                },
-                occurred_at=occurred_at,
-                observed_at=occurred_at,
-            ),
-        ):
-            imported += 1
     return root.normalized().run_id, imported
 
 
-def reconcile_run(
-    conn: sqlite3.Connection,
-    run_id: str | None,
-    *,
-    tolerance_micros: int = 1_000,
-) -> dict[str, object]:
-    """Compare local valuations and provider bills without forced matching.
-
-    Canonical authority selection and aggregate constraints execute in SQLite.
-    Python receives one statistics row and streams evidence identifiers, so the
-    memory footprint does not grow with the number of charge rows.
-    """
-    if tolerance_micros < 0:
-        raise ValueError("tolerance_micros must be non-negative")
-    normalized_run = opaque_id("run", run_id) if run_id is not None else None
-    params: tuple[object, ...] = (normalized_run, normalized_run)
+def _reconciliation_queries() -> tuple[str, str]:
     cte = """
         WITH active AS (
             SELECT c.* FROM charges c
@@ -258,7 +283,7 @@ def reconcile_run(
         )
     """
     stats_sql = (
-        cte  # noqa: S608 - composed exclusively from static SQL literals
+        cte  # noqa: S608  # nosec B608
         + """
         SELECT
             (SELECT COUNT(*) FROM local) AS local_count,
@@ -282,31 +307,8 @@ def reconcile_run(
             )) AS window_end
         """
     )
-    stats = conn.execute(stats_sql, params).fetchone()
-    local_count = int(stats["local_count"])
-    provider_count = int(stats["provider_count"])
-    local_total = int(stats["local_total"])
-    provider_total = int(stats["provider_total"])
-    exact_match_count = int(stats["exact_match_count"])
-    unmatched_local_count = local_count - int(stats["matched_local_count"])
-    unmatched_provider_count = provider_count - int(stats["matched_provider_count"])
-    residual = provider_total - local_total
-    expected = 2
-    observed = int(local_count > 0) + int(provider_count > 0)
-    all_inputs_final = bool(stats["all_inputs_final"])
-    if observed == 0:
-        state, finality = "unknown", "unknown"
-    elif observed < expected:
-        state, finality = "incomplete", "provisional"
-    elif abs(residual) <= tolerance_micros:
-        state = "reconciled"
-        finality = "final" if all_inputs_final else "provisional"
-    else:
-        state = "discrepant"
-        finality = "final" if all_inputs_final else "provisional"
-    evidence_hasher = hashlib.sha256()
     evidence_sql = (
-        cte  # noqa: S608 - composed exclusively from static SQL literals
+        cte  # noqa: S608  # nosec B608
         + """
         SELECT l.observation_id, 'local' AS source_role,
                CASE WHEN p.fact_id IS NOT NULL
@@ -322,27 +324,98 @@ def reconcile_run(
         ORDER BY source_role, observation_id
         """
     )
+    return stats_sql, evidence_sql
+
+
+@dataclass(frozen=True)
+class _ReconciliationStats:
+    local_count: int
+    provider_count: int
+    local_total: int
+    provider_total: int
+    exact_match_count: int
+    unmatched_local_count: int
+    unmatched_provider_count: int
+    window_start: str | None
+    window_end: str | None
+    all_inputs_final: bool
+
+    @property
+    def residual(self) -> int:
+        return self.provider_total - self.local_total
+
+    @property
+    def observed(self) -> int:
+        return int(self.local_count > 0) + int(self.provider_count > 0)
+
+
+def _load_reconciliation_stats(
+    conn: sqlite3.Connection, stats_sql: str, params: tuple[object, ...]
+) -> _ReconciliationStats:
+    row = conn.execute(stats_sql, params).fetchone()
+    local_count = int(row["local_count"])
+    provider_count = int(row["provider_count"])
+    return _ReconciliationStats(
+        local_count=local_count,
+        provider_count=provider_count,
+        local_total=int(row["local_total"]),
+        provider_total=int(row["provider_total"]),
+        exact_match_count=int(row["exact_match_count"]),
+        unmatched_local_count=local_count - int(row["matched_local_count"]),
+        unmatched_provider_count=provider_count - int(row["matched_provider_count"]),
+        window_start=row["window_start"],
+        window_end=row["window_end"],
+        all_inputs_final=bool(row["all_inputs_final"]),
+    )
+
+
+def _reconciliation_state(stats: _ReconciliationStats, tolerance_micros: int) -> tuple[str, str]:
+    if stats.observed == 0:
+        return "unknown", "unknown"
+    if stats.observed < 2:
+        return "incomplete", "provisional"
+    state = "reconciled" if abs(stats.residual) <= tolerance_micros else "discrepant"
+    finality = "final" if stats.all_inputs_final else "provisional"
+    return state, finality
+
+
+def _evidence_digest(
+    conn: sqlite3.Connection, evidence_sql: str, params: tuple[object, ...]
+) -> str:
+    evidence_hasher = hashlib.sha256()
     for row in conn.execute(evidence_sql, params):
         observation_id = str(row["observation_id"])
         evidence_hasher.update(observation_id.encode("ascii"))
         evidence_hasher.update(b"\0")
-    material = {
+    return evidence_hasher.hexdigest()
+
+
+def _reconciliation_material(
+    normalized_run: str | None,
+    stats: _ReconciliationStats,
+    tolerance_micros: int,
+    state: str,
+    evidence_digest: str,
+) -> dict[str, object]:
+    return {
         "run_id": normalized_run,
-        "local_total": local_total,
-        "provider_total": provider_total,
-        "residual": residual,
+        "local_total": stats.local_total,
+        "provider_total": stats.provider_total,
+        "residual": stats.residual,
         "tolerance": tolerance_micros,
         "state": state,
-        "local_count": local_count,
-        "provider_count": provider_count,
-        "exact_match_count": exact_match_count,
-        "unmatched_local_count": unmatched_local_count,
-        "unmatched_provider_count": unmatched_provider_count,
-        "expected": expected,
-        "observed": observed,
-        "evidence_digest": evidence_hasher.hexdigest(),
+        "local_count": stats.local_count,
+        "provider_count": stats.provider_count,
+        "exact_match_count": stats.exact_match_count,
+        "unmatched_local_count": stats.unmatched_local_count,
+        "unmatched_provider_count": stats.unmatched_provider_count,
+        "expected": 2,
+        "observed": stats.observed,
+        "evidence_digest": evidence_digest,
     }
-    batch_id = opaque_id("reconciliation", canonical_json(material))
+
+
+def _prior_batch(conn: sqlite3.Connection, normalized_run: str | None) -> sqlite3.Row | None:
     prior_query = (
         "SELECT batch_id FROM reconciliation_batches WHERE run_id = ? "
         "ORDER BY created_at DESC, batch_id DESC LIMIT 1"
@@ -351,19 +424,41 @@ def reconcile_run(
         "ORDER BY created_at DESC, batch_id DESC LIMIT 1"
     )
     prior_params = (normalized_run,) if normalized_run is not None else ()
-    prior = conn.execute(prior_query, prior_params).fetchone()
-    if prior is not None and prior["batch_id"] == batch_id:
-        return {
-            **{key: value for key, value in material.items() if key != "evidence_digest"},
-            "batch_id": batch_id,
-            "finality": finality,
-            "supersedes_batch_id": None,
-            "reused": True,
-        }
-    supersedes_batch_id = prior["batch_id"] if prior is not None else None
+    return conn.execute(prior_query, prior_params).fetchone()
+
+
+def _public_result(
+    material: dict[str, object],
+    batch_id: str,
+    finality: str,
+    supersedes_batch_id: str | None,
+    *,
+    reused: bool,
+) -> dict[str, object]:
+    return {
+        **{key: value for key, value in material.items() if key != "evidence_digest"},
+        "batch_id": batch_id,
+        "finality": finality,
+        "supersedes_batch_id": supersedes_batch_id,
+        "reused": reused,
+    }
+
+
+def _persist_reconciliation(
+    conn: sqlite3.Connection,
+    normalized_run: str | None,
+    stats: _ReconciliationStats,
+    tolerance_micros: int,
+    state: str,
+    finality: str,
+    batch_id: str,
+    supersedes_batch_id: str | None,
+    evidence_sql: str,
+    params: tuple[object, ...],
+) -> None:
     now = datetime.now(timezone.utc).isoformat()
-    window_start = stats["window_start"] or now
-    window_end = stats["window_end"] or now
+    window_start = stats.window_start or now
+    window_end = stats.window_end or now
     conn.execute(
         """
         INSERT INTO reconciliation_batches(
@@ -378,19 +473,21 @@ def reconcile_run(
             batch_id,
             1,
             normalized_run,
-            canonical_json({"local": local_count > 0, "provider_bill": provider_count > 0}),
+            canonical_json(
+                {"local": stats.local_count > 0, "provider_bill": stats.provider_count > 0}
+            ),
             None,
             "{}",
             window_start,
             window_end,
             canonical_json({"as_of": now}),
-            expected,
-            observed,
-            unmatched_local_count,
-            unmatched_provider_count,
-            local_total,
-            provider_total,
-            residual,
+            2,
+            stats.observed,
+            stats.unmatched_local_count,
+            stats.unmatched_provider_count,
+            stats.local_total,
+            stats.provider_total,
+            stats.residual,
             tolerance_micros,
             finality,
             state,
@@ -408,10 +505,49 @@ def reconcile_run(
         ),
     )
     conn.commit()
-    return {
-        **{key: value for key, value in material.items() if key != "evidence_digest"},
-        "batch_id": batch_id,
-        "finality": finality,
-        "supersedes_batch_id": supersedes_batch_id,
-        "reused": False,
-    }
+
+
+def reconcile_run(
+    conn: sqlite3.Connection,
+    run_id: str | None,
+    *,
+    tolerance_micros: int = 1_000,
+) -> dict[str, object]:
+    """Compare local valuations and provider bills without forced matching.
+
+    Canonical authority selection and aggregate constraints execute in SQLite.
+    Python receives one statistics row and streams evidence identifiers, so the
+    memory footprint does not grow with the number of charge rows.
+    """
+    if tolerance_micros < 0:
+        raise ValueError("tolerance_micros must be non-negative")
+    normalized_run = opaque_id("run", run_id) if run_id is not None else None
+    params: tuple[object, ...] = (normalized_run, normalized_run)
+    stats_sql, evidence_sql = _reconciliation_queries()
+    stats = _load_reconciliation_stats(conn, stats_sql, params)
+    state, finality = _reconciliation_state(stats, tolerance_micros)
+    material = _reconciliation_material(
+        normalized_run,
+        stats,
+        tolerance_micros,
+        state,
+        _evidence_digest(conn, evidence_sql, params),
+    )
+    batch_id = opaque_id("reconciliation", canonical_json(material))
+    prior = _prior_batch(conn, normalized_run)
+    if prior is not None and prior["batch_id"] == batch_id:
+        return _public_result(material, batch_id, finality, None, reused=True)
+    supersedes_batch_id = prior["batch_id"] if prior is not None else None
+    _persist_reconciliation(
+        conn,
+        normalized_run,
+        stats,
+        tolerance_micros,
+        state,
+        finality,
+        batch_id,
+        supersedes_batch_id,
+        evidence_sql,
+        params,
+    )
+    return _public_result(material, batch_id, finality, supersedes_batch_id, reused=False)
