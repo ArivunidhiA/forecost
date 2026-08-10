@@ -59,3 +59,18 @@ control plane are not part of this release.
 The 0.3.0 changelog remains `Unreleased`. No PyPI release, GitHub release, tag,
 merge, announcement, or real-data migration is implied by this branch. Those
 remain founder-controlled actions after packaged-product QA.
+
+## Packaged-product QA
+
+The corrected base wheel was built offline from the clean product-core branch,
+passed Twine and wheel-content inspection, and completed installed CLI journeys
+for first use, receipt equivalence, empty/degraded input, schema upgrade with
+backup, Claude setup/self-test/uninstall, privacy verification, and journal
+tamper classification. Checksums, an SPDX SBOM, and unsigned local provenance
+were generated. The detailed evidence and residual risks are in
+[`qa/final-report.md`](qa/final-report.md).
+
+Publication is still held for current dependency-advisory refresh, the external
+Python/OS/optional-extra matrix, founder-approved live-runtime samples, and
+public-claim review. The current selective mutation baseline is also recorded as
+quality debt rather than represented as a passing score.

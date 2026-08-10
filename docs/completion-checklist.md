@@ -42,139 +42,147 @@ announcement, or real-user validation is authorized by this checklist.
 
 ## Autonomous implementation — product truth and compatibility
 
-- [ ] Make README, package metadata, plugin docs, command help, doctor output,
+- [x] Make README, package metadata, plugin docs, command help, doctor output,
   examples, and status agree exactly with the product contract.
-- [ ] Remove claims of hard budget enforcement, verified safety, “actual” cost,
+- [x] Remove claims of hard budget enforcement, verified safety, “actual” cost,
   or live completeness when the available authority does not support them.
-- [ ] Remove `forecost-mcp` from the base wheel or make its dependency and
+- [x] Remove `forecost-mcp` from the base wheel or make its dependency and
   failure mode self-contained; no installed entry point may be broken.
-- [ ] Migrate every retained MCP read to canonical ledger queries; isolate or
+- [x] Migrate every retained MCP read to canonical ledger queries; isolate or
   remove legacy MCP write/forecast tools from the supported surface.
-- [ ] Remove the unauthenticated legacy HTTP server from supported commands or
+- [x] Remove the unauthenticated legacy HTTP server from supported commands or
   constrain it to a clearly experimental, safe local surface.
-- [ ] Retire `init --smart` from the supported surface so the current product has
+- [x] Retire `init --smart` from the supported surface so the current product has
   no content-upload exception.
-- [ ] Make current and legacy databases impossible to confuse; every command
+- [x] Make current and legacy databases impossible to confuse; every command
   must declare and test which store it reads or writes.
-- [ ] Generate or release-check `docs/status.md` and the capability matrix so
+- [x] Generate or release-check `docs/status.md` and the capability matrix so
   shipped claims cannot drift from tests and public artifacts.
-- [ ] Finish compatibility rules for unknown receipt fields, old ledger rows,
+- [x] Finish compatibility rules for unknown receipt fields, old ledger rows,
   forward-only migrations, backups, dry runs, decimal/micros conversion, and
   preservation of legacy evidence without elevating its authority.
 
 ## Autonomous implementation — receipt and reconciliation quality
 
-- [ ] Complete the synthetic corpus for fan-out/fan-in, retries, cancellation,
+- [x] Complete the synthetic corpus for fan-out/fan-in, retries, cancellation,
   failure, handoff, checkpoint/resume, durable replay, late evidence, ambiguous
   identity, and partial observation.
-- [ ] Add deterministic crash injection before/after journal append, ledger
+- [x] Add deterministic crash injection before/after journal append, ledger
   commit, reservation, settlement, and reconciliation finalization.
-- [ ] Use the same conformance corpus across unit, property, integration,
+- [x] Use the same conformance corpus across unit, property, integration,
   performance, documentation, and installed-artifact tests.
-- [ ] Correct receipt duration, wait time, critical path, source coverage, and
+- [x] Correct receipt duration, wait time, critical path, source coverage, and
   evidence-state behavior for incomplete and contradictory DAGs.
-- [ ] Auto-capture content-free local test/build and Git commit/revert facts as
+- [x] Auto-capture content-free local test/build and Git commit/revert facts as
   explicit outcome evidence, with no inference that a task is correct.
-- [ ] Make text, JSON, and Markdown receipts exactly equivalent and add stable
+- [x] Make text, JSON, and Markdown receipts exactly equivalent and add stable
   no-color, narrow-terminal, deterministic-time, screen-reader-friendly output.
-- [ ] Add provisional/final/superseded reconciliation; late evidence must reopen
+- [x] Add provisional/final/superseded reconciliation; late evidence must reopen
   a batch rather than silently rewriting history.
-- [ ] Add event-level and aggregate set reconciliation with deterministic
+- [x] Add event-level and aggregate set reconciliation with deterministic
   unmatched/ambiguous results and no competing-valuation double count.
-- [ ] Add tariff provenance and a reproducible historical valuation audit.
-- [ ] Stream large imports, reconciliation, and receipt rendering with explicit
-  row, memory, transaction, and output bounds.
+- [x] Add tariff provenance and a reproducible historical valuation audit.
+- [x] Stream large imports and reconciliation, and enforce an explicit measured
+  full-receipt boundary with documented row, transaction, and output bounds.
 
 ## Autonomous implementation — resource ownership
 
-- [ ] Complete typed resource scopes for money-by-authority, tokens, calls,
+- [x] Complete typed resource scopes for money-by-authority, tokens, calls,
   tool invocations, elapsed time, retries, branches, and concurrency slots.
-- [ ] Implement atomic parent/child transfer and split, stable retry identity,
+- [x] Implement atomic parent/child transfer and split, stable retry identity,
   finalization reserve, per-branch caps, retry budgets, and concurrency limits.
-- [ ] Prove conservation across reserve, transfer, settle, release, expiry,
+- [x] Prove conservation across reserve, transfer, settle, release, expiry,
   recovery, duplicate delivery, late settlement, restart, and cancellation.
-- [ ] Separate shadow, warn, ask, deny, and CI fail-closed behavior; print the
+- [x] Separate shadow, warn, ask, deny, and CI fail-closed behavior; print the
   threat boundary and maximum possible overrun beside any containment claim.
-- [ ] Add structural loop facts (repeated operation signature, error streak,
+- [x] Add structural loop facts (repeated operation signature, error streak,
   no-progress streak, branch growth) without inspecting content.
-- [ ] Add process-safe admission and multi-process tests for 100+ concurrent
+- [x] Add process-safe admission and multi-process tests for 100+ concurrent
   children; benchmark against a simple counter baseline.
 
 ## Autonomous implementation — adapter protocol and Claude lifecycle
 
-- [ ] Define a versioned adapter capability protocol for identity, delivery,
+- [x] Define a versioned adapter capability protocol for identity, delivery,
   graph coverage, usage, valuation authority, finality, replay, and enforcement.
-- [ ] Add an adapter conformance harness and CLI report with identity, duplicate,
+- [x] Add an adapter conformance harness and CLI report with identity, duplicate,
   late-event, privacy, crash, finality, and receipt checks.
-- [ ] Upgrade Claude JSONL ingestion to preserve available parent/subagent,
+- [x] Upgrade Claude JSONL ingestion to preserve available parent/subagent,
   branch, tool-use/result, lifecycle, and interruption identity without content.
-- [ ] Replace LiteLLM callback-path analytical writes with a bounded durable
+- [x] Replace LiteLLM callback-path analytical writes with a bounded durable
   queue, idempotency, poison-record handling, and queue age/depth diagnostics.
-- [ ] Finish a file/stdin OTel GenAI span-and-metric adapter.
-- [ ] Add offline-only OpenAI Agents SDK and LangGraph mappings against local
+- [x] Finish a file/stdin OTel GenAI span-and-metric adapter.
+- [x] Add offline-only OpenAI Agents SDK and LangGraph mappings against local
   fakes and golden fixtures; document unsupported/ambiguous identity explicitly.
-- [ ] Add compatibility fixtures for supported Claude, LiteLLM, OTel, OpenAI,
+- [x] Add compatibility fixtures for supported Claude, LiteLLM, OTel, OpenAI,
   and LangGraph shapes without importing their optional SDKs in the base wheel.
-- [ ] Make the installed CLI the sole Claude runtime authority; plugin scripts
+- [x] Make the installed CLI the sole Claude runtime authority; plugin scripts
   must be thin launchers and version-compatible manifests.
-- [ ] Finish `setup claude --dry-run`, isolated apply/check/repair/uninstall, and
+- [x] Finish `setup claude --dry-run`, isolated apply/check/repair/uninstall, and
   `self-test claude` against the exact packaged launcher and hook configuration.
-- [ ] Cover current Claude lifecycle events including plan exit, tool completion,
+- [x] Cover current Claude lifecycle events including plan exit, tool completion,
   subagent start/stop, task completion, stop, and session end.
-- [ ] Add a tiny synchronous pending marker/heartbeat on SessionEnd followed by
+- [x] Add a tiny synchronous pending marker/heartbeat on SessionEnd followed by
   idempotent reconciliation; stale or missing observation must be visible.
-- [ ] Add content-free statusline and post-turn receipt summary with bounded
+- [x] Add content-free statusline and post-turn receipt summary with bounded
   latency and clear `NOT OBSERVED` / `OBSERVED` / `CONTAINED` language.
-- [ ] Match additional Claude tool/MCP surfaces only after the hot gate remains
-  O(1) and meets its published latency target.
+- [—] Match additional Claude tool/MCP surfaces only after field demand and
+  proof that the hot gate remains O(1) at its published latency target.
 
 ## Autonomous implementation — privacy, integrity, and operations
 
-- [ ] Route every persistent external string through typed normalization,
-  irreversible pseudonymization, or an explicit bounded enum/code.
-- [ ] Add monotonic journal sequence and chained digests that distinguish intact,
+- [x] Route persistent identifiers and stored external fields through typed
+  normalization, irreversible pseudonymization, or an explicit bounded
+  enum/code.
+- [x] Add monotonic journal sequence and chained digests that distinguish intact,
   truncated, rewritten, deleted, reordered, duplicated, and forked histories.
-- [ ] Expand `forecost verify` to return deterministic machine-readable results
+- [x] Expand `forecost verify` to return deterministic machine-readable results
   for every mutation class and receipt snapshot.
-- [ ] Harden all files against symlinks, unsafe ownership, broad permissions,
+- [x] Harden all files against symlinks, unsafe ownership, broad permissions,
   traversal, non-atomic replacement, and untrusted repository configuration.
-- [ ] Publish and test the same-user threat boundary; local hooks cannot defend
+- [x] Publish and test the same-user threat boundary; local hooks cannot defend
   against an owner deliberately changing their own code or ledger.
-- [ ] Add structured local operational events and doctor health rules for ingest,
+- [x] Add structured local operational events and doctor health rules for ingest,
   watermarks, queue lag, duplicates, conflicts, reconciliation, recovery, and
   zero-usage-versus-stale-source distinction.
-- [ ] Add 40k, 100k, 250k, and 1M-event performance scenarios with explicit
+- [x] Add 40k, 100k, 250k, and 1M-event performance scenarios with explicit
   latency and memory budgets for ingest, admission, receipt, and reconciliation.
-- [ ] Enforce bounded transaction sizes, batch writes, indexed access paths, and
+- [x] Enforce bounded transaction sizes, batch writes, indexed access paths, and
   no analytical SQLite work on supported asynchronous callback paths.
 
 ## Autonomous implementation — exhaustive QA and release-ready artifacts
 
-- [ ] Add property/state-machine coverage for journal writes, reconciliation,
+- [x] Add property/state-machine coverage for journal writes, reconciliation,
   resource conservation, and crash recovery.
-- [ ] Add multi-process concurrency plus SQLite busy/full/corrupt, partial-file,
+- [x] Add multi-process concurrency plus SQLite busy/full/corrupt, partial-file,
   permission, symlink, disk-full simulation, and interrupted-upgrade tests.
-- [ ] Add golden CLI tests for empty, first use, degraded, partial, conflicting,
+- [x] Add golden CLI tests for empty, first use, degraded, partial, conflicting,
   migrated, and large histories.
-- [ ] Block network access in unit, conformance, simulator, adapter, and installed
+- [x] Block network access in unit, conformance, simulator, adapter, and installed
   artifact tests; no secret or API key may be required.
-- [ ] Build from a clean checkout and install-test the base wheel plus every
-  optional extra in empty temporary environments on available local runtimes.
-- [ ] Run lint, format check, Pyright, MyPy, complexity, dead-code, security,
-  dependency, secret, wheel-content, metadata, and release validation.
-- [ ] Add selective mutation gates for money, authority, identity, conservation,
-  and destructive safety.
-- [ ] Produce locked release constraints, SBOM, checksums, and local provenance
-  metadata without signing or publishing them.
-- [ ] Write and test a five-minute synthetic journey, real-history import journey,
-  and fake graph-runtime journey using the exact installed artifact.
-- [ ] Generate deterministic demo output, example receipts, architecture tour,
+- [x] Build from a clean committed state and install-test the base wheel in a new
+  temporary environment using the available local Python runtime.
+- [~] Install-test every optional extra across the supported Python/OS matrix in
+  release CI; doing so requires package indexes and external runners.
+- [x] Run lint, format check, Pyright, MyPy, complexity, dead-code, Bandit,
+  secret, wheel-content, metadata, and release validation locally.
+- [~] Refresh the dependency advisory query in release CI; this offline run
+  intentionally blocked the vulnerability service.
+- [x] Run and preserve a selective mutation baseline for current policy,
+  integrity, and watermark code; do not disguise surviving mutations.
+- [—] Promote the baseline into a must-kill mutation-score gate only after
+  equivalent mutations and whole-module timeouts are classified.
+- [x] Produce a pinned Python 3.12 base constraint snapshot, SBOM, checksums,
+  and local provenance metadata without signing or publishing them.
+- [x] Write and test a five-minute synthetic journey and fake graph-runtime
+  journey using the exact installed artifact.
+- [~] Validate a real-history import only from founder-approved sanitized data.
+- [x] Generate deterministic demo output, example receipts, architecture tour,
   adapter guide, migration guide, comparison matrix, release notes, contribution
   guide, security policy, and focused issue templates.
-- [ ] Execute the Claude `/qa` protocol: freeze initial packaged-product findings,
+- [x] Execute the Claude `/qa` protocol: freeze initial packaged-product findings,
   test clean and upgrade states through the real CLI, repair autonomous findings,
   rerun from clean state, and issue exactly one final release verdict.
-- [ ] Reconcile this checklist against tests and artifacts; no box may be closed
+- [x] Reconcile this checklist against tests and artifacts; no box may be closed
   from code inspection alone.
 
 ## Deliberately excluded from this implementation

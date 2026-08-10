@@ -136,9 +136,20 @@ markers = [
 ]
 
 [tool.mutmut]
-paths_to_mutate = ["forecost/pricing.py", "forecost/forecaster.py", "forecost/tracker.py"]
-tests_dir = ["tests"]
-runner = ".venv312/bin/pytest tests/ -q"
+paths_to_mutate = [
+    "forecost/policy/engine.py",
+    "forecost/ledger/integrity.py",
+    "forecost/ledger/state_store.py",
+]
+also_copy = ["forecost"]
+tests_dir = [
+    "tests/test_policy.py",
+    "tests/test_pricing_policy_confidence.py",
+    "tests/test_journal_integrity.py",
+    "tests/test_ledger.py",
+    "tests/test_adapters_claude_code.py",
+]
+pytest_add_cli_args = ["-p", "no:randomly", "-p", "no:random-order"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["forecost"]
