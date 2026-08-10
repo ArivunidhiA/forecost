@@ -30,8 +30,7 @@ def mark(run_id: str, status: str, reason: str | None) -> None:
     if row is None:
         raise click.ClickException("run not found")
     sequence = conn.execute(
-        "SELECT COALESCE(MAX(source_sequence), 0) + 1 FROM journal_observations "
-        "WHERE producer = ?",
+        "SELECT COALESCE(MAX(source_sequence), 0) + 1 FROM journal_observations WHERE producer = ?",
         (opaque_id("producer", "manual_mark"),),
     ).fetchone()[0]
     causal = CausalIdentity(

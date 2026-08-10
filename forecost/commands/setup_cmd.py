@@ -33,6 +33,7 @@ def _command(name: str) -> str:
 
 def _managed_hooks() -> dict[str, list[dict[str, object]]]:
     lifecycle = {"type": "command", "command": _command("lifecycle"), "timeout": 5, "async": True}
+
     def hook(command: str, timeout: int, *, asynchronous: bool = False) -> list[dict[str, object]]:
         item: dict[str, object] = {
             "type": "command",
@@ -153,6 +154,54 @@ def setup() -> None:
     """Prepare reversible local integrations."""
 
 
+def _setup_mode(**modes: bool) -> str:
+    selected = [name for name, enabled in modes.items() if enabled]
+    if len(selected) != 1:
+        raise click.UsageError(
+            "choose exactly one of --dry-run/--check/--apply/--repair/--uninstall"
+        )
+    return selected[0]
+
+
+def _validate_plugin(root: Path) -> None:
+    required = (
+        root / ".claude-plugin" / "plugin.json",
+        root / "hooks" / "hooks.json",
+        root / "scripts" / "run-hook.sh",
+    )
+    missing = [path.name for path in required if not path.is_file()]
+    if missing:
+        raise click.ClickException(f"plugin package is incomplete: {', '.join(missing)}")
+
+
+def _check(path: Path, settings: dict[str, object]) -> None:
+    state = "installed" if _installed(settings) and _protocol_installed(path) else "not installed"
+    click.echo(
+        f"Claude plugin package: ready; managed config: {state}; protocol v{HOOK_PROTOCOL_VERSION}."
+    )
+
+
+def _dry_run(root: Path, path: Path) -> None:
+    click.echo("Claude setup dry run (no files changed):")
+    click.echo(f"  plugin root: {root}")
+    click.echo(f"  settings: {path}")
+    click.echo("  action: install/repair versioned Forecost hook entries only")
+
+
+def _uninstall(path: Path, settings: dict[str, object]) -> None:
+    _without_managed(settings)
+    _write_settings(path, settings)
+    _protocol_path(path).unlink(missing_ok=True)
+    click.echo(f"Removed Forecost-managed Claude hooks from {path}.")
+
+
+def _apply(path: Path, settings: dict[str, object], *, repair: bool) -> None:
+    _write_settings(path, _install(settings))
+    _write_settings(_protocol_path(path), {"hook_protocol_version": HOOK_PROTOCOL_VERSION})
+    action = "Repaired" if repair else "Installed"
+    click.echo(f"{action} Forecost-managed Claude hooks in {path}.")
+
+
 @setup.command("claude")
 @click.option("--dry-run", is_flag=True, help="Print the exact local installation plan.")
 @click.option("--check", "check_only", is_flag=True, help="Validate package/config state.")
@@ -171,48 +220,24 @@ def setup_claude(
     plugin_root: Path | None,
 ) -> None:
     """Check, install, repair or remove Forecost's Claude hooks."""
-    modes = [dry_run, check_only, apply_changes, repair, uninstall]
-    if sum(modes) != 1:
-        raise click.UsageError(
-            "choose exactly one of --dry-run/--check/--apply/--repair/--uninstall"
-        )
-    root = (plugin_root or _plugin_root()).resolve()
-    required = (
-        root / ".claude-plugin" / "plugin.json",
-        root / "hooks" / "hooks.json",
-        root / "scripts" / "run-hook.sh",
+    mode = _setup_mode(
+        dry_run=dry_run,
+        check=check_only,
+        apply=apply_changes,
+        repair=repair,
+        uninstall=uninstall,
     )
-    missing = [path.name for path in required if not path.is_file()]
-    if missing:
-        raise click.ClickException(f"plugin package is incomplete: {', '.join(missing)}")
+    root = (plugin_root or _plugin_root()).resolve()
+    _validate_plugin(root)
     path = _config_path(config_dir)
     settings = _read_settings(path)
-    if check_only:
-        state = (
-            "installed"
-            if _installed(settings) and _protocol_installed(path)
-            else "not installed"
-        )
-        click.echo(
-            f"Claude plugin package: ready; managed config: {state}; "
-            f"protocol v{HOOK_PROTOCOL_VERSION}."
-        )
+    if mode == "check":
+        _check(path, settings)
         return
-    if dry_run:
-        click.echo("Claude setup dry run (no files changed):")
-        click.echo(f"  plugin root: {root}")
-        click.echo(f"  settings: {path}")
-        click.echo("  action: install/repair versioned Forecost hook entries only")
+    if mode == "dry_run":
+        _dry_run(root, path)
         return
-    if uninstall:
-        _without_managed(settings)
-        _write_settings(path, settings)
-        _protocol_path(path).unlink(missing_ok=True)
-        click.echo(f"Removed Forecost-managed Claude hooks from {path}.")
+    if mode == "uninstall":
+        _uninstall(path, settings)
         return
-    _write_settings(path, _install(settings))
-    _write_settings(
-        _protocol_path(path), {"hook_protocol_version": HOOK_PROTOCOL_VERSION}
-    )
-    action = "Repaired" if repair else "Installed"
-    click.echo(f"{action} Forecost-managed Claude hooks in {path}.")
+    _apply(path, settings, repair=mode == "repair")

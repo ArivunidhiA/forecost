@@ -25,6 +25,7 @@ def runtime_span_observation(event: Mapping[str, object], *, producer: str) -> O
     messages, inputs, outputs, baggage, and tracestate are neither inspected
     nor retained.
     """
+
     def required(name: str) -> str:
         value = event.get(name)
         if not isinstance(value, str) or not value:

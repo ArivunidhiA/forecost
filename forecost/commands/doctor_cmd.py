@@ -49,9 +49,9 @@ def _doctor_payload(home: Path, conn) -> dict[str, object]:
             "canonical_usd_spend": spend.total,
             "unpriced_events": spend.n_unpriced_events,
             "receipt_runs": conn.execute("SELECT COUNT(*) FROM causal_runs").fetchone()[0],
-            "receipt_snapshots": conn.execute(
-                "SELECT COUNT(*) FROM receipt_snapshots"
-            ).fetchone()[0],
+            "receipt_snapshots": conn.execute("SELECT COUNT(*) FROM receipt_snapshots").fetchone()[
+                0
+            ],
         },
         "readiness": {
             "claude_code": "OBSERVED" if claude_observations else "NOT OBSERVED",

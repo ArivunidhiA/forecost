@@ -75,16 +75,12 @@ def _package_metadata(artifacts: list[Path]) -> tuple[str, str, list[str]]:
 
 
 def build_evidence(dist: Path, output: Path, source_root: Path) -> dict[str, Path]:
-    artifacts = sorted(
-        path for path in dist.iterdir() if path.is_file() and not path.is_symlink()
-    )
+    artifacts = sorted(path for path in dist.iterdir() if path.is_file() and not path.is_symlink())
     if not artifacts:
         raise ValueError("distribution directory contains no regular artifacts")
     output.mkdir(parents=True, exist_ok=True)
     created = _timestamp()
-    subjects = [
-        {"name": path.name, "digest": {"sha256": _sha256(path)}} for path in artifacts
-    ]
+    subjects = [{"name": path.name, "digest": {"sha256": _sha256(path)}} for path in artifacts]
     name, version, requirements = _package_metadata(artifacts)
     namespace_seed = "|".join(item["digest"]["sha256"] for item in subjects)
     namespace = f"https://forecost.dev/spdx/{hashlib.sha256(namespace_seed.encode()).hexdigest()}"

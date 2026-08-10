@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-import subprocess
+import subprocess  # nosec B404 - explicit local command runner; shell is never used
 from datetime import datetime, timezone
 
 import click
@@ -31,8 +31,7 @@ def _append_outcome(
         raise click.ClickException("run not found")
     producer = opaque_id("producer", "local_verification")
     sequence = conn.execute(
-        "SELECT COALESCE(MAX(source_sequence), 0) + 1 FROM journal_observations "
-        "WHERE producer = ?",
+        "SELECT COALESCE(MAX(source_sequence), 0) + 1 FROM journal_observations WHERE producer = ?",
         (producer,),
     ).fetchone()[0]
     causal = CausalIdentity(
@@ -61,7 +60,7 @@ def _append_outcome(
 
 
 def _git_head() -> str | None:
-    result = subprocess.run(
+    result = subprocess.run(  # nosec B603 - fixed absolute git command
         ["/usr/bin/git", "rev-parse", "--verify", "HEAD"],
         check=False,
         capture_output=True,
@@ -87,7 +86,9 @@ def capture(run_id: str, kind: str, command: tuple[str, ...]) -> None:
     if not command:
         raise click.UsageError("missing COMMAND")
     try:
-        result = subprocess.run(command, check=False)  # noqa: S603 - explicit user command
+        result = subprocess.run(  # noqa: S603  # nosec B603 - explicit user command, no shell
+            command, check=False
+        )
     except OSError as error:
         raise click.ClickException(f"could not execute command: {error.strerror}") from error
     status = "good" if result.returncode == 0 else "bad"

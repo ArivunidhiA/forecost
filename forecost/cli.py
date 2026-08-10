@@ -247,10 +247,7 @@ class LazyGroup(click.Group):
         return loaded
 
     def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
-        rows = [
-            (name, f"{spec[2]} [store: {spec[3]}]")
-            for name, spec in _CURRENT_COMMANDS.items()
-        ]
+        rows = [(name, f"{spec[2]} [store: {spec[3]}]") for name, spec in _CURRENT_COMMANDS.items()]
         rows.append(("legacy", "Unsupported v0.2 compatibility; isolated from ledger.db."))
         if rows:
             with formatter.section("Commands"):

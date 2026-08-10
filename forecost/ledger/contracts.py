@@ -212,86 +212,100 @@ def _normalise_tariff(value: object) -> dict[str, object]:
     return normalized
 
 
+def _normalise_span_payload(payload: dict[str, object]) -> dict[str, object]:
+    return {
+        "operation_kind": _enum_value(
+            "operation_kind", payload.get("operation_kind"), OperationKind
+        ),
+        "lifecycle": _enum_value("lifecycle", payload.get("lifecycle"), Lifecycle),
+        "agent_id": _opaque_payload_id("agent", payload.get("agent_id"), optional=True),
+        "workflow_node_id": _opaque_payload_id(
+            "workflow-node", payload.get("workflow_node_id"), optional=True
+        ),
+        "branch_id": _opaque_payload_id("branch", payload.get("branch_id"), optional=True),
+        "attempt_of_span_id": (
+            normalize_span_id(str(payload["attempt_of_span_id"]))
+            if payload.get("attempt_of_span_id") is not None
+            else None
+        ),
+        "checkpoint_id": _opaque_payload_id(
+            "checkpoint", payload.get("checkpoint_id"), optional=True
+        ),
+        "stop_reason": _opaque_payload_id("stop-reason", payload.get("stop_reason"), optional=True),
+    }
+
+
+def _nonnegative_integer(payload: dict[str, object], key: str) -> int:
+    value = payload.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{key} must be a non-negative integer")
+    return value
+
+
+def _normalise_meter_payload(payload: dict[str, object]) -> dict[str, object]:
+    return {
+        "meter_name": _reviewed_or_opaque("meter", payload.get("meter_name"), _REVIEWED_METERS),
+        "unit": _reviewed_or_opaque("unit", payload.get("unit"), _REVIEWED_UNITS),
+        "quantity_micros": _nonnegative_integer(payload, "quantity_micros"),
+        "aggregation": _enum_value("aggregation", payload.get("aggregation"), Aggregation),
+        "dimensions": _normalise_dimensions(payload.get("dimensions")),
+        "finality": _enum_value("finality", payload.get("finality"), Finality),
+    }
+
+
+def _normalise_charge_payload(payload: dict[str, object]) -> dict[str, object]:
+    return {
+        "fact_id": _opaque_payload_id("fact", payload.get("fact_id"), optional=True),
+        "amount_micros": _nonnegative_integer(payload, "amount_micros"),
+        "currency": _reviewed_or_opaque("currency", payload.get("currency"), _REVIEWED_CURRENCIES),
+        "authority": _enum_value("authority", payload.get("authority"), Authority),
+        "line_item": _reviewed_or_opaque(
+            "line-item", payload.get("line_item"), _REVIEWED_LINE_ITEMS
+        ),
+        "tariff": _normalise_tariff(payload.get("tariff")),
+        "account_scope": _opaque_payload_id(
+            "account-scope", payload.get("account_scope"), optional=True
+        ),
+        "billing_period": _opaque_payload_id(
+            "billing-period", payload.get("billing_period"), optional=True
+        ),
+        "finality": _enum_value("finality", payload.get("finality"), Finality),
+        "supersedes_charge_id": _opaque_payload_id(
+            "charge", payload.get("supersedes_charge_id"), optional=True
+        ),
+    }
+
+
+def _normalise_outcome_payload(payload: dict[str, object]) -> dict[str, object]:
+    return {
+        "outcome_status": _enum_value(
+            "outcome_status", payload.get("outcome_status"), OutcomeStatus
+        ),
+        "reason_code": _opaque_payload_id("reason", payload.get("reason_code"), optional=True),
+        "evidence_type": _enum_value(
+            "evidence_type", payload.get("evidence_type"), _OUTCOME_EVIDENCE_TYPES
+        ),
+        "confidence": _enum_value("confidence", payload.get("confidence"), _OUTCOME_CONFIDENCE),
+        "supersedes_evidence_id": _opaque_payload_id(
+            "outcome", payload.get("supersedes_evidence_id"), optional=True
+        ),
+    }
+
+
+_PAYLOAD_NORMALIZERS = {
+    "span": _normalise_span_payload,
+    "meter": _normalise_meter_payload,
+    "charge": _normalise_charge_payload,
+    "outcome": _normalise_outcome_payload,
+}
+
+
 def normalise_payload(event_kind: str, payload: dict[str, object]) -> dict[str, object]:
     """Validate every event kind and erase open-ended payload identifiers."""
-    if event_kind == "span":
-        return {
-            "operation_kind": _enum_value(
-                "operation_kind", payload.get("operation_kind"), OperationKind
-            ),
-            "lifecycle": _enum_value("lifecycle", payload.get("lifecycle"), Lifecycle),
-            "agent_id": _opaque_payload_id("agent", payload.get("agent_id"), optional=True),
-            "workflow_node_id": _opaque_payload_id(
-                "workflow-node", payload.get("workflow_node_id"), optional=True
-            ),
-            "branch_id": _opaque_payload_id("branch", payload.get("branch_id"), optional=True),
-            "attempt_of_span_id": (
-                normalize_span_id(str(payload["attempt_of_span_id"]))
-                if payload.get("attempt_of_span_id") is not None
-                else None
-            ),
-            "checkpoint_id": _opaque_payload_id(
-                "checkpoint", payload.get("checkpoint_id"), optional=True
-            ),
-            "stop_reason": _opaque_payload_id(
-                "stop-reason", payload.get("stop_reason"), optional=True
-            ),
-        }
-    if event_kind == "meter":
-        quantity = payload.get("quantity_micros")
-        if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 0:
-            raise ValueError("quantity_micros must be a non-negative integer")
-        return {
-            "meter_name": _reviewed_or_opaque(
-                "meter", payload.get("meter_name"), _REVIEWED_METERS
-            ),
-            "unit": _reviewed_or_opaque("unit", payload.get("unit"), _REVIEWED_UNITS),
-            "quantity_micros": quantity,
-            "aggregation": _enum_value("aggregation", payload.get("aggregation"), Aggregation),
-            "dimensions": _normalise_dimensions(payload.get("dimensions")),
-            "finality": _enum_value("finality", payload.get("finality"), Finality),
-        }
-    if event_kind == "charge":
-        amount = payload.get("amount_micros")
-        if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
-            raise ValueError("amount_micros must be a non-negative integer")
-        return {
-            "fact_id": _opaque_payload_id("fact", payload.get("fact_id"), optional=True),
-            "amount_micros": amount,
-            "currency": _reviewed_or_opaque(
-                "currency", payload.get("currency"), _REVIEWED_CURRENCIES
-            ),
-            "authority": _enum_value("authority", payload.get("authority"), Authority),
-            "line_item": _reviewed_or_opaque(
-                "line-item", payload.get("line_item"), _REVIEWED_LINE_ITEMS
-            ),
-            "tariff": _normalise_tariff(payload.get("tariff")),
-            "account_scope": _opaque_payload_id(
-                "account-scope", payload.get("account_scope"), optional=True
-            ),
-            "billing_period": _opaque_payload_id(
-                "billing-period", payload.get("billing_period"), optional=True
-            ),
-            "finality": _enum_value("finality", payload.get("finality"), Finality),
-            "supersedes_charge_id": _opaque_payload_id(
-                "charge", payload.get("supersedes_charge_id"), optional=True
-            ),
-        }
-    if event_kind == "outcome":
-        return {
-            "outcome_status": _enum_value(
-                "outcome_status", payload.get("outcome_status"), OutcomeStatus
-            ),
-            "reason_code": _opaque_payload_id("reason", payload.get("reason_code"), optional=True),
-            "evidence_type": _enum_value(
-                "evidence_type", payload.get("evidence_type"), _OUTCOME_EVIDENCE_TYPES
-            ),
-            "confidence": _enum_value("confidence", payload.get("confidence"), _OUTCOME_CONFIDENCE),
-            "supersedes_evidence_id": _opaque_payload_id(
-                "outcome", payload.get("supersedes_evidence_id"), optional=True
-            ),
-        }
-    raise ValueError("observation event_kind is not supported")
+    normalizer = _PAYLOAD_NORMALIZERS.get(event_kind)
+    if normalizer is None:
+        raise ValueError("observation event_kind is not supported")
+    return normalizer(payload)
 
 
 @dataclass(frozen=True)

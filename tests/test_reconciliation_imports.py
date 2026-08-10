@@ -46,7 +46,9 @@ def test_offline_provider_import_reconciles_against_local_receipt(ledger_conn, t
 
 def test_imported_aggregate_is_not_falsely_called_reconciled(ledger_conn, tmp_path):
     export = tmp_path / "anthropic-usage.csv"
-    export.write_text("timestamp,cost_usd,line_item\n2026-01-01T00:00:00+00:00,0.5,model_inference\n")
+    export.write_text(
+        "timestamp,cost_usd,line_item\n2026-01-01T00:00:00+00:00,0.5,model_inference\n"
+    )
     run_id, _ = import_bill_file(ledger_conn, export, "anthropic")
 
     result = reconcile_run(ledger_conn, run_id)
@@ -81,9 +83,7 @@ def test_reconciliation_batches_are_idempotent_and_late_evidence_supersedes(ledg
     assert repeated["reused"] is True
     export = tmp_path / "late-provider.json"
     export.write_text(
-        json.dumps(
-            [{"timestamp": "2026-01-01T00:00:20+00:00", "amount_micros": 121_000}]
-        ),
+        json.dumps([{"timestamp": "2026-01-01T00:00:20+00:00", "amount_micros": 121_000}]),
         encoding="utf-8",
     )
     import_bill_file(ledger_conn, export, "openai", run_id=run_id)
@@ -161,9 +161,7 @@ def test_provisional_local_evidence_cannot_create_final_reconciliation(ledger_co
     )
     export = tmp_path / "provider.json"
     export.write_text(
-        json.dumps(
-            [{"timestamp": "2026-01-01T00:00:20+00:00", "amount_micros": 121_001}]
-        ),
+        json.dumps([{"timestamp": "2026-01-01T00:00:20+00:00", "amount_micros": 121_001}]),
         encoding="utf-8",
     )
     import_bill_file(ledger_conn, export, "openai", run_id=run_id)

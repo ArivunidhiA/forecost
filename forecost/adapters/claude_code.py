@@ -94,15 +94,18 @@ def claude_lifecycle_observation(
     if session_id is None:
         raise ValueError("Claude lifecycle event needs session identity")
     run_id = _structural_id(record, "promptId", "prompt_id", "run_id") or session_id
-    span_id = _structural_id(
-        record,
-        "requestId",
-        "uuid",
-        "tool_use_id",
-        "agent_id",
-        "task_id",
-        "hook_id",
-    ) or f"{event_name}:{source_sequence}"
+    span_id = (
+        _structural_id(
+            record,
+            "requestId",
+            "uuid",
+            "tool_use_id",
+            "agent_id",
+            "task_id",
+            "hook_id",
+        )
+        or f"{event_name}:{source_sequence}"
+    )
     parent_span_id = _structural_id(
         record, "parentUuid", "parent_uuid", "parent_tool_use_id", "parent_agent_id"
     )
@@ -207,49 +210,67 @@ def claude_record_observations(
     return [span, *meters]
 
 
-def ingest_causal_paths(
-    paths: Iterable[Path], state: IngestStateStore, conn
-) -> int:
+def _append_causal_record(record: dict, prompt_id: str | None, conn) -> int:
+    try:
+        return sum(
+            int(append_observation(conn, item))
+            for item in claude_record_observations(record, prompt_id)
+        )
+    except (TypeError, ValueError):
+        log_error(
+            "adapters.claude_code.causal",
+            "skipped a schema-invalid structural record",
+        )
+        return 0
+
+
+def _read_causal_path(
+    path: Path, offset: int, prompt_id: str | None, conn
+) -> tuple[int, int, str | None]:
+    inserted = 0
+    safe_offset = offset
+    with path.open("rb") as stream:
+        stream.seek(offset)
+        for raw_line in stream:
+            if not raw_line.endswith(b"\n"):
+                break
+            record = _parse_record(raw_line.decode("utf-8", errors="replace").strip())
+            if record is not None:
+                prompt_id = _updated_prompt_id(record, prompt_id)
+                inserted += _append_causal_record(record, prompt_id, conn)
+            safe_offset += len(raw_line)
+    return inserted, safe_offset, prompt_id
+
+
+def _ingest_causal_path(path: Path, state: IngestStateStore, conn, source: str) -> int:
+    cursor = _decode_cursor(state.get(source, str(path)))
+    original_offset = _cursor_offset(cursor)
+    offset = original_offset
+    prompt_id = _cursor_prompt_id(cursor)
+    if path.stat().st_size < offset:
+        offset = 0
+        prompt_id = None
+    inserted, safe_offset, prompt_id = _read_causal_path(path, offset, prompt_id, conn)
+    if safe_offset != original_offset:
+        state.set(
+            source,
+            str(path),
+            json.dumps({"offset": safe_offset, "prompt_id": prompt_id}),
+        )
+    return inserted
+
+
+def ingest_causal_paths(paths: Iterable[Path], state: IngestStateStore, conn) -> int:
     """Incrementally append causal transcript facts using an independent cursor."""
     inserted = 0
     source = "claude_code_causal"
     for path in sorted(set(paths)):
         if not path.is_file():
             continue
-        cursor = _decode_cursor(state.get(source, str(path)))
-        offset = _cursor_offset(cursor)
-        prompt_id = _cursor_prompt_id(cursor)
-        safe_offset = offset
         try:
-            if path.stat().st_size < offset:
-                offset = 0
-                safe_offset = 0
-                prompt_id = None
-            with path.open("rb") as stream:
-                stream.seek(offset)
-                for raw_line in stream:
-                    if not raw_line.endswith(b"\n"):
-                        break
-                    record = _parse_record(raw_line.decode("utf-8", errors="replace").strip())
-                    if record is not None:
-                        prompt_id = _updated_prompt_id(record, prompt_id)
-                        try:
-                            for item in claude_record_observations(record, prompt_id):
-                                inserted += int(append_observation(conn, item))
-                        except (TypeError, ValueError):
-                            log_error(
-                                "adapters.claude_code.causal",
-                                "skipped a schema-invalid structural record",
-                            )
-                    safe_offset += len(raw_line)
+            inserted += _ingest_causal_path(path, state, conn, source)
         except OSError as error:
             log_error("adapters.claude_code.causal", f"read failed for {path.name}: {error!r}")
-        if safe_offset != offset:
-            state.set(
-                source,
-                str(path),
-                json.dumps({"offset": safe_offset, "prompt_id": prompt_id}),
-            )
     return inserted
 
 

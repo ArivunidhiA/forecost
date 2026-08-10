@@ -11,6 +11,29 @@ from forecost.adapters.causal import runtime_meter_observation, runtime_span_obs
 from forecost.ledger.contracts import CausalIdentity, Observation
 
 
+def _jsonl_records(raw: str) -> list[Mapping[str, object]]:
+    decoded: list[Mapping[str, object]] = []
+    for line_number, line in enumerate(raw.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise ValueError(f"invalid JSONL at line {line_number}") from error
+        if not isinstance(item, Mapping):
+            raise ValueError(f"JSONL line {line_number} is not an object") from None
+        decoded.append(item)
+    return decoded
+
+
+def _record_list(decoded: object) -> list[Mapping[str, object]]:
+    if isinstance(decoded, Mapping):
+        decoded = [decoded]
+    if not isinstance(decoded, list) or not all(isinstance(item, Mapping) for item in decoded):
+        raise ValueError("OTel input must be an object, array of objects, or JSONL objects")
+    return decoded
+
+
 def load_records(stream: TextIO) -> list[Mapping[str, object]]:
     """Read either one JSON array or newline-delimited JSON objects."""
     raw = stream.read()
@@ -19,22 +42,8 @@ def load_records(stream: TextIO) -> list[Mapping[str, object]]:
     try:
         decoded = json.loads(raw)
     except json.JSONDecodeError:
-        decoded = []
-        for line_number, line in enumerate(raw.splitlines(), start=1):
-            if not line.strip():
-                continue
-            try:
-                item = json.loads(line)
-            except json.JSONDecodeError as error:
-                raise ValueError(f"invalid JSONL at line {line_number}") from error
-            if not isinstance(item, Mapping):
-                raise ValueError(f"JSONL line {line_number} is not an object") from None
-            decoded.append(item)
-    if isinstance(decoded, Mapping):
-        decoded = [decoded]
-    if not isinstance(decoded, list) or not all(isinstance(item, Mapping) for item in decoded):
-        raise ValueError("OTel input must be an object, array of objects, or JSONL objects")
-    return decoded
+        return _jsonl_records(raw)
+    return _record_list(decoded)
 
 
 def _required(record: Mapping[str, object], name: str) -> str:

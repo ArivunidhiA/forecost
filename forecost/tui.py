@@ -1,3 +1,5 @@
+from typing import cast
+
 HAS_PLOTEXT = False
 HAS_TEXTUAL = False
 
@@ -45,7 +47,7 @@ def _plotext_bar_chart(daily_costs: list[tuple]) -> str:
         plt.simple_bar(range(len(costs)), costs, width=0.5)  # type: ignore[union-attr]
         plt.xlabel("Day")  # type: ignore[union-attr]
         plt.ylabel("Cost ($)")  # type: ignore[union-attr]
-        return plt.build()  # type: ignore[union-attr]
+        return cast(str, plt.build())  # type: ignore[union-attr]
     except Exception:
         return _text_bar_chart(daily_costs)
 
@@ -143,7 +145,7 @@ if HAS_TEXTUAL:
                 self._forecast = self._on_refresh()
                 self._populate()
 
-        def action_quit(self) -> None:
+        async def action_quit(self) -> None:
             self.exit()
 
 

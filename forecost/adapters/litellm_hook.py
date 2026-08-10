@@ -92,6 +92,7 @@ class ForecostLogger(CustomLogger):
         self, user_api_key_dict: Any, cache: Any, data: dict, call_type: str
     ):
         """Budget gate. Returns an error string to reject, or the data to allow."""
+        del user_api_key_dict, cache, call_type  # required by LiteLLM's callback protocol
         try:
             # Bound callback lag before enforcing. At most one configured batch
             # is replayed here; the remaining queue depth is visible in status.
@@ -108,6 +109,7 @@ class ForecostLogger(CustomLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """Fsync callback evidence, then batch SQLite work off the request path."""
+        del start_time, end_time  # required by LiteLLM's callback protocol
         try:
             accepted = self._outbox.enqueue(_kwargs_to_event(kwargs, response_obj))
             if not accepted:

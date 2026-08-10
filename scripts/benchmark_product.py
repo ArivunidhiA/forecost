@@ -128,12 +128,17 @@ def run_benchmarks(
         receipt_spans: int | None = None
         if size <= receipt_limit:
             receipt_seconds, receipt = _seconds(
-                lambda: build_receipt(conn, CausalIdentity(
-                    "benchmark-conversation",
-                    "1234567890abcdef1234567890abcdef",
-                    "benchmark-run",
-                    _span_id(0),
-                ).normalized().run_id)
+                lambda: build_receipt(
+                    conn,
+                    CausalIdentity(
+                        "benchmark-conversation",
+                        "1234567890abcdef1234567890abcdef",
+                        "benchmark-run",
+                        _span_id(0),
+                    )
+                    .normalized()
+                    .run_id,
+                )
             )
             receipt_spans = len(receipt["causal_graph"])  # type: ignore[arg-type]
         admission_started = time.perf_counter()

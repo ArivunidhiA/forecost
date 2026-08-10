@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
+import subprocess  # nosec B404 - fixed packaged launcher, no shell
 import tempfile
 from pathlib import Path
 
@@ -27,7 +27,7 @@ def _simulate_launcher(root: Path) -> tuple[bool, list[str]]:
         fake = bin_dir / "forecost-hook"
         fake.write_text(
             "#!/bin/sh\n"
-            "printf '%s\\n' \"$1\" >> \"$FORECOST_SELF_TEST_LOG\"\n"
+            'printf \'%s\\n\' "$1" >> "$FORECOST_SELF_TEST_LOG"\n'
             "cat >/dev/null\n"
             "exit 0\n",
             encoding="utf-8",
@@ -40,7 +40,7 @@ def _simulate_launcher(root: Path) -> tuple[bool, list[str]]:
         }
         launcher = root / "scripts" / "run-hook.sh"
         for command in commands:
-            result = subprocess.run(  # noqa: S603 - exact packaged launcher, fixed args
+            result = subprocess.run(  # noqa: S603  # nosec B603 - fixed packaged launcher
                 [str(launcher), command],
                 input='{"hook_event_name":"PostToolUse"}',
                 text=True,
@@ -60,20 +60,19 @@ def self_test() -> None:
     """Run deterministic local integration checks without reading transcripts."""
 
 
-@self_test.command("claude")
-@click.option("--plugin-root", type=click.Path(path_type=Path), default=None)
-@click.option("--json", "json_output", is_flag=True)
-def self_test_claude(plugin_root: Path | None, json_output: bool) -> None:
-    """Exercise the exact launcher and separate simulation from real activity."""
-    root = (plugin_root or _default_plugin_root()).resolve()
-    hooks_path = root / "hooks" / "hooks.json"
-    launcher_path = root / "scripts" / "run-hook.sh"
+def _load_plugin(root: Path) -> tuple[dict[str, object], str]:
     try:
-        hooks = json.loads(hooks_path.read_text(encoding="utf-8"))["hooks"]
-        launcher = launcher_path.read_text(encoding="utf-8")
+        hooks = json.loads((root / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+        launcher = (root / "scripts" / "run-hook.sh").read_text(encoding="utf-8")
     except (OSError, KeyError, json.JSONDecodeError) as error:
         raise click.ClickException("cannot read packaged Claude plugin") from error
-    required_events = {
+    if not isinstance(hooks, dict):
+        raise click.ClickException("packaged Claude hooks must be an object")
+    return hooks, launcher
+
+
+def _missing_events(hooks: dict[str, object]) -> list[str]:
+    required = {
         "SessionStart",
         "UserPromptSubmit",
         "PreToolUse",
@@ -85,13 +84,17 @@ def self_test_claude(plugin_root: Path | None, json_output: bool) -> None:
         "Stop",
         "SessionEnd",
     }
-    missing = sorted(required_events - set(hooks))
+    return sorted(required - set(hooks))
+
+
+def _result(root: Path) -> dict[str, object]:
+    hooks, launcher = _load_plugin(root)
+    missing = _missing_events(hooks)
     launcher_ok = "forecost-hook" in launcher and "|| exit 0" in launcher
     simulation_passed, simulated_commands = _simulate_launcher(root)
-    heartbeat = read_heartbeat()
-    real_observed = heartbeat is not None
+    real_observed = read_heartbeat() is not None
     healthy = not missing and launcher_ok and simulation_passed
-    result = {
+    return {
         "schema_version": 2,
         "plugin_root": str(root),
         "required_events_present": not missing,
@@ -104,10 +107,27 @@ def self_test_claude(plugin_root: Path | None, json_output: bool) -> None:
         "readiness": "OBSERVED" if healthy else "NOT OBSERVED",
         "claim_boundary": "offline simulation; not provider-side containment",
     }
+
+
+def _render_result(result: dict[str, object], json_output: bool) -> None:
     if json_output:
         click.echo(json.dumps(result, sort_keys=True, separators=(",", ":")))
         return
+    healthy = result["readiness"] == "OBSERVED"
     if not healthy:
         raise click.ClickException("Claude plugin self-test failed")
-    real = "real heartbeat observed" if real_observed else "real hook never observed"
+    real = (
+        "real heartbeat observed"
+        if result["real_hook_heartbeat_observed"]
+        else "real hook never observed"
+    )
     click.echo(f"Claude plugin self-test: simulation passed; {real}; not containment.")
+
+
+@self_test.command("claude")
+@click.option("--plugin-root", type=click.Path(path_type=Path), default=None)
+@click.option("--json", "json_output", is_flag=True)
+def self_test_claude(plugin_root: Path | None, json_output: bool) -> None:
+    """Exercise the exact launcher and separate simulation from real activity."""
+    root = (plugin_root or _default_plugin_root()).resolve()
+    _render_result(_result(root), json_output)

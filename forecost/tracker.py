@@ -162,9 +162,12 @@ def track_cost(provider: str = "openai"):
         if isinstance(result, dict) and "usage" in result:
             usage = result["usage"]
             if isinstance(usage, dict):
-                tokens_in = int(usage.get("prompt_tokens", usage.get("input_tokens", 0)))
-                tokens_out = int(usage.get("completion_tokens", usage.get("output_tokens", 0)))
-                model = result.get("model", result.get("id", "unknown"))
+                raw_tokens_in = usage.get("prompt_tokens", usage.get("input_tokens", 0))
+                raw_tokens_out = usage.get("completion_tokens", usage.get("output_tokens", 0))
+                tokens_in = int(raw_tokens_in or 0)
+                tokens_out = int(raw_tokens_out or 0)
+                raw_model = result.get("model", result.get("id", "unknown"))
+                model = raw_model if isinstance(raw_model, str) else "unknown"
                 cost = calculate_cost(model, tokens_in, tokens_out)
                 _record_usage(model, tokens_in, tokens_out, cost)
                 proj = _find_project()

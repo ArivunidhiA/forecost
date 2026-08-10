@@ -13,8 +13,7 @@ def test_release_evidence_is_offline_deterministic_and_hashes_artifact(tmp_path,
     with zipfile.ZipFile(wheel, "w") as archive:
         archive.writestr(
             "forecost-0.3.0.dist-info/METADATA",
-            "Metadata-Version: 2.1\nName: forecost\nVersion: 0.3.0\n"
-            "Requires-Dist: click>=8\n",
+            "Metadata-Version: 2.1\nName: forecost\nVersion: 0.3.0\nRequires-Dist: click>=8\n",
         )
     monkeypatch.setenv("SOURCE_DATE_EPOCH", "1767225600")
     monkeypatch.setattr("scripts.build_release_evidence._git", lambda *_args: "abc123")
@@ -27,6 +26,4 @@ def test_release_evidence_is_offline_deterministic_and_hashes_artifact(tmp_path,
     checksums = json.loads(first["checksums"].read_text(encoding="utf-8"))
     assert set(checksums) == {wheel.name}
     sbom = json.loads(first["sbom"].read_text(encoding="utf-8"))
-    assert sbom["packages"][0]["externalRefs"][0]["referenceLocator"] == (
-        "pkg:pypi/forecost@0.3.0"
-    )
+    assert sbom["packages"][0]["externalRefs"][0]["referenceLocator"] == ("pkg:pypi/forecost@0.3.0")

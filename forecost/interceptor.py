@@ -71,18 +71,21 @@ def _extract_usage(data: dict) -> tuple[int, int, str] | None:
 
 def _extract_model(data: dict) -> str:
     for key in ("model", "id"):
-        if key in data and isinstance(data[key], str):
-            return data[key]
+        value = data.get(key)
+        if isinstance(value, str):
+            return value
     for choice in data.get("choices", []) or []:
         if isinstance(choice, dict) and "message" in choice:
             msg = choice["message"]
             if isinstance(msg, dict) and "model" in msg:
-                return msg["model"]
+                model = msg["model"]
+                if isinstance(model, str):
+                    return model
     return "unknown"
 
 
 def _is_streaming(response) -> bool:
-    ct = response.headers.get("content-type", "")
+    ct = str(response.headers.get("content-type", ""))
     return ct.startswith("text/event-stream")
 
 
@@ -230,8 +233,8 @@ def install(on_usage: Callable[..., None] | None = None) -> None:
         return
     _original_send = httpx.Client.send
     _original_async_send = httpx.AsyncClient.send
-    httpx.Client.send = _patched_send
-    httpx.AsyncClient.send = _patched_async_send
+    httpx.Client.send = _patched_send  # type: ignore[method-assign]
+    httpx.AsyncClient.send = _patched_async_send  # type: ignore[method-assign]
 
 
 def uninstall() -> None:
@@ -241,7 +244,7 @@ def uninstall() -> None:
 
     if _original_send is None:
         return
-    httpx.Client.send = _original_send
-    httpx.AsyncClient.send = _original_async_send
+    httpx.Client.send = _original_send  # type: ignore[method-assign]
+    httpx.AsyncClient.send = _original_async_send  # type: ignore[method-assign]
     _original_send = None
     _original_async_send = None

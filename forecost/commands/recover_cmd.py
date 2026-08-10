@@ -102,7 +102,7 @@ def _posting_currency(raw: dict) -> str:
 
 def _posting_basis(raw: dict) -> str:
     basis = raw.get("basis")
-    if basis not in _POSTING_BASES:
+    if not isinstance(basis, str) or basis not in _POSTING_BASES:
         raise ValueError("posting basis is invalid")
     return basis
 

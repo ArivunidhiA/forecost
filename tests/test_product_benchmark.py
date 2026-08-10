@@ -16,4 +16,6 @@ def test_product_benchmark_exercises_ingest_receipt_reconcile_and_admission(tmp_
     assert results[0]["new_observations"] == 204
     assert results[0]["receipt_spans"] == 200
     assert results[0]["reconciliation_state"] == "reconciled"
-    assert results[0]["database_bytes"] > 0
+    database_bytes = results[0]["database_bytes"]
+    assert isinstance(database_bytes, int)
+    assert database_bytes > 0

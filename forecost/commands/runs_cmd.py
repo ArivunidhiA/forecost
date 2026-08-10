@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import click
 
 from forecost.ledger.db import get_ledger_db
@@ -28,19 +30,18 @@ def list_runs(limit: int) -> None:
         return
     for row in rows:
         receipt = build_receipt(conn, row["run_id"])
-        evidence = receipt["evidence"]
-        outcome = receipt["outcome"]
-        totals = receipt["economic_totals_micros"]
-        authorities = ",".join(
-            sorted(
-                authority
-                for by_authority in totals.values()  # type: ignore[union-attr]
-                for authority in by_authority
+        evidence = cast(dict[str, object], receipt["evidence"])
+        outcome = cast(dict[str, object], receipt["outcome"])
+        totals = cast(dict[str, dict[str, int]], receipt["economic_totals_micros"])
+        authorities = (
+            ",".join(
+                sorted(authority for by_authority in totals.values() for authority in by_authority)
             )
-        ) or "none"
+            or "none"
+        )
         click.echo(
-            f"{row['run_id']}  {row['lifecycle']}  evidence={evidence['state']} "  # type: ignore[index]
-            f"outcome={outcome['status']} authorities={authorities}"  # type: ignore[index]
+            f"{row['run_id']}  {row['lifecycle']}  evidence={evidence['state']} "
+            f"outcome={outcome['status']} authorities={authorities}"
         )
 
 

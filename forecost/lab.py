@@ -140,7 +140,7 @@ def seed_chaos(conn: sqlite3.Connection, seed: int, branches: int) -> str:
     """Generate a seed-replayable graph with fan-out, waits, cancellation, and retries."""
     if branches < 1 or branches > 128:
         raise ValueError("branches must be between 1 and 128")
-    rng = random.Random(seed)  # noqa: S311 - deterministic synthetic fixture, never a secret
+    rng = random.Random(seed)  # noqa: S311  # nosec B311 - deterministic fixture seed
     root = _causal(seed, "chaos-root", 1)
     append_observation(
         conn,

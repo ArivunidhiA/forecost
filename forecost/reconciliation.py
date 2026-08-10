@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
+from typing import cast
 
 from forecost.ledger.contracts import CausalIdentity, canonical_json, opaque_id
 from forecost.ledger.evidence import append_observation, observation
@@ -106,10 +107,13 @@ def _stable_file_digest(path: Path) -> str:
 def _existing_import_root(conn: sqlite3.Connection, run_id: str | None) -> sqlite3.Row | None:
     if run_id is None:
         return None
-    return conn.execute(
-        "SELECT * FROM causal_spans WHERE run_id = ? ORDER BY source_order LIMIT 1",
-        (opaque_id("run", run_id),),
-    ).fetchone()
+    return cast(
+        sqlite3.Row | None,
+        conn.execute(
+            "SELECT * FROM causal_spans WHERE run_id = ? ORDER BY source_order LIMIT 1",
+            (opaque_id("run", run_id),),
+        ).fetchone(),
+    )
 
 
 def _new_import_identity(digest: str, source: str) -> CausalIdentity:
@@ -424,7 +428,7 @@ def _prior_batch(conn: sqlite3.Connection, normalized_run: str | None) -> sqlite
         "ORDER BY created_at DESC, batch_id DESC LIMIT 1"
     )
     prior_params = (normalized_run,) if normalized_run is not None else ()
-    return conn.execute(prior_query, prior_params).fetchone()
+    return cast(sqlite3.Row | None, conn.execute(prior_query, prior_params).fetchone())
 
 
 def _public_result(

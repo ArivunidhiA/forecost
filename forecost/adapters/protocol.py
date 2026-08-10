@@ -118,20 +118,32 @@ ADAPTER_CAPABILITIES: tuple[AdapterCapabilities, ...] = (
 
 def check_capability(capability: AdapterCapabilities) -> list[str]:
     """Return deterministic protocol violations for one declaration."""
-    errors: list[str] = []
-    if capability.protocol_version != ADAPTER_PROTOCOL_VERSION:
-        errors.append("unsupported protocol version")
-    if not capability.name or any(character.isspace() for character in capability.name):
-        errors.append("name must be a non-empty atom")
-    if not capability.economic_authority:
-        errors.append("economic authority must be explicit")
-    if capability.readiness_ceiling == "CONTAINED" and capability.enforcement_point != "pre-call":
-        errors.append("CONTAINED requires a tested pre-call boundary")
-    if capability.enforcement_point == "pre-call" and capability.readiness_ceiling != "CONTAINED":
-        errors.append("pre-call adapters must declare their containment ceiling")
-    if capability.event_identity == "derived" and not capability.watermarks:
-        errors.append("derived identity requires a replay watermark")
-    return errors
+    rules = (
+        (
+            capability.protocol_version != ADAPTER_PROTOCOL_VERSION,
+            "unsupported protocol version",
+        ),
+        (
+            not capability.name or any(character.isspace() for character in capability.name),
+            "name must be a non-empty atom",
+        ),
+        (not capability.economic_authority, "economic authority must be explicit"),
+        (
+            capability.readiness_ceiling == "CONTAINED"
+            and capability.enforcement_point != "pre-call",
+            "CONTAINED requires a tested pre-call boundary",
+        ),
+        (
+            capability.enforcement_point == "pre-call"
+            and capability.readiness_ceiling != "CONTAINED",
+            "pre-call adapters must declare their containment ceiling",
+        ),
+        (
+            capability.event_identity == "derived" and not capability.watermarks,
+            "derived identity requires a replay watermark",
+        ),
+    )
+    return [message for invalid, message in rules if invalid]
 
 
 def conformance_report() -> dict[str, Any]:
