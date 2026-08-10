@@ -11,15 +11,6 @@ from datetime import datetime, timezone
 from forecost.ledger.contracts import CausalIdentity, Observation, canonical_json, opaque_id
 from forecost.ledger.integrity import advance_chain
 
-_PROJECTION_TABLES = (
-    "outcome_evidence",
-    "charges",
-    "meter_facts",
-    "span_links",
-    "causal_spans",
-    "causal_runs",
-)
-
 
 @dataclass(frozen=True)
 class AppendBatchResult:
@@ -30,6 +21,88 @@ class AppendBatchResult:
 
 def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat()
+
+
+def _begin_append(conn: sqlite3.Connection, nested: bool) -> None:
+    if nested:
+        conn.execute("SAVEPOINT forecost_append_observation")
+    else:
+        conn.execute("BEGIN IMMEDIATE")
+
+
+def _finish_append(conn: sqlite3.Connection, nested: bool) -> None:
+    if nested:
+        conn.execute("RELEASE SAVEPOINT forecost_append_observation")
+    else:
+        conn.commit()
+
+
+def _abort_append(conn: sqlite3.Connection, nested: bool) -> None:
+    if nested:
+        conn.execute("ROLLBACK TO SAVEPOINT forecost_append_observation")
+        conn.execute("RELEASE SAVEPOINT forecost_append_observation")
+    else:
+        conn.rollback()
+
+
+def _is_replay(
+    conn: sqlite3.Connection,
+    item: Observation,
+    causal_json: str,
+    payload_json: str,
+) -> bool:
+    existing = conn.execute(
+        "SELECT observation_id, causal_json, payload_json, event_kind "
+        "FROM journal_observations WHERE producer = ? AND idempotency_key = ?",
+        (item.producer, item.causal.idempotency_key),
+    ).fetchone()
+    if existing is None:
+        return False
+    changed = (
+        existing["causal_json"] != causal_json
+        or existing["payload_json"] != payload_json
+        or existing["event_kind"] != item.event_kind
+    )
+    if changed:
+        raise ValueError("idempotency key already belongs to different evidence")
+    return True
+
+
+def _insert_observation(
+    conn: sqlite3.Connection,
+    item: Observation,
+    causal_json: str,
+    payload_json: str,
+) -> sqlite3.Row:
+    conn.execute(
+        """
+        INSERT INTO journal_observations(
+            observation_id, schema_version, producer, source_sequence,
+            idempotency_key, event_kind, occurred_at, observed_at,
+            causal_json, payload_json, supersedes_observation_id
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            item.observation_id,
+            item.schema_version,
+            item.producer,
+            item.causal.source_sequence,
+            item.causal.idempotency_key,
+            item.event_kind,
+            _iso(item.occurred_at),
+            _iso(item.observed_at),
+            causal_json,
+            payload_json,
+            item.supersedes_observation_id,
+        ),
+    )
+    advance_chain(conn, item.observation_id)
+    row: sqlite3.Row | None = conn.execute(
+        "SELECT * FROM journal_observations WHERE observation_id=?", (item.observation_id,)
+    ).fetchone()
+    if row is None:  # pragma: no cover - insert/select invariant
+        raise RuntimeError("observation insert did not yield a row")
+    return row
 
 
 def append_observation(conn: sqlite3.Connection, observation: Observation) -> bool:
@@ -43,67 +116,16 @@ def append_observation(conn: sqlite3.Connection, observation: Observation) -> bo
     causal_json = canonical_json(item.causal.to_dict())
     payload_json = canonical_json(item.payload)
     nested = conn.in_transaction
-    if nested:
-        conn.execute("SAVEPOINT forecost_append_observation")
-    else:
-        conn.execute("BEGIN IMMEDIATE")
+    _begin_append(conn, nested)
     try:
-        existing = conn.execute(
-            "SELECT observation_id, causal_json, payload_json, event_kind "
-            "FROM journal_observations WHERE producer = ? AND idempotency_key = ?",
-            (item.producer, item.causal.idempotency_key),
-        ).fetchone()
-        if existing is not None:
-            if (
-                existing["causal_json"] != causal_json
-                or existing["payload_json"] != payload_json
-                or existing["event_kind"] != item.event_kind
-            ):
-                raise ValueError("idempotency key already belongs to different evidence")
-            if nested:
-                conn.execute("RELEASE SAVEPOINT forecost_append_observation")
-            else:
-                conn.commit()
+        if _is_replay(conn, item, causal_json, payload_json):
+            _finish_append(conn, nested)
             return False
-        conn.execute(
-            """
-            INSERT INTO journal_observations(
-                observation_id, schema_version, producer, source_sequence,
-                idempotency_key, event_kind, occurred_at, observed_at,
-                causal_json, payload_json, supersedes_observation_id
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                item.observation_id,
-                item.schema_version,
-                item.producer,
-                item.causal.source_sequence,
-                item.causal.idempotency_key,
-                item.event_kind,
-                _iso(item.occurred_at),
-                _iso(item.observed_at),
-                causal_json,
-                payload_json,
-                item.supersedes_observation_id,
-            ),
-        )
-        advance_chain(conn, item.observation_id)
-        row = conn.execute(
-            "SELECT * FROM journal_observations WHERE observation_id=?", (item.observation_id,)
-        ).fetchone()
-        if row is None:  # pragma: no cover - insert/select invariant
-            raise RuntimeError("observation insert did not yield a row")
+        row = _insert_observation(conn, item, causal_json, payload_json)
         _project_row(conn, row)
-        if nested:
-            conn.execute("RELEASE SAVEPOINT forecost_append_observation")
-        else:
-            conn.commit()
+        _finish_append(conn, nested)
     except BaseException:
-        if nested:
-            conn.execute("ROLLBACK TO SAVEPOINT forecost_append_observation")
-            conn.execute("RELEASE SAVEPOINT forecost_append_observation")
-        else:
-            conn.rollback()
+        _abort_append(conn, nested)
         raise
     return True
 
@@ -175,8 +197,12 @@ def _payload(row: sqlite3.Row) -> dict[str, object]:
 
 def rebuild_projections(conn: sqlite3.Connection) -> None:
     """Rebuild query tables from journal order, never arrival order or row ID."""
-    for table in _PROJECTION_TABLES:
-        conn.execute(f"DELETE FROM {table}")  # noqa: S608 - fixed internal table names
+    conn.execute("DELETE FROM outcome_evidence")
+    conn.execute("DELETE FROM charges")
+    conn.execute("DELETE FROM meter_facts")
+    conn.execute("DELETE FROM span_links")
+    conn.execute("DELETE FROM causal_spans")
+    conn.execute("DELETE FROM causal_runs")
     rows = conn.execute(
         """
         SELECT * FROM journal_observations

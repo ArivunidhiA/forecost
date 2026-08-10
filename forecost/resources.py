@@ -146,6 +146,81 @@ def _row_balance(row: sqlite3.Row) -> ScopeBalance:
     )
 
 
+def _validate_scope_amounts(
+    capacity_micros: int,
+    finalization_reserve_micros: int,
+    max_overrun_micros: int,
+) -> None:
+    _validate_amount(capacity_micros, "capacity_micros")
+    _validate_amount(finalization_reserve_micros, "finalization_reserve_micros")
+    _validate_amount(max_overrun_micros, "max_overrun_micros")
+    if finalization_reserve_micros > capacity_micros:
+        raise ValueError("finalization reserve cannot exceed capacity")
+
+
+def _scope_contract(
+    row: sqlite3.Row,
+    dimension: str,
+    capacity_micros: int,
+    mode: str,
+    finalization_reserve_micros: int,
+    max_overrun_micros: int,
+) -> bool:
+    actual = (
+        row["dimension"],
+        int(row["capacity_micros"]),
+        row["mode"],
+        int(row["finalization_reserve_micros"]),
+        int(row["max_overrun_micros"]),
+    )
+    expected = (
+        dimension,
+        capacity_micros,
+        mode,
+        finalization_reserve_micros,
+        max_overrun_micros,
+    )
+    return actual == expected
+
+
+def _insert_root_scope(
+    conn: sqlite3.Connection,
+    scope_id: str,
+    dimension: str,
+    capacity_micros: int,
+    mode: str,
+    finalization_reserve_micros: int,
+    max_overrun_micros: int,
+    metadata: Mapping[str, object] | None,
+) -> sqlite3.Row:
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO resource_scopes(
+            scope_id, parent_scope_id, dimension, capacity_micros, mode,
+            finalization_reserve_micros, max_overrun_micros,
+            created_at, metadata_json
+        ) VALUES (?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            scope_id,
+            None,
+            dimension,
+            capacity_micros,
+            mode,
+            finalization_reserve_micros,
+            max_overrun_micros,
+            _now().isoformat(),
+            canonical_json(dict(metadata or {})),
+        ),
+    )
+    row: sqlite3.Row | None = conn.execute(
+        "SELECT * FROM resource_scopes WHERE scope_id = ?", (scope_id,)
+    ).fetchone()
+    if row is None:  # pragma: no cover - insert/select invariant
+        raise RuntimeError("resource scope insert did not yield a row")
+    return row
+
+
 def create_scope(
     conn: sqlite3.Connection,
     scope: str,
@@ -160,11 +235,7 @@ def create_scope(
     metadata: Mapping[str, object] | None = None,
 ) -> ScopeBalance:
     """Create an idempotent local scope with O(1) mutable counters."""
-    _validate_amount(capacity_micros, "capacity_micros")
-    _validate_amount(finalization_reserve_micros, "finalization_reserve_micros")
-    _validate_amount(max_overrun_micros, "max_overrun_micros")
-    if finalization_reserve_micros > capacity_micros:
-        raise ValueError("finalization reserve cannot exceed capacity")
+    _validate_scope_amounts(capacity_micros, finalization_reserve_micros, max_overrun_micros)
     dimension = _normalize_dimension(dimension, authority)
     mode = AdmissionMode(mode).value
     if parent_scope is not None:
@@ -181,40 +252,25 @@ def create_scope(
             expected_dimension=dimension,
         ).child_balance
     scope_id = _scope_id(scope)
-    now = _now().isoformat()
     conn.execute("BEGIN IMMEDIATE")
     try:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO resource_scopes(
-                scope_id, parent_scope_id, dimension, capacity_micros, mode,
-                finalization_reserve_micros, max_overrun_micros,
-                created_at, metadata_json
-            ) VALUES (?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                scope_id,
-                None,
-                dimension,
-                capacity_micros,
-                mode,
-                finalization_reserve_micros,
-                max_overrun_micros,
-                now,
-                canonical_json(dict(metadata or {})),
-            ),
+        row = _insert_root_scope(
+            conn,
+            scope_id,
+            dimension,
+            capacity_micros,
+            mode,
+            finalization_reserve_micros,
+            max_overrun_micros,
+            metadata,
         )
-        row = conn.execute(
-            "SELECT * FROM resource_scopes WHERE scope_id = ?", (scope_id,)
-        ).fetchone()
-        if row is None:  # pragma: no cover - insert/select invariant
-            raise RuntimeError("resource scope insert did not yield a row")
-        if (
-            row["dimension"] != dimension
-            or row["capacity_micros"] != capacity_micros
-            or row["mode"] != mode
-            or row["finalization_reserve_micros"] != finalization_reserve_micros
-            or row["max_overrun_micros"] != max_overrun_micros
+        if not _scope_contract(
+            row,
+            dimension,
+            capacity_micros,
+            mode,
+            finalization_reserve_micros,
+            max_overrun_micros,
         ):
             raise ValueError("resource scope already exists with different contract")
         conn.commit()
@@ -254,6 +310,147 @@ def containment_claim(conn: sqlite3.Connection, scope: str) -> ContainmentClaim:
     )
 
 
+def _existing_transfer(
+    conn: sqlite3.Connection,
+    *,
+    parent_id: str,
+    child_id: str,
+    reservation_id: str,
+    capacity_micros: int,
+    finalization_reserve_micros: int,
+    max_overrun_micros: int,
+    child_mode: str,
+) -> ScopeTransfer | None:
+    child: sqlite3.Row | None = conn.execute(
+        "SELECT * FROM resource_scopes WHERE scope_id=?", (child_id,)
+    ).fetchone()
+    reservation: sqlite3.Row | None = conn.execute(
+        "SELECT * FROM resource_reservations WHERE reservation_id=?", (reservation_id,)
+    ).fetchone()
+    if child is None and reservation is None:
+        return None
+    if child is None or reservation is None:
+        raise ValueError("child scope or idempotency key already has a different contract")
+    actual = (
+        child["parent_scope_id"],
+        int(child["capacity_micros"]),
+        reservation["child_scope_id"],
+        int(child["finalization_reserve_micros"]),
+        int(child["max_overrun_micros"]),
+        child["mode"],
+    )
+    expected = (
+        parent_id,
+        capacity_micros,
+        child_id,
+        finalization_reserve_micros,
+        max_overrun_micros,
+        child_mode,
+    )
+    if actual != expected:
+        raise ValueError("child scope or idempotency key already has a different contract")
+    return ScopeTransfer(_reservation_from_row(reservation), _row_balance(child))
+
+
+def _validate_parent_transfer(
+    parent: sqlite3.Row,
+    capacity_micros: int,
+    expected_dimension: str | None,
+) -> None:
+    if expected_dimension is not None and parent["dimension"] != expected_dimension:
+        raise ValueError("child dimension must match its parent")
+    if parent["closed_at"] is not None:
+        raise ValueError("parent resource scope is finalized")
+    if capacity_micros > _row_balance(parent).normal_available_micros:
+        raise ValueError("parent scope has insufficient transferable capacity")
+
+
+def _next_fencing_token(conn: sqlite3.Connection, scope_id: str) -> int:
+    row = conn.execute(
+        "UPDATE resource_scopes SET next_fencing_token=next_fencing_token+1 "
+        "WHERE scope_id=? RETURNING next_fencing_token-1",
+        (scope_id,),
+    ).fetchone()
+    if row is None:  # pragma: no cover - caller selected the scope
+        raise RuntimeError("scope fencing counter was not updated")
+    return int(row[0])
+
+
+def _insert_transfer(
+    conn: sqlite3.Connection,
+    *,
+    parent: sqlite3.Row,
+    parent_id: str,
+    child_id: str,
+    reservation_id: str,
+    key: str,
+    capacity_micros: int,
+    child_mode: str,
+    finalization_reserve_micros: int,
+    max_overrun_micros: int,
+    metadata: Mapping[str, object] | None,
+) -> ScopeTransfer:
+    token = _next_fencing_token(conn, parent_id)
+    now = _now().isoformat()
+    conn.execute(
+        """
+        INSERT INTO resource_reservations(
+            reservation_id,scope_id,child_scope_id,dimension,requested_micros,
+            granted_micros,state,idempotency_key,fencing_token,provenance_json,
+            created_at,updated_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            reservation_id,
+            parent_id,
+            child_id,
+            parent["dimension"],
+            capacity_micros,
+            capacity_micros,
+            ReservationState.LIVE.value,
+            key,
+            token,
+            canonical_json({"purpose": "child_transfer"}),
+            now,
+            now,
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO resource_scopes(
+            scope_id,parent_scope_id,dimension,capacity_micros,mode,
+            finalization_reserve_micros,max_overrun_micros,threat_model,
+            created_at,metadata_json
+        ) VALUES (?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            child_id,
+            parent_id,
+            parent["dimension"],
+            capacity_micros,
+            child_mode,
+            finalization_reserve_micros,
+            max_overrun_micros,
+            parent["threat_model"],
+            now,
+            canonical_json(dict(metadata or {})),
+        ),
+    )
+    conn.execute(
+        "UPDATE resource_scopes SET reserved_micros=reserved_micros+? WHERE scope_id=?",
+        (capacity_micros, parent_id),
+    )
+    child: sqlite3.Row | None = conn.execute(
+        "SELECT * FROM resource_scopes WHERE scope_id=?", (child_id,)
+    ).fetchone()
+    reservation: sqlite3.Row | None = conn.execute(
+        "SELECT * FROM resource_reservations WHERE reservation_id=?", (reservation_id,)
+    ).fetchone()
+    if child is None or reservation is None:  # pragma: no cover - insert invariant
+        raise RuntimeError("child transfer insert did not yield rows")
+    return ScopeTransfer(_reservation_from_row(reservation), _row_balance(child))
+
+
 def split_scope(
     conn: sqlite3.Connection,
     parent_scope: str,
@@ -268,11 +465,7 @@ def split_scope(
     expected_dimension: str | None = None,
 ) -> ScopeTransfer:
     """Atomically fund a child by reserving exactly its cap from its parent."""
-    _validate_amount(capacity_micros, "capacity_micros")
-    _validate_amount(finalization_reserve_micros, "finalization_reserve_micros")
-    _validate_amount(max_overrun_micros, "max_overrun_micros")
-    if finalization_reserve_micros > capacity_micros:
-        raise ValueError("finalization reserve cannot exceed capacity")
+    _validate_scope_amounts(capacity_micros, finalization_reserve_micros, max_overrun_micros)
     if not idempotency_key:
         raise ValueError("idempotency_key must be non-empty")
     parent_id = _scope_id(parent_scope)
@@ -281,107 +474,41 @@ def split_scope(
     reservation_id = _reservation_id(parent_id, key)
     conn.execute("BEGIN IMMEDIATE")
     try:
-        parent = conn.execute(
+        parent: sqlite3.Row | None = conn.execute(
             "SELECT * FROM resource_scopes WHERE scope_id=?", (parent_id,)
         ).fetchone()
         if parent is None:
             raise ValueError("parent resource scope not found")
-        if expected_dimension is not None and parent["dimension"] != expected_dimension:
-            raise ValueError("child dimension must match its parent")
         child_mode = AdmissionMode(mode or parent["mode"]).value
-        existing_child = conn.execute(
-            "SELECT * FROM resource_scopes WHERE scope_id=?", (child_id,)
-        ).fetchone()
-        existing_reservation = conn.execute(
-            "SELECT * FROM resource_reservations WHERE reservation_id=?", (reservation_id,)
-        ).fetchone()
-        if existing_child is not None or existing_reservation is not None:
-            if (
-                existing_child is None
-                or existing_reservation is None
-                or existing_child["parent_scope_id"] != parent_id
-                or int(existing_child["capacity_micros"]) != capacity_micros
-                or existing_reservation["child_scope_id"] != child_id
-                or int(existing_child["finalization_reserve_micros"]) != finalization_reserve_micros
-                or int(existing_child["max_overrun_micros"]) != max_overrun_micros
-                or existing_child["mode"] != child_mode
-            ):
-                raise ValueError("child scope or idempotency key already has a different contract")
+        existing = _existing_transfer(
+            conn,
+            parent_id=parent_id,
+            child_id=child_id,
+            reservation_id=reservation_id,
+            capacity_micros=capacity_micros,
+            finalization_reserve_micros=finalization_reserve_micros,
+            max_overrun_micros=max_overrun_micros,
+            child_mode=child_mode,
+        )
+        if existing is not None:
             conn.commit()
-            return ScopeTransfer(
-                _reservation_from_row(existing_reservation), _row_balance(existing_child)
-            )
-        if parent["closed_at"] is not None:
-            raise ValueError("parent resource scope is finalized")
-        if capacity_micros > _row_balance(parent).normal_available_micros:
-            raise ValueError("parent scope has insufficient transferable capacity")
-        token_row = conn.execute(
-            "UPDATE resource_scopes SET next_fencing_token=next_fencing_token+1 "
-            "WHERE scope_id=? RETURNING next_fencing_token-1",
-            (parent_id,),
-        ).fetchone()
-        if token_row is None:  # pragma: no cover - selected above
-            raise RuntimeError("parent fencing counter was not updated")
-        token = int(token_row[0])
-        now = _now().isoformat()
-        conn.execute(
-            """
-            INSERT INTO resource_reservations(
-                reservation_id,scope_id,child_scope_id,dimension,requested_micros,
-                granted_micros,state,idempotency_key,fencing_token,provenance_json,
-                created_at,updated_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                reservation_id,
-                parent_id,
-                child_id,
-                parent["dimension"],
-                capacity_micros,
-                capacity_micros,
-                ReservationState.LIVE.value,
-                key,
-                token,
-                canonical_json({"purpose": "child_transfer"}),
-                now,
-                now,
-            ),
+            return existing
+        _validate_parent_transfer(parent, capacity_micros, expected_dimension)
+        result = _insert_transfer(
+            conn,
+            parent=parent,
+            parent_id=parent_id,
+            child_id=child_id,
+            reservation_id=reservation_id,
+            key=key,
+            capacity_micros=capacity_micros,
+            child_mode=child_mode,
+            finalization_reserve_micros=finalization_reserve_micros,
+            max_overrun_micros=max_overrun_micros,
+            metadata=metadata,
         )
-        conn.execute(
-            """
-            INSERT INTO resource_scopes(
-                scope_id,parent_scope_id,dimension,capacity_micros,mode,
-                finalization_reserve_micros,max_overrun_micros,threat_model,
-                created_at,metadata_json
-            ) VALUES (?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                child_id,
-                parent_id,
-                parent["dimension"],
-                capacity_micros,
-                child_mode,
-                finalization_reserve_micros,
-                max_overrun_micros,
-                parent["threat_model"],
-                now,
-                canonical_json(dict(metadata or {})),
-            ),
-        )
-        conn.execute(
-            "UPDATE resource_scopes SET reserved_micros=reserved_micros+? WHERE scope_id=?",
-            (capacity_micros, parent_id),
-        )
-        child = conn.execute(
-            "SELECT * FROM resource_scopes WHERE scope_id=?", (child_id,)
-        ).fetchone()
-        reservation = conn.execute(
-            "SELECT * FROM resource_reservations WHERE reservation_id=?", (reservation_id,)
-        ).fetchone()
         conn.commit()
-        if child is None or reservation is None:  # pragma: no cover
-            raise RuntimeError("child transfer insert did not yield rows")
-        return ScopeTransfer(_reservation_from_row(reservation), _row_balance(child))
+        return result
     except BaseException:
         conn.rollback()
         raise
@@ -472,6 +599,117 @@ def structural_loop_facts(events: Iterable[Mapping[str, object]]) -> LoopFacts:
     )
 
 
+def _validate_reservation_request(
+    requested_micros: int,
+    idempotency_key: str,
+    ttl_seconds: int | None,
+    purpose: str,
+) -> None:
+    _validate_amount(requested_micros, "requested_micros")
+    if not isinstance(idempotency_key, str) or not idempotency_key:
+        raise ValueError("idempotency_key must be non-empty")
+    if ttl_seconds is not None and ttl_seconds < 0:
+        raise ValueError("ttl_seconds must be non-negative")
+    if purpose not in {"normal", "finalization"}:
+        raise ValueError("purpose must be normal or finalization")
+
+
+def _existing_reservation(
+    conn: sqlite3.Connection,
+    scope_id: str,
+    key: str,
+    requested_micros: int,
+    child_scope: str | None,
+) -> Reservation | None:
+    row: sqlite3.Row | None = conn.execute(
+        "SELECT * FROM resource_reservations WHERE scope_id = ? AND idempotency_key = ?",
+        (scope_id, key),
+    ).fetchone()
+    if row is None:
+        return None
+    expected = (requested_micros, _scope_id(child_scope) if child_scope is not None else None)
+    actual = (int(row["requested_micros"]), row["child_scope_id"])
+    if actual != expected:
+        raise ValueError("idempotency key already belongs to a different reservation")
+    return _reservation_from_row(row)
+
+
+def _open_scope(conn: sqlite3.Connection, scope_id: str) -> sqlite3.Row:
+    row: sqlite3.Row | None = conn.execute(
+        "SELECT * FROM resource_scopes WHERE scope_id = ?", (scope_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError("resource scope not found")
+    if row["closed_at"] is not None:
+        raise ValueError("resource scope is finalized")
+    return row
+
+
+def _grant(row: sqlite3.Row, requested_micros: int, purpose: str) -> tuple[str, int]:
+    scope_balance = _row_balance(row)
+    available = (
+        scope_balance.available_micros
+        if purpose == "finalization"
+        else scope_balance.normal_available_micros
+    )
+    if requested_micros > available:
+        return ReservationState.DENIED.value, 0
+    return ReservationState.LIVE.value, requested_micros
+
+
+def _insert_reservation(
+    conn: sqlite3.Connection,
+    *,
+    reservation_id: str,
+    scope_id: str,
+    child_scope: str | None,
+    row: sqlite3.Row,
+    requested_micros: int,
+    granted_micros: int,
+    state: str,
+    key: str,
+    expires: str | None,
+    provenance: Mapping[str, object] | None,
+    purpose: str,
+    now_iso: str,
+) -> Reservation:
+    conn.execute(
+        """
+        INSERT INTO resource_reservations(
+            reservation_id, scope_id, child_scope_id, dimension, requested_micros,
+            granted_micros, state, idempotency_key, lease_expires_at, fencing_token,
+            provenance_json, created_at, updated_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            reservation_id,
+            scope_id,
+            _scope_id(child_scope) if child_scope is not None else None,
+            row["dimension"],
+            requested_micros,
+            granted_micros,
+            state,
+            key,
+            expires,
+            _next_fencing_token(conn, scope_id),
+            canonical_json({**dict(provenance or {}), "purpose": purpose}),
+            now_iso,
+            now_iso,
+        ),
+    )
+    if granted_micros:
+        conn.execute(
+            "UPDATE resource_scopes SET reserved_micros = reserved_micros + ? WHERE scope_id = ?",
+            (granted_micros, scope_id),
+        )
+    result: sqlite3.Row | None = conn.execute(
+        "SELECT * FROM resource_reservations WHERE reservation_id = ?", (reservation_id,)
+    ).fetchone()
+    if result is None:  # pragma: no cover - insert/select invariant
+        raise RuntimeError("reservation insert did not yield a row")
+    return _reservation_from_row(result)
+
+
 def reserve(
     conn: sqlite3.Connection,
     scope: str,
@@ -484,13 +722,7 @@ def reserve(
     provenance: Mapping[str, object] | None = None,
 ) -> Reservation:
     """Atomically reserve available capacity, or record a denied admission."""
-    _validate_amount(requested_micros, "requested_micros")
-    if not isinstance(idempotency_key, str) or not idempotency_key:
-        raise ValueError("idempotency_key must be non-empty")
-    if ttl_seconds is not None and ttl_seconds < 0:
-        raise ValueError("ttl_seconds must be non-negative")
-    if purpose not in {"normal", "finalization"}:
-        raise ValueError("purpose must be normal or finalization")
+    _validate_reservation_request(requested_micros, idempotency_key, ttl_seconds, purpose)
     scope_id = _scope_id(scope)
     key = opaque_id("reservation-key", idempotency_key)
     reservation_id = _reservation_id(scope_id, key)
@@ -500,83 +732,29 @@ def reserve(
     )
     conn.execute("BEGIN IMMEDIATE")
     try:
-        existing = conn.execute(
-            "SELECT * FROM resource_reservations WHERE scope_id = ? AND idempotency_key = ?",
-            (scope_id, key),
-        ).fetchone()
+        existing = _existing_reservation(conn, scope_id, key, requested_micros, child_scope)
         if existing is not None:
-            expected_child = _scope_id(child_scope) if child_scope is not None else None
-            if (
-                int(existing["requested_micros"]) != requested_micros
-                or existing["child_scope_id"] != expected_child
-            ):
-                raise ValueError("idempotency key already belongs to a different reservation")
             conn.commit()
-            return _reservation_from_row(existing)
-        row = conn.execute(
-            "SELECT * FROM resource_scopes WHERE scope_id = ?", (scope_id,)
-        ).fetchone()
-        if row is None:
-            raise ValueError("resource scope not found")
-        if row["closed_at"] is not None:
-            raise ValueError("resource scope is finalized")
-        state = ReservationState.LIVE.value
-        granted = requested_micros
-        scope_balance = _row_balance(row)
-        available = (
-            scope_balance.available_micros
-            if purpose == "finalization"
-            else scope_balance.normal_available_micros
+            return existing
+        row = _open_scope(conn, scope_id)
+        state, granted = _grant(row, requested_micros, purpose)
+        result = _insert_reservation(
+            conn,
+            reservation_id=reservation_id,
+            scope_id=scope_id,
+            child_scope=child_scope,
+            row=row,
+            requested_micros=requested_micros,
+            granted_micros=granted,
+            state=state,
+            key=key,
+            expires=expires,
+            provenance=provenance,
+            purpose=purpose,
+            now_iso=now.isoformat(),
         )
-        if requested_micros > available:
-            state = ReservationState.DENIED.value
-            granted = 0
-        token_row = conn.execute(
-            "UPDATE resource_scopes SET next_fencing_token=next_fencing_token+1 "
-            "WHERE scope_id=? RETURNING next_fencing_token-1",
-            (scope_id,),
-        ).fetchone()
-        if token_row is None:  # pragma: no cover - selected above
-            raise RuntimeError("scope fencing counter was not updated")
-        token = int(token_row[0])
-        now_iso = now.isoformat()
-        conn.execute(
-            """
-            INSERT INTO resource_reservations(
-                reservation_id, scope_id, child_scope_id, dimension, requested_micros,
-                granted_micros, state, idempotency_key, lease_expires_at, fencing_token,
-                provenance_json, created_at, updated_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                reservation_id,
-                scope_id,
-                _scope_id(child_scope) if child_scope is not None else None,
-                row["dimension"],
-                requested_micros,
-                granted,
-                state,
-                key,
-                expires,
-                token,
-                canonical_json({**dict(provenance or {}), "purpose": purpose}),
-                now_iso,
-                now_iso,
-            ),
-        )
-        if granted:
-            conn.execute(
-                "UPDATE resource_scopes SET reserved_micros = reserved_micros + "
-                "? WHERE scope_id = ?",
-                (granted, scope_id),
-            )
-        result = conn.execute(
-            "SELECT * FROM resource_reservations WHERE reservation_id = ?", (reservation_id,)
-        ).fetchone()
         conn.commit()
-        if result is None:  # pragma: no cover - insert/select invariant
-            raise RuntimeError("reservation insert did not yield a row")
-        return _reservation_from_row(result)
+        return result
     except BaseException:
         conn.rollback()
         raise

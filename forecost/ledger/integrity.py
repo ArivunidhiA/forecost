@@ -45,6 +45,32 @@ class JournalVerification:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class _ChainSnapshot:
+    rows: list[sqlite3.Row]
+    anchored_count: int
+    head_sequence: int
+    head_digest: str
+    sequences: list[int]
+    digests: list[str]
+
+
+def _verification(
+    snapshot: _ChainSnapshot,
+    state: IntegrityState,
+    first_bad_sequence: int | None,
+    detail: str,
+) -> JournalVerification:
+    return JournalVerification(
+        state,
+        len(snapshot.rows),
+        snapshot.anchored_count,
+        snapshot.head_sequence,
+        first_bad_sequence,
+        detail,
+    )
+
+
 def entry_digest(row: sqlite3.Row | dict[str, object], sequence: int, previous: str) -> str:
     material = {
         "journal_sequence": sequence,
@@ -128,6 +154,98 @@ def _write_head(conn: sqlite3.Connection, sequence: int, digest: str) -> None:
     )
 
 
+def _snapshot(rows: list[sqlite3.Row], head: sqlite3.Row) -> _ChainSnapshot | JournalVerification:
+    anchored_count = int(head["event_count"])
+    head_sequence = int(head["head_sequence"])
+    raw_sequences = [row["journal_sequence"] for row in rows]
+    if any(
+        value is None or isinstance(value, bool) or not isinstance(value, int)
+        for value in raw_sequences
+    ):
+        return JournalVerification(
+            "unknown", len(rows), anchored_count, head_sequence, None, "unchained row present"
+        )
+    return _ChainSnapshot(
+        rows=rows,
+        anchored_count=anchored_count,
+        head_sequence=head_sequence,
+        head_digest=str(head["head_digest"]),
+        sequences=[int(value) for value in raw_sequences],
+        digests=[str(row["entry_digest"]) for row in rows],
+    )
+
+
+def _structural_failure(snapshot: _ChainSnapshot) -> JournalVerification | None:
+    if len(set(snapshot.sequences)) != len(snapshot.sequences):
+        return _verification(snapshot, "duplicated", None, "duplicate sequence")
+    if len(set(snapshot.digests)) != len(snapshot.digests):
+        return _verification(snapshot, "duplicated", None, "duplicate entry digest")
+    previous_counts: dict[str, int] = {}
+    for row in snapshot.rows:
+        previous = str(row["previous_digest"])
+        previous_counts[previous] = previous_counts.get(previous, 0) + 1
+    shared_parent = any(
+        count > 1 for previous, count in previous_counts.items() if previous != GENESIS_DIGEST
+    )
+    if shared_parent:
+        return _verification(snapshot, "forked", None, "multiple children share a parent")
+    return None
+
+
+def _sequence_failure(snapshot: _ChainSnapshot, actual: int, expected: int) -> JournalVerification:
+    if actual > expected:
+        return _verification(
+            snapshot, "deleted", expected, "an internal journal sequence is missing"
+        )
+    return _verification(snapshot, "reordered", actual, "sequence regressed")
+
+
+def _walk_chain(snapshot: _ChainSnapshot) -> tuple[str, JournalVerification | None]:
+    expected_previous = GENESIS_DIGEST
+    known_digests = set(snapshot.digests)
+    for expected_sequence, row in enumerate(snapshot.rows, start=1):
+        actual_sequence = int(row["journal_sequence"])
+        if actual_sequence != expected_sequence:
+            return expected_previous, _sequence_failure(
+                snapshot, actual_sequence, expected_sequence
+            )
+        previous = str(row["previous_digest"])
+        if previous != expected_previous:
+            state: IntegrityState = "reordered" if previous in known_digests else "forked"
+            return expected_previous, _verification(
+                snapshot,
+                state,
+                actual_sequence,
+                "entry does not extend the immediately preceding digest",
+            )
+        expected_digest = entry_digest(row, actual_sequence, previous)
+        if row["entry_digest"] != expected_digest:
+            return expected_previous, _verification(
+                snapshot,
+                "rewritten",
+                actual_sequence,
+                "entry material no longer matches its digest",
+            )
+        expected_previous = expected_digest
+    return expected_previous, None
+
+
+def _head_failure(snapshot: _ChainSnapshot, computed_head: str) -> JournalVerification | None:
+    row_count = len(snapshot.rows)
+    if row_count < snapshot.anchored_count and computed_head != snapshot.head_digest:
+        return _verification(
+            snapshot,
+            "truncated",
+            row_count + 1,
+            "valid prefix remains but the anchored tail is missing",
+        )
+    if row_count != snapshot.anchored_count or snapshot.head_sequence != snapshot.anchored_count:
+        return _verification(snapshot, "unknown", None, "chain/head counts disagree")
+    if computed_head != snapshot.head_digest:
+        return _verification(snapshot, "forked", row_count, "chain head differs from anchor")
+    return None
+
+
 def verify_journal_chain(conn: sqlite3.Connection) -> JournalVerification:
     rows = conn.execute(
         "SELECT * FROM journal_observations ORDER BY journal_sequence, observation_id"
@@ -140,115 +258,20 @@ def verify_journal_chain(conn: sqlite3.Connection) -> JournalVerification:
     if head is None:
         state: IntegrityState = "unanchored" if not rows else "unknown"
         return JournalVerification(state, len(rows), 0, 0, None, "journal has no chain anchor")
-
-    anchored_count = int(head["event_count"])
-    head_sequence = int(head["head_sequence"])
     if not rows:
+        anchored_count = int(head["event_count"])
+        head_sequence = int(head["head_sequence"])
         state = "intact" if anchored_count == 0 else "truncated"
         detail = "empty anchored journal" if state == "intact" else "all anchored tail rows missing"
         return JournalVerification(state, 0, anchored_count, head_sequence, 1, detail)
-
-    sequences = [row["journal_sequence"] for row in rows]
-    if any(
-        value is None or isinstance(value, bool) or not isinstance(value, int)
-        for value in sequences
-    ):
-        return JournalVerification(
-            "unknown", len(rows), anchored_count, head_sequence, None, "unchained row present"
-        )
-    integer_sequences = [int(value) for value in sequences]
-    if len(set(integer_sequences)) != len(integer_sequences):
-        return JournalVerification(
-            "duplicated", len(rows), anchored_count, head_sequence, None, "duplicate sequence"
-        )
-    digests = [str(row["entry_digest"]) for row in rows]
-    if len(set(digests)) != len(digests):
-        return JournalVerification(
-            "duplicated", len(rows), anchored_count, head_sequence, None, "duplicate entry digest"
-        )
-    previous_counts: dict[str, int] = {}
-    for row in rows:
-        previous = str(row["previous_digest"])
-        previous_counts[previous] = previous_counts.get(previous, 0) + 1
-    if any(count > 1 for previous, count in previous_counts.items() if previous != GENESIS_DIGEST):
-        return JournalVerification(
-            "forked",
-            len(rows),
-            anchored_count,
-            head_sequence,
-            None,
-            "multiple children share a parent",
-        )
-
-    expected_sequence = 1
-    expected_previous = GENESIS_DIGEST
-    known_digests = set(digests)
-    for row in rows:
-        actual_sequence = int(row["journal_sequence"])
-        if actual_sequence != expected_sequence:
-            if actual_sequence > expected_sequence:
-                return JournalVerification(
-                    "deleted",
-                    len(rows),
-                    anchored_count,
-                    head_sequence,
-                    expected_sequence,
-                    "an internal journal sequence is missing",
-                )
-            return JournalVerification(
-                "reordered",
-                len(rows),
-                anchored_count,
-                head_sequence,
-                actual_sequence,
-                "sequence regressed",
-            )
-        previous = str(row["previous_digest"])
-        if previous != expected_previous:
-            state = "reordered" if previous in known_digests else "forked"
-            return JournalVerification(
-                state,
-                len(rows),
-                anchored_count,
-                head_sequence,
-                actual_sequence,
-                "entry does not extend the immediately preceding digest",
-            )
-        expected_digest = entry_digest(row, actual_sequence, previous)
-        if row["entry_digest"] != expected_digest:
-            return JournalVerification(
-                "rewritten",
-                len(rows),
-                anchored_count,
-                head_sequence,
-                actual_sequence,
-                "entry material no longer matches its digest",
-            )
-        expected_previous = expected_digest
-        expected_sequence += 1
-
-    if len(rows) < anchored_count and expected_previous != head["head_digest"]:
-        return JournalVerification(
-            "truncated",
-            len(rows),
-            anchored_count,
-            head_sequence,
-            len(rows) + 1,
-            "valid prefix remains but the anchored tail is missing",
-        )
-    if len(rows) != anchored_count or head_sequence != anchored_count:
-        return JournalVerification(
-            "unknown", len(rows), anchored_count, head_sequence, None, "chain/head counts disagree"
-        )
-    if expected_previous != head["head_digest"]:
-        return JournalVerification(
-            "forked",
-            len(rows),
-            anchored_count,
-            head_sequence,
-            len(rows),
-            "chain head differs from anchor",
-        )
-    return JournalVerification(
-        "intact", len(rows), anchored_count, head_sequence, None, "journal chain and anchor agree"
-    )
+    snapshot = _snapshot(rows, head)
+    if isinstance(snapshot, JournalVerification):
+        return snapshot
+    failure = _structural_failure(snapshot)
+    if failure is not None:
+        return failure
+    computed_head, failure = _walk_chain(snapshot)
+    if failure is not None:
+        return failure
+    failure = _head_failure(snapshot, computed_head)
+    return failure or _verification(snapshot, "intact", None, "journal chain and anchor agree")
