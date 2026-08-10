@@ -86,3 +86,64 @@ def test_receipt_commands_render_and_mark_outcome(ledger_conn, monkeypatch):
     assert "evidence=complete" in listed.output
     assert shown.exit_code == 0
     assert "Critical path:" in shown.output
+
+
+def test_receipt_timing_does_not_double_count_enclosing_parent(ledger_conn):
+    base = CausalIdentity("c", "1" * 32, "r", "2" * 16, idempotency_key="root")
+    child = CausalIdentity(
+        "c",
+        "1" * 32,
+        "r",
+        "3" * 16,
+        parent_span_id="2" * 16,
+        source_sequence=1,
+        idempotency_key="child",
+    )
+    from datetime import datetime, timedelta, timezone
+
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    append_observation(
+        ledger_conn,
+        observation(
+            producer="timing",
+            event_kind="span",
+            causal=base,
+            payload={"operation_kind": "agent", "lifecycle": "completed"},
+            occurred_at=start,
+            observed_at=start + timedelta(seconds=10),
+        ),
+    )
+    append_observation(
+        ledger_conn,
+        observation(
+            producer="timing",
+            event_kind="span",
+            causal=child,
+            payload={"operation_kind": "model", "lifecycle": "completed"},
+            occurred_at=start + timedelta(seconds=2),
+            observed_at=start + timedelta(seconds=8),
+        ),
+    )
+
+    timing = build_receipt(ledger_conn, base.normalized().run_id)["timing_micros"]
+    assert isinstance(timing, dict)
+    assert timing["critical_path"] == 10_000_000
+    assert timing["elapsed"] == 10_000_000
+
+
+def test_receipt_surfaces_expected_source_gap_and_accepts_no_color(ledger_conn, monkeypatch):
+    monkeypatch.setattr("forecost.commands.receipt_cmd.get_ledger_db", lambda: ledger_conn)
+    run_id = seed_demo(ledger_conn, seed=32)
+    ledger_conn.execute(
+        "UPDATE causal_runs SET source_coverage_json = ? WHERE run_id = ?",
+        ('{"sources_expected":["missing-source"]}', run_id),
+    )
+    result = build_receipt(ledger_conn, run_id)
+    evidence = result["evidence"]
+    assert isinstance(evidence, dict)
+    assert evidence["state"] == "incomplete"
+    assert "missing-source" in evidence["known_blind_spots"]
+
+    rendered = CliRunner().invoke(receipt, [run_id, "--no-color"])
+    assert rendered.exit_code == 0
+    assert "\x1b[" not in rendered.output

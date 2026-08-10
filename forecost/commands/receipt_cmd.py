@@ -20,8 +20,14 @@ class ReceiptGroup(click.Group):
 
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
         if args and args[0] != "diff" and not args[0].startswith("-"):
-            flags = [arg for arg in args[1:] if arg in {"--json-output", "--markdown"}]
-            remainder = [arg for arg in args[1:] if arg not in {"--json-output", "--markdown"}]
+            flags = [
+                arg for arg in args[1:] if arg in {"--json-output", "--markdown", "--no-color"}
+            ]
+            remainder = [
+                arg
+                for arg in args[1:]
+                if arg not in {"--json-output", "--markdown", "--no-color"}
+            ]
             args[:] = [*flags, args[0], *remainder]
         return super().parse_args(ctx, args)
 
@@ -30,8 +36,19 @@ class ReceiptGroup(click.Group):
 @click.argument("run_id", required=False)
 @click.option("--json-output", "json_output", is_flag=True, help="Emit stable JSON.")
 @click.option("--markdown", is_flag=True, help="Render a Markdown artifact.")
+@click.option(
+    "--no-color",
+    is_flag=True,
+    help="Compatibility flag; receipt output is always deterministic plain text.",
+)
 @click.pass_context
-def receipt(ctx: click.Context, run_id: str | None, json_output: bool, markdown: bool) -> None:
+def receipt(
+    ctx: click.Context,
+    run_id: str | None,
+    json_output: bool,
+    markdown: bool,
+    no_color: bool,
+) -> None:
     """Render a versioned economic receipt, or compare two receipts."""
     if ctx.invoked_subcommand is not None:
         return
@@ -39,6 +56,7 @@ def receipt(ctx: click.Context, run_id: str | None, json_output: bool, markdown:
         raise click.UsageError("missing RUN_ID")
     if json_output and markdown:
         raise click.UsageError("--json-output and --markdown cannot be used together")
+    del no_color  # output is intentionally never ANSI-colored
     conn = get_ledger_db()
     try:
         result = build_receipt(conn, run_id)

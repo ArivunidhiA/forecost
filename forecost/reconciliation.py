@@ -16,10 +16,6 @@ from forecost.ledger.contracts import CausalIdentity, canonical_json, opaque_id
 from forecost.ledger.evidence import append_observation, observation
 
 _SOURCES = frozenset({"openai", "anthropic", "gateway", "otel"})
-_LOCAL_AUTHORITIES = frozenset({"list_rate", "gateway_estimate", "provider_estimate"})
-_LOCAL_AUTHORITY_ORDER = {"provider_estimate": 0, "gateway_estimate": 1, "list_rate": 2}
-
-
 def _as_micros(value: object) -> int:
     if isinstance(value, bool):
         raise ValueError("billing amount must be numeric")
@@ -178,6 +174,9 @@ def import_bill_file(
         )
         if account_scope is not None and not isinstance(account_scope, str):
             account_scope = str(account_scope)
+        fact_id = record.get("fact_id")
+        if fact_id is not None and not isinstance(fact_id, str):
+            raise ValueError("fact_id must be a string when supplied")
         causal = replace(
             root,
             source_sequence=index,
@@ -190,6 +189,7 @@ def import_bill_file(
                 event_kind="charge",
                 causal=causal,
                 payload={
+                    "fact_id": fact_id,
                     "amount_micros": amount,
                     "currency": "USD",
                     "authority": "billed",
@@ -212,46 +212,130 @@ def reconcile_run(
     *,
     tolerance_micros: int = 1_000,
 ) -> dict[str, object]:
-    """Compare local valuations and imported provider bills without forced matching."""
+    """Compare local valuations and provider bills without forced matching.
+
+    Canonical authority selection and aggregate constraints execute in SQLite.
+    Python receives one statistics row and streams evidence identifiers, so the
+    memory footprint does not grow with the number of charge rows.
+    """
     if tolerance_micros < 0:
         raise ValueError("tolerance_micros must be non-negative")
-    where = ""
-    params: list[object] = []
-    if run_id is not None:
-        where = "JOIN causal_spans s ON s.span_id = c.span_id WHERE s.run_id = ?"
-        params.append(opaque_id("run", run_id))
-    rows = conn.execute(f"SELECT c.* FROM charges c {where}", params).fetchall()  # noqa: S608
-    local_candidates = [row for row in rows if row["authority"] in _LOCAL_AUTHORITIES]
-    grouped_local: dict[tuple[str, str, str], list[sqlite3.Row]] = {}
-    for row in local_candidates:
-        key = (row["fact_id"] or row["span_id"], row["currency"], row["line_item"])
-        grouped_local.setdefault(key, []).append(row)
-    local = [
-        sorted(
-            candidates,
-            key=lambda row: (
-                _LOCAL_AUTHORITY_ORDER.get(row["authority"], 99),
-                row["observed_at"],
-                row["charge_id"],
-            ),
-        )[0]
-        for candidates in grouped_local.values()
-    ]
-    provider = [row for row in rows if row["authority"] == "billed"]
-    local_total = sum(int(row["amount_micros"]) for row in local)
-    provider_total = sum(int(row["amount_micros"]) for row in provider)
+    normalized_run = opaque_id("run", run_id) if run_id is not None else None
+    params: tuple[object, ...] = (normalized_run, normalized_run)
+    cte = """
+        WITH active AS (
+            SELECT c.* FROM charges c
+            WHERE NOT EXISTS (
+                SELECT 1 FROM charges newer
+                WHERE newer.supersedes_charge_id = c.charge_id
+            )
+            AND (? IS NULL OR EXISTS (
+                SELECT 1 FROM causal_spans s
+                WHERE s.span_id = c.span_id AND s.run_id = ?
+            ))
+        ),
+        ranked_local AS (
+            SELECT active.*,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY COALESCE(fact_id, span_id), currency, line_item
+                       ORDER BY CASE authority
+                           WHEN 'provider_estimate' THEN 0
+                           WHEN 'gateway_estimate' THEN 1
+                           WHEN 'list_rate' THEN 2
+                           ELSE 99 END,
+                           observed_at, charge_id
+                   ) AS authority_rank
+            FROM active
+            WHERE authority IN ('provider_estimate', 'gateway_estimate', 'list_rate')
+        ),
+        local AS (SELECT * FROM ranked_local WHERE authority_rank = 1),
+        provider AS (SELECT * FROM active WHERE authority = 'billed')
+    """
+    stats_sql = (
+        cte  # noqa: S608 - composed exclusively from static SQL literals
+        + """
+        SELECT
+            (SELECT COUNT(*) FROM local) AS local_count,
+            (SELECT COUNT(*) FROM provider) AS provider_count,
+            COALESCE((SELECT SUM(amount_micros) FROM local), 0) AS local_total,
+            COALESCE((SELECT SUM(amount_micros) FROM provider), 0) AS provider_total,
+            (SELECT COUNT(*) FROM local l
+             WHERE l.fact_id IS NOT NULL AND EXISTS (
+                 SELECT 1 FROM provider p
+                 WHERE p.fact_id = l.fact_id AND p.currency = l.currency
+                   AND p.line_item = l.line_item
+             )) AS exact_match_count,
+            (SELECT COUNT(*) FROM local l
+             WHERE l.fact_id IS NULL OR NOT EXISTS (
+                 SELECT 1 FROM provider p
+                 WHERE p.fact_id = l.fact_id AND p.currency = l.currency
+                   AND p.line_item = l.line_item
+             )) AS unmatched_local_count,
+            (SELECT COUNT(*) FROM provider p
+             WHERE p.fact_id IS NULL OR NOT EXISTS (
+                 SELECT 1 FROM local l
+                 WHERE l.fact_id = p.fact_id AND l.currency = p.currency
+                   AND l.line_item = p.line_item
+             )) AS unmatched_provider_count,
+            COALESCE((SELECT MIN(finality = 'final') FROM (
+                SELECT finality FROM local UNION ALL SELECT finality FROM provider
+            )), 0) AS all_inputs_final,
+            (SELECT MIN(occurred_at) FROM (
+                SELECT occurred_at FROM local UNION ALL SELECT occurred_at FROM provider
+            )) AS window_start,
+            (SELECT MAX(occurred_at) FROM (
+                SELECT occurred_at FROM local UNION ALL SELECT occurred_at FROM provider
+            )) AS window_end
+        """
+    )
+    stats = conn.execute(stats_sql, params).fetchone()
+    local_count = int(stats["local_count"])
+    provider_count = int(stats["provider_count"])
+    local_total = int(stats["local_total"])
+    provider_total = int(stats["provider_total"])
+    exact_match_count = int(stats["exact_match_count"])
+    unmatched_local_count = int(stats["unmatched_local_count"])
+    unmatched_provider_count = int(stats["unmatched_provider_count"])
     residual = provider_total - local_total
     expected = 2
-    observed = int(bool(local)) + int(bool(provider))
+    observed = int(local_count > 0) + int(provider_count > 0)
+    all_inputs_final = bool(stats["all_inputs_final"])
     if observed == 0:
         state, finality = "unknown", "unknown"
     elif observed < expected:
         state, finality = "incomplete", "provisional"
     elif abs(residual) <= tolerance_micros:
-        state, finality = "reconciled", "final"
+        state = "reconciled"
+        finality = "final" if all_inputs_final else "provisional"
     else:
-        state, finality = "discrepant", "final"
-    normalized_run = opaque_id("run", run_id) if run_id is not None else None
+        state = "discrepant"
+        finality = "final" if all_inputs_final else "provisional"
+    evidence_hasher = hashlib.sha256()
+    evidence_sql = (
+        cte  # noqa: S608 - composed exclusively from static SQL literals
+        + """
+        SELECT observation_id, 'local' AS source_role,
+               CASE WHEN fact_id IS NOT NULL AND EXISTS (
+                   SELECT 1 FROM provider p
+                   WHERE p.fact_id = local.fact_id AND p.currency = local.currency
+                     AND p.line_item = local.line_item
+               ) THEN 'exact_identity' ELSE 'aggregate_constraint' END AS match_state
+        FROM local
+        UNION ALL
+        SELECT observation_id, 'provider_bill' AS source_role,
+               CASE WHEN fact_id IS NOT NULL AND EXISTS (
+                   SELECT 1 FROM local l
+                   WHERE l.fact_id = provider.fact_id AND l.currency = provider.currency
+                     AND l.line_item = provider.line_item
+               ) THEN 'exact_identity' ELSE 'aggregate_constraint' END AS match_state
+        FROM provider
+        ORDER BY source_role, observation_id
+        """
+    )
+    for row in conn.execute(evidence_sql, params):
+        observation_id = str(row["observation_id"])
+        evidence_hasher.update(observation_id.encode("ascii"))
+        evidence_hasher.update(b"\0")
     material = {
         "run_id": normalized_run,
         "local_total": local_total,
@@ -259,19 +343,40 @@ def reconcile_run(
         "residual": residual,
         "tolerance": tolerance_micros,
         "state": state,
-        "local_count": len(local),
-        "provider_count": len(provider),
+        "local_count": local_count,
+        "provider_count": provider_count,
+        "exact_match_count": exact_match_count,
+        "unmatched_local_count": unmatched_local_count,
+        "unmatched_provider_count": unmatched_provider_count,
         "expected": expected,
         "observed": observed,
+        "evidence_digest": evidence_hasher.hexdigest(),
     }
     batch_id = opaque_id("reconciliation", canonical_json(material))
+    prior_query = (
+        "SELECT batch_id FROM reconciliation_batches WHERE run_id = ? "
+        "ORDER BY created_at DESC, batch_id DESC LIMIT 1"
+        if normalized_run is not None
+        else "SELECT batch_id FROM reconciliation_batches WHERE run_id IS NULL "
+        "ORDER BY created_at DESC, batch_id DESC LIMIT 1"
+    )
+    prior_params = (normalized_run,) if normalized_run is not None else ()
+    prior = conn.execute(prior_query, prior_params).fetchone()
+    if prior is not None and prior["batch_id"] == batch_id:
+        return {
+            **{key: value for key, value in material.items() if key != "evidence_digest"},
+            "batch_id": batch_id,
+            "finality": finality,
+            "supersedes_batch_id": None,
+            "reused": True,
+        }
+    supersedes_batch_id = prior["batch_id"] if prior is not None else None
     now = datetime.now(timezone.utc).isoformat()
-    timestamps = [row["occurred_at"] for row in rows]
-    window_start = min(timestamps, default=now)
-    window_end = max(timestamps, default=now)
+    window_start = stats["window_start"] or now
+    window_end = stats["window_end"] or now
     conn.execute(
         """
-        INSERT OR REPLACE INTO reconciliation_batches(
+        INSERT INTO reconciliation_batches(
             batch_id, schema_version, run_id, source_set_json, account_scope, dimensions_json,
             window_start, window_end, watermarks_json, expected_count, observed_count,
             unmatched_local_count, unmatched_provider_count, local_amount_micros,
@@ -283,7 +388,7 @@ def reconcile_run(
             batch_id,
             1,
             normalized_run,
-            canonical_json({"local": bool(local), "provider_bill": bool(provider)}),
+            canonical_json({"local": local_count > 0, "provider_bill": provider_count > 0}),
             None,
             "{}",
             window_start,
@@ -291,8 +396,8 @@ def reconcile_run(
             canonical_json({"as_of": now}),
             expected,
             observed,
-            len(local) if not provider else 0,
-            len(provider) if not local else 0,
+            unmatched_local_count,
+            unmatched_provider_count,
             local_total,
             provider_total,
             residual,
@@ -300,21 +405,23 @@ def reconcile_run(
             finality,
             state,
             now,
-            None,
+            supersedes_batch_id,
         ),
     )
     conn.execute("DELETE FROM reconciliation_evidence WHERE batch_id = ?", (batch_id,))
-    for row in local:
-        conn.execute(
-            "INSERT INTO reconciliation_evidence("
-            "batch_id, observation_id, source_role, match_state) VALUES (?,?,?,?)",
-            (batch_id, row["observation_id"], "local", "aggregate_constraint"),
-        )
-    for row in provider:
-        conn.execute(
-            "INSERT INTO reconciliation_evidence("
-            "batch_id, observation_id, source_role, match_state) VALUES (?,?,?,?)",
-            (batch_id, row["observation_id"], "provider_bill", "aggregate_constraint"),
-        )
+    conn.executemany(
+        "INSERT INTO reconciliation_evidence("
+        "batch_id, observation_id, source_role, match_state) VALUES (?,?,?,?)",
+        (
+            (batch_id, row["observation_id"], row["source_role"], row["match_state"])
+            for row in conn.execute(evidence_sql, params)
+        ),
+    )
     conn.commit()
-    return {**material, "batch_id": batch_id, "finality": finality}
+    return {
+        **{key: value for key, value in material.items() if key != "evidence_digest"},
+        "batch_id": batch_id,
+        "finality": finality,
+        "supersedes_batch_id": supersedes_batch_id,
+        "reused": False,
+    }

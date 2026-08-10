@@ -67,19 +67,74 @@ def _canonical_charges(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
     return chosen, conflicted
 
 
-def _critical_path(spans: list[dict[str, Any]]) -> tuple[int, int, int]:
+def _interval_union_micros(intervals: list[tuple[datetime, datetime]]) -> int:
+    if not intervals:
+        return 0
+    merged: list[tuple[datetime, datetime]] = []
+    for start, end in sorted(intervals):
+        if end <= start:
+            continue
+        if not merged or start > merged[-1][1]:
+            merged.append((start, end))
+        else:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+    return sum(int((end - start).total_seconds() * 1_000_000) for start, end in merged)
+
+
+def _critical_path(
+    spans: list[dict[str, Any]], links: list[tuple[str, str]]
+) -> tuple[int, int, int, bool]:
+    """Return causal critical path plus aggregate service/wait time.
+
+    Parent spans frequently enclose their children. Counting both full
+    durations exaggerates a path, so a parent's own contribution excludes the
+    union of direct child intervals that overlap it. Fan-in links are additional
+    causal predecessors. Cycles are surfaced instead of being silently treated
+    as a valid DAG.
+    """
     by_id = {row["span_id"]: row for row in spans}
+    children: dict[str, list[str]] = defaultdict(list)
+    predecessors: dict[str, set[str]] = defaultdict(set)
+    for row in spans:
+        parent = row["parent_span_id"]
+        if parent in by_id:
+            children[parent].append(row["span_id"])
+            predecessors[row["span_id"]].add(parent)
+    for span_id, linked_span_id in links:
+        if span_id in by_id and linked_span_id in by_id:
+            predecessors[span_id].add(linked_span_id)
     memo: dict[str, int] = {}
+    cycle_detected = False
+
+    def interval(row: dict[str, Any]) -> tuple[datetime, datetime]:
+        return (
+            datetime.fromisoformat(row["occurred_at"]).astimezone(timezone.utc),
+            datetime.fromisoformat(row["observed_at"]).astimezone(timezone.utc),
+        )
+
+    def exclusive_duration(span_id: str) -> int:
+        start, end = interval(by_id[span_id])
+        own = max(0, int((end - start).total_seconds() * 1_000_000))
+        covered: list[tuple[datetime, datetime]] = []
+        for child_id in children[span_id]:
+            child_start, child_end = interval(by_id[child_id])
+            clipped = (max(start, child_start), min(end, child_end))
+            if clipped[1] > clipped[0]:
+                covered.append(clipped)
+        return max(0, own - _interval_union_micros(covered))
 
     def path_duration(span_id: str, active: set[str]) -> int:
+        nonlocal cycle_detected
         if span_id in memo:
             return memo[span_id]
         if span_id in active:
+            cycle_detected = True
             return 0
-        row = by_id[span_id]
-        own = max(0, _duration_micros(row["occurred_at"], row["observed_at"]))
-        parent = row["parent_span_id"]
-        result = own + (path_duration(parent, active | {span_id}) if parent in by_id else 0)
+        previous = [
+            path_duration(parent, active | {span_id})
+            for parent in sorted(predecessors[span_id])
+        ]
+        result = exclusive_duration(span_id) + max(previous, default=0)
         memo[span_id] = result
         return result
 
@@ -94,7 +149,7 @@ def _critical_path(spans: list[dict[str, Any]]) -> tuple[int, int, int]:
         for row in spans
         if row["operation_kind"] != "queue_wait"
     )
-    return max(durations, default=0), service, wait
+    return max(durations, default=0), service, wait, cycle_detected
 
 
 def build_receipt(conn: sqlite3.Connection, run_id: str) -> dict[str, object]:
@@ -128,25 +183,67 @@ def build_receipt(conn: sqlite3.Connection, run_id: str) -> dict[str, object]:
         "WHERE s.run_id = ? ORDER BY j.producer",
         (run_id,),
     ).fetchall()]
+    links = [
+        (row["span_id"], row["linked_span_id"])
+        for row in conn.execute(
+            "SELECT l.span_id, l.linked_span_id FROM span_links l "
+            "JOIN causal_spans s ON s.span_id = l.span_id "
+            "WHERE s.run_id = ? ORDER BY l.span_id, l.linked_span_id",
+            (run_id,),
+        ).fetchall()
+    ]
     selected_charges, conflicted = _canonical_charges(charges)
     totals: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for charge in selected_charges:
         totals[charge["currency"]][charge["authority"]] += charge["amount_micros"]
     finalities = {row["finality"] for row in [*meters, *selected_charges]}
+    try:
+        coverage = json.loads(run["source_coverage_json"])
+    except (TypeError, json.JSONDecodeError):
+        coverage = {}
+    expected_sources = (
+        sorted(value for value in coverage.get("sources_expected", []) if isinstance(value, str))
+        if isinstance(coverage, dict)
+        else []
+    )
+    missing_sources = sorted(set(expected_sources) - set(sources))
     if not spans:
         evidence_state = EvidenceState.UNKNOWN.value
     elif conflicted:
         evidence_state = EvidenceState.CONFLICTED.value
-    elif Finality.PROVISIONAL.value in finalities or Finality.UNKNOWN.value in finalities:
+    elif (
+        missing_sources
+        or Finality.PROVISIONAL.value in finalities
+        or Finality.UNKNOWN.value in finalities
+    ):
         evidence_state = EvidenceState.INCOMPLETE.value
     elif not meters and not charges:
         evidence_state = EvidenceState.UNKNOWN.value
     else:
         evidence_state = EvidenceState.COMPLETE.value
-    critical_path, service_time, wait_time = _critical_path(spans)
+    critical_path, service_time, wait_time, cycle_detected = _critical_path(spans, links)
+    span_ids = {row["span_id"] for row in spans}
+    missing_parent = any(
+        row["parent_span_id"] is not None and row["parent_span_id"] not in span_ids
+        for row in spans
+    )
+    missing_link = any(linked_span_id not in span_ids for _, linked_span_id in links)
     observed = [row["observed_at"] for row in [*spans, *meters, *charges, *outcomes]]
     as_of = max(observed, default=run["observed_at"])
-    outcome = outcomes[-1] if outcomes else None
+    outcome_rank = {"explicit_mark": 3, "test_exit": 2, "build_exit": 2, "git_fact": 1}
+    outcome = (
+        max(
+            outcomes,
+            key=lambda row: (
+                row["outcome_status"] != "unknown",
+                outcome_rank.get(row["evidence_type"], 0),
+                row["observed_at"],
+                row["evidence_id"],
+            ),
+        )
+        if outcomes
+        else None
+    )
     graph = [
         {
             "span_id": row["span_id"],
@@ -169,20 +266,33 @@ def build_receipt(conn: sqlite3.Connection, run_id: str) -> dict[str, object]:
         "stop_reason": run["stop_reason"],
         "evidence": {
             "state": evidence_state,
-            "sources_expected": [],
+            "sources_expected": expected_sources,
             "sources_present": sources,
             "freshness_as_of": as_of,
-            "known_blind_spots": [
-                "provider_billing_absent" if not any(
-                    row["authority"] == Authority.BILLED.value for row in charges
-                ) else "none"
-            ],
+            "known_blind_spots": sorted(
+                [
+                    *missing_sources,
+                    *(
+                        ["provider_billing_absent"]
+                        if not any(row["authority"] == Authority.BILLED.value for row in charges)
+                        else []
+                    ),
+                    *(["missing_parent"] if missing_parent else []),
+                    *(["missing_link_target"] if missing_link else []),
+                    *(["causal_cycle"] if cycle_detected else []),
+                ]
+            ),
         },
         "causal_graph": graph,
         "timing_micros": {
             "critical_path": critical_path,
             "service": service_time,
             "wait": wait_time,
+            "elapsed": (
+                max(0, _duration_micros(min(row["occurred_at"] for row in spans), as_of))
+                if spans
+                else 0
+            ),
         },
         "meter_facts": [
             {
@@ -222,6 +332,16 @@ def build_receipt(conn: sqlite3.Connection, run_id: str) -> dict[str, object]:
             if outcome is not None
             else {"status": "unknown", "confidence": "unknown"}
         ),
+        "outcome_evidence": [
+            {
+                "status": row["outcome_status"],
+                "reason_code": row["reason_code"],
+                "evidence_type": row["evidence_type"],
+                "confidence": row["confidence"],
+                "observed_at": row["observed_at"],
+            }
+            for row in outcomes
+        ],
     }
     digest = hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
     payload["integrity"] = {"algorithm": "sha256", "payload_digest": digest}
