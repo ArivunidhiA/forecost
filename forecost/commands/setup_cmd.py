@@ -1,43 +1,200 @@
-"""Safe, non-mutating Claude plugin setup guidance and local checks."""
+"""Reversible Claude integration setup with isolated-config testability."""
 
 from __future__ import annotations
 
+import json
+import os
+import shlex
+import shutil
+import sys
+import tempfile
 from pathlib import Path
 
 import click
+
+from forecost.hooks.state import HOOK_PROTOCOL_VERSION
 
 
 def _plugin_root() -> Path:
     return Path(__file__).resolve().parents[2] / "plugin"
 
 
+def _config_path(config_dir: Path | None) -> Path:
+    return (config_dir or (Path.home() / ".claude")) / "settings.json"
+
+
+def _command(name: str) -> str:
+    return f"{shlex.quote(sys.executable)} -m forecost.hooks.fastpath {shlex.quote(name)}"
+
+
+def _managed_hooks() -> dict[str, list[dict[str, object]]]:
+    lifecycle = {"type": "command", "command": _command("lifecycle"), "timeout": 5, "async": True}
+    def hook(command: str, timeout: int, *, asynchronous: bool = False) -> list[dict[str, object]]:
+        item: dict[str, object] = {
+            "type": "command",
+            "command": _command(command),
+            "timeout": timeout,
+        }
+        if asynchronous:
+            item["async"] = True
+        return [{"hooks": [item]}]
+
+    return {
+        "SessionStart": hook("session-start", 10),
+        "UserPromptSubmit": hook("prompt-submit", 10),
+        "PreToolUse": hook("pre-tool", 5),
+        "PostToolUse": [{"hooks": [lifecycle]}],
+        "PostToolUseFailure": [{"hooks": [lifecycle]}],
+        "SubagentStart": [{"hooks": [lifecycle]}],
+        "SubagentStop": [{"hooks": [lifecycle]}],
+        "StopFailure": [{"hooks": [lifecycle]}],
+        "Stop": hook("stop", 30, asynchronous=True),
+        "SessionEnd": hook("session-end", 5),
+    }
+
+
+def _read_settings(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise click.ClickException(f"cannot read Claude settings: {path}") from error
+    if not isinstance(value, dict):
+        raise click.ClickException("Claude settings root must be an object")
+    return value
+
+
+def _is_managed_entry(entry: object) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    hooks = entry.get("hooks")
+    if not isinstance(hooks, list):
+        return False
+    return any(
+        isinstance(item, dict)
+        and isinstance(item.get("command"), str)
+        and "forecost.hooks.fastpath" in item["command"]
+        for item in hooks
+    )
+
+
+def _without_managed(settings: dict[str, object]) -> dict[str, object]:
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        return settings
+    cleaned = {
+        name: [entry for entry in entries if not _is_managed_entry(entry)]
+        for name, entries in hooks.items()
+        if isinstance(name, str) and isinstance(entries, list)
+    }
+    settings["hooks"] = {name: entries for name, entries in cleaned.items() if entries}
+    return settings
+
+
+def _install(settings: dict[str, object]) -> dict[str, object]:
+    settings = _without_managed(settings)
+    hooks = settings.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        raise click.ClickException("Claude settings hooks must be an object")
+    for name, entries in _managed_hooks().items():
+        existing = hooks.setdefault(name, [])
+        if not isinstance(existing, list):
+            raise click.ClickException(f"Claude hook {name} must be an array")
+        existing.extend(entries)
+    settings["forecost"] = {"hook_protocol_version": HOOK_PROTOCOL_VERSION}
+    return settings
+
+
+def _write_settings(path: Path, settings: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    backup = path.with_suffix(path.suffix + ".forecost.bak")
+    if path.is_file() and not backup.exists():
+        shutil.copy2(path, backup)
+        backup.chmod(0o600)
+    descriptor, temporary_raw = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_raw)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(settings, indent=2, sort_keys=True) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.chmod(0o600)
+        temporary.replace(path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _installed(settings: dict[str, object]) -> bool:
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        return False
+    expected = set(_managed_hooks())
+    return expected.issubset(hooks) and all(
+        isinstance(hooks[name], list) and any(_is_managed_entry(item) for item in hooks[name])
+        for name in expected
+    )
+
+
 @click.group()
 def setup() -> None:
-    """Prepare integrations without silently modifying host-agent settings."""
+    """Prepare reversible local integrations."""
 
 
 @setup.command("claude")
 @click.option("--dry-run", is_flag=True, help="Print the exact local installation plan.")
-@click.option("--check", "check_only", is_flag=True, help="Validate the bundled plugin shape only.")
+@click.option("--check", "check_only", is_flag=True, help="Validate package/config state.")
+@click.option("--apply", "apply_changes", is_flag=True, help="Install managed hooks.")
+@click.option("--repair", is_flag=True, help="Replace only Forecost-managed hook entries.")
+@click.option("--uninstall", is_flag=True, help="Remove only Forecost-managed hook entries.")
+@click.option("--config-dir", type=click.Path(path_type=Path), default=None)
 @click.option("--plugin-root", type=click.Path(path_type=Path), default=None)
-def setup_claude(dry_run: bool, check_only: bool, plugin_root: Path | None) -> None:
-    """Inspect the local Claude plugin; it never edits Claude configuration itself."""
-    if dry_run and check_only:
-        raise click.UsageError("choose either --dry-run or --check")
+def setup_claude(
+    dry_run: bool,
+    check_only: bool,
+    apply_changes: bool,
+    repair: bool,
+    uninstall: bool,
+    config_dir: Path | None,
+    plugin_root: Path | None,
+) -> None:
+    """Check, install, repair or remove Forecost's Claude hooks."""
+    modes = [dry_run, check_only, apply_changes, repair, uninstall]
+    if sum(modes) != 1:
+        raise click.UsageError(
+            "choose exactly one of --dry-run/--check/--apply/--repair/--uninstall"
+        )
     root = (plugin_root or _plugin_root()).resolve()
-    manifest = root / ".claude-plugin" / "plugin.json"
-    hooks = root / "hooks" / "hooks.json"
-    launcher = root / "scripts" / "run-hook.sh"
-    missing = [path.name for path in (manifest, hooks, launcher) if not path.is_file()]
+    required = (
+        root / ".claude-plugin" / "plugin.json",
+        root / "hooks" / "hooks.json",
+        root / "scripts" / "run-hook.sh",
+    )
+    missing = [path.name for path in required if not path.is_file()]
     if missing:
         raise click.ClickException(f"plugin package is incomplete: {', '.join(missing)}")
+    path = _config_path(config_dir)
+    settings = _read_settings(path)
     if check_only:
-        click.echo("Claude plugin package: ready for manual installation (no host config changed).")
+        state = "installed" if _installed(settings) else "not installed"
+        click.echo(
+            f"Claude plugin package: ready; managed config: {state}; "
+            f"protocol v{HOOK_PROTOCOL_VERSION}."
+        )
         return
-    if not dry_run:
-        raise click.UsageError("setup is intentionally non-mutating; use --dry-run or --check")
-    click.echo("Claude setup dry run (no files changed):")
-    click.echo(f"  plugin root: {root}")
-    click.echo("  install through Claude Code's plugin UI or marketplace command")
-    click.echo("  for this local root")
-    click.echo("  then run: forecost self-test claude")
+    if dry_run:
+        click.echo("Claude setup dry run (no files changed):")
+        click.echo(f"  plugin root: {root}")
+        click.echo(f"  settings: {path}")
+        click.echo("  action: install/repair versioned Forecost hook entries only")
+        return
+    if uninstall:
+        _without_managed(settings)
+        settings.pop("forecost", None)
+        _write_settings(path, settings)
+        click.echo(f"Removed Forecost-managed Claude hooks from {path}.")
+        return
+    _write_settings(path, _install(settings))
+    action = "Repaired" if repair else "Installed"
+    click.echo(f"{action} Forecost-managed Claude hooks in {path}.")

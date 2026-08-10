@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from forecost.adapters.claude_code import ClaudeCodeAdapter
+from forecost.adapters.claude_code import ClaudeCodeAdapter, ingest_causal_paths
 from forecost.core.errlog import log_error
 from forecost.estimate.engine import estimate_cost, record_estimate
 from forecost.estimate.flags import scan_prompt
@@ -22,6 +22,12 @@ from forecost.ledger.sink import SyncLedgerSink, _get_or_create_session, _get_or
 from forecost.ledger.state_store import LedgerIngestStateStore
 from forecost.policy.engine import evaluate
 from forecost.policy.rules import load_policy_file
+
+
+def _record_hook(event: str) -> None:
+    from forecost.hooks.state import record_heartbeat
+
+    record_heartbeat(event)
 
 
 def _policy_path(cwd: str | None) -> Path:
@@ -75,10 +81,21 @@ def _evaluate_policy(conn, cwd: str, workspace_id, session_db_id):
 
 
 def handle_session_start(payload: dict) -> dict:
+    from forecost.hooks.state import clear_settlements, pending_settlements
+
     conn = get_ledger_db()
     cwd = payload.get("cwd", "")
     session_id_raw = payload.get("session_id")
     _resolve_ids(conn, cwd, session_id_raw)
+    if pending_settlements():
+        # Recovery is intentionally deferred from SessionEnd.  SessionStart is
+        # allowed to do the heavier content-free transcript delta scan.
+        adapter = ClaudeCodeAdapter()
+        sink = SyncLedgerSink()
+        adapter.poll(LedgerIngestStateStore(conn), sink)
+        sink.flush()
+        clear_settlements()
+    _record_hook("SessionStart")
     return {}
 
 
@@ -128,6 +145,7 @@ def handle_preflight(payload: dict) -> dict:
     record_estimate(conn, estimate, session_db_id, workspace_id, run_id, shadow=True)
 
     decision = _evaluate_policy(conn, cwd, workspace_id, session_db_id)
+    _record_hook("UserPromptSubmit")
     if decision.action == "deny":
         return {"decision": "block", "reason": decision.reason}
 
@@ -141,6 +159,7 @@ def handle_gate(payload: dict) -> dict:
     conn = get_ledger_db()
     workspace_id, session_db_id = _resolve_ids(conn, cwd, session_id_raw)
     decision = _evaluate_policy(conn, cwd, workspace_id, session_db_id)
+    _record_hook("PreToolUse")
 
     if decision.action in ("deny", "ask"):
         return {
@@ -171,13 +190,54 @@ def handle_reconcile(payload: dict) -> dict:
     # This replaces the old async DefaultLedgerSink + sleep-based flush race.
     sink = SyncLedgerSink()
     if transcript_path:
-        n = adapter.poll_paths(_session_transcript_paths(Path(transcript_path)), state, sink)
+        transcript_paths = _session_transcript_paths(Path(transcript_path))
+        n = adapter.poll_paths(transcript_paths, state, sink)
+        causal = ingest_causal_paths(transcript_paths, state, conn)
     else:
         n = adapter.poll(state, sink)
+        causal = ingest_causal_paths(adapter.claude_dir.rglob("*.jsonl"), state, conn)
     sink.flush()
     scored = reconcile_estimates(conn)
     _shadow_guard_scan(conn, payload, transcript_path)
-    return {"ingested": n, "estimates_reconciled": scored}
+    from forecost.hooks.state import write_summary
+
+    write_summary(ingested=n, reconciled=scored)
+    _record_hook("Stop")
+    return {
+        "ingested": n,
+        "causal_observations": causal,
+        "estimates_reconciled": scored,
+        "systemMessage": (
+            f"forecost: {n} usage event(s), {scored} estimate(s) reconciled; "
+            "run `forecost runs list` for receipts"
+        ),
+    }
+
+
+def handle_session_end(payload: dict) -> dict:
+    """Fsync only a tiny settlement marker; never race a lagging transcript."""
+    from forecost.hooks.state import append_settlement_marker
+
+    append_settlement_marker(payload)
+    _record_hook("SessionEnd")
+    return {}
+
+
+def handle_lifecycle(payload: dict) -> dict:
+    """Record supported Claude lifecycle visibility without retaining payload."""
+    from forecost.adapters.claude_code import claude_lifecycle_observation
+    from forecost.ledger.evidence import append_observation
+
+    event_name = payload.get("hook_event_name")
+    if not isinstance(event_name, str):
+        raise ValueError("hook lifecycle payload needs hook_event_name")
+    tool_name = payload.get("tool_name")
+    mapped_event = event_name
+    if event_name == "PostToolUse" and tool_name in {"ExitPlanMode", "Agent"}:
+        mapped_event = str(tool_name)
+    append_observation(get_ledger_db(), claude_lifecycle_observation(payload, mapped_event))
+    _record_hook(event_name)
+    return {}
 
 
 def _session_transcript_paths(primary: Path) -> list[Path]:

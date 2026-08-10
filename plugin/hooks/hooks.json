@@ -16,9 +16,36 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Task|Bash|WebFetch|WebSearch",
         "hooks": [
           { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/run-hook.sh pre-tool", "timeout": 5 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/run-hook.sh lifecycle", "timeout": 5, "async": true }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/run-hook.sh lifecycle", "timeout": 5, "async": true }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/run-hook.sh lifecycle", "timeout": 5, "async": true }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/run-hook.sh lifecycle", "timeout": 5, "async": true }
         ]
       }
     ],
@@ -32,7 +59,14 @@
     "SessionEnd": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/run-hook.sh stop", "timeout": 30, "async": true }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/run-hook.sh session-end", "timeout": 5 }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/run-hook.sh lifecycle", "timeout": 5, "async": true }
         ]
       }
     ]

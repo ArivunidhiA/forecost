@@ -19,6 +19,8 @@ _COMMANDS = {
     "prompt-submit": "handle_preflight",
     "pre-tool": "handle_gate",
     "stop": "handle_reconcile",
+    "session-end": "handle_session_end",
+    "lifecycle": "handle_lifecycle",
 }
 _MAX_STDIN_CHARS = 1_048_576
 

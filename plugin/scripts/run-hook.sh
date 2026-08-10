@@ -6,7 +6,7 @@ DATA_DIR="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/forecost}"
 HOOK_NAME="${1:-}"
 
 case "$HOOK_NAME" in
-  session-start|prompt-submit|pre-tool|stop) ;;
+  session-start|prompt-submit|pre-tool|stop|session-end|lifecycle) ;;
   *) exit 0 ;;
 esac
 

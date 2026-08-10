@@ -48,6 +48,7 @@ except ImportError as _exc:  # pragma: no cover
 from pathlib import Path
 
 from forecost.adapters.base import Money, UsageEvent
+from forecost.adapters.outbox import DurableEventOutbox
 from forecost.core.errlog import log_error
 from forecost.ledger.db import get_ledger_db
 from forecost.ledger.sink import SyncLedgerSink
@@ -58,7 +59,12 @@ from forecost.policy.rules import load_policy_file
 class ForecostLogger(CustomLogger):
     """LiteLLM CustomLogger wiring forecost's policy engine and ledger into the proxy."""
 
-    def __init__(self, policy_path: Path | None = None, ledger_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        policy_path: Path | None = None,
+        ledger_path: Path | None = None,
+        outbox_path: Path | None = None,
+    ) -> None:
         super().__init__()
         from forecost.core.paths import forecost_home
 
@@ -66,6 +72,11 @@ class ForecostLogger(CustomLogger):
         self._ledger_path = ledger_path
         self._sink: SyncLedgerSink | None = None
         self._conn: sqlite3.Connection | None = None
+        from forecost.core.paths import forecost_home
+
+        self._outbox = DurableEventOutbox(
+            outbox_path or (forecost_home() / "outbox" / "litellm.jsonl")
+        )
 
     def _get_sink(self) -> SyncLedgerSink:
         if self._sink is None:
@@ -82,6 +93,9 @@ class ForecostLogger(CustomLogger):
     ):
         """Budget gate. Returns an error string to reject, or the data to allow."""
         try:
+            # Bound callback lag before enforcing. At most one configured batch
+            # is replayed here; the remaining queue depth is visible in status.
+            self._outbox.drain(lambda event: self._get_sink().emit(event))
             conn = self._get_connection()
             policy = load_policy_file(self._policy_path)
             decision = evaluate(conn, policy, agent="litellm")
@@ -93,11 +107,24 @@ class ForecostLogger(CustomLogger):
             return data
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        """Emit one UsageEvent per completed call, with LiteLLM's cost as source-reported."""
+        """Fsync callback evidence, then batch SQLite work off the request path."""
         try:
-            self._get_sink().emit(_kwargs_to_event(kwargs, response_obj))
+            accepted = self._outbox.enqueue(_kwargs_to_event(kwargs, response_obj))
+            if not accepted:
+                log_error("adapters.litellm.success", "outbox full; callback failed open")
+                return
+            self._outbox.start(lambda event: self._get_sink().emit(event))
         except Exception as exc:  # nosec B110 - ingestion must never break the gateway
             log_error("adapters.litellm.success", f"ingest failed: {exc!r}")
+
+    def outbox_status(self) -> dict[str, object]:
+        """Expose bounded queue depth/age/replay/drop diagnostics."""
+        return self._outbox.status()
+
+    def close(self) -> None:
+        self._outbox.stop()
+        if self._sink is not None:
+            self._sink.flush()
 
 
 def _usage_tokens(response_obj: Any) -> tuple[int, int]:

@@ -16,7 +16,7 @@ import hashlib
 import json
 import re
 from collections.abc import Iterable, Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from forecost.adapters.base import (
@@ -26,7 +26,10 @@ from forecost.adapters.base import (
     UsageEvent,
     validate_usage_event,
 )
+from forecost.adapters.causal import runtime_meter_observation
 from forecost.core.errlog import log_error
+from forecost.ledger.contracts import CausalIdentity, Observation
+from forecost.ledger.evidence import append_observation, observation
 
 
 def _default_claude_dir() -> Path:
@@ -43,6 +46,211 @@ def _parse_timestamp(ts_raw: str | None) -> datetime | None:
 
 
 _SAFE_ENUM = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$")
+
+_LIFECYCLE_OPERATIONS = {
+    "Assistant": ("model", "completed"),
+    "ExitPlanMode": ("human_approval", "completed"),
+    "Agent": ("agent", "running"),
+    "SubagentStart": ("agent", "running"),
+    "SubagentStop": ("agent", "completed"),
+    "PostToolUse": ("tool", "completed"),
+    "PostToolBatch": ("tool", "completed"),
+    "PostToolUseFailure": ("tool", "failed"),
+    "Stop": ("agent", "completed"),
+    "StopFailure": ("agent", "failed"),
+    "SessionEnd": ("agent", "incomplete"),
+    "Interrupt": ("human_approval", "cancelled"),
+    "TaskCreated": ("agent", "queued"),
+    "TaskCompleted": ("agent", "completed"),
+    "BackgroundAgentSettled": ("agent", "completed"),
+}
+
+
+def _structural_id(record: Mapping[str, object], *names: str) -> str | None:
+    for name in names:
+        value = record.get(name)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def claude_lifecycle_observation(
+    record: Mapping[str, object],
+    event_name: str,
+    *,
+    source_sequence: int = 0,
+    occurred_at: datetime | None = None,
+) -> Observation:
+    """Select causal/lifecycle facts from one transcript or hook record.
+
+    Prompt, messages, tool input/output and arbitrary metadata are deliberately
+    not inspected. Open-ended structural identifiers are irreversibly made
+    opaque by :class:`Observation` normalization.
+    """
+    if event_name not in _LIFECYCLE_OPERATIONS:
+        raise ValueError("unsupported Claude lifecycle event")
+    operation_kind, lifecycle = _LIFECYCLE_OPERATIONS[event_name]
+    session_id = _structural_id(record, "sessionId", "session_id")
+    if session_id is None:
+        raise ValueError("Claude lifecycle event needs session identity")
+    run_id = _structural_id(record, "promptId", "prompt_id", "run_id") or session_id
+    span_id = _structural_id(
+        record,
+        "requestId",
+        "uuid",
+        "tool_use_id",
+        "agent_id",
+        "task_id",
+        "hook_id",
+    ) or f"{event_name}:{source_sequence}"
+    parent_span_id = _structural_id(
+        record, "parentUuid", "parent_uuid", "parent_tool_use_id", "parent_agent_id"
+    )
+    timestamp = occurred_at
+    if timestamp is None:
+        raw_timestamp = record.get("timestamp")
+        timestamp = _parse_timestamp(raw_timestamp if isinstance(raw_timestamp, str) else None)
+    timestamp = timestamp or datetime.now(timezone.utc)
+    event_key = _structural_id(
+        record,
+        "event_id",
+        "requestId",
+        "uuid",
+        "hook_id",
+        "tool_use_id",
+        "agent_id",
+        "task_id",
+    )
+    return observation(
+        producer="claude_code",
+        event_kind="span",
+        causal=CausalIdentity(
+            conversation_id=session_id,
+            trace_id=session_id,
+            run_id=run_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
+            source_sequence=source_sequence,
+            idempotency_key=event_key or f"{session_id}:{event_name}:{source_sequence}",
+        ),
+        payload={
+            "operation_kind": operation_kind,
+            "lifecycle": lifecycle,
+            "agent_id": _structural_id(record, "agentId", "agent_id"),
+            "workflow_node_id": _structural_id(record, "tool_name", "task_id"),
+            "branch_id": _structural_id(record, "branch_id", "agentId", "agent_id"),
+            "attempt_of_span_id": _structural_id(record, "attempt_of_span_id"),
+            "checkpoint_id": _structural_id(record, "checkpoint_id"),
+        },
+        occurred_at=timestamp,
+        observed_at=timestamp,
+    )
+
+
+def _causal_sequence(timestamp: datetime) -> int:
+    """Stable chronological sequence shared by repeated transcript blocks."""
+    return int(timestamp.timestamp() * 1_000)
+
+
+def claude_record_observations(
+    record: Mapping[str, object], current_prompt_id: str | None
+) -> list[Observation]:
+    """Map an assistant transcript record to one span and final token facts."""
+    if record.get("type") != "assistant":
+        return []
+    mutable = dict(record)
+    if current_prompt_id is not None:
+        mutable["promptId"] = current_prompt_id
+    timestamp_raw = record.get("timestamp")
+    timestamp = _parse_timestamp(timestamp_raw if isinstance(timestamp_raw, str) else None)
+    if timestamp is None:
+        return []
+    request_id = _structural_id(record, "requestId", "uuid")
+    if request_id is None:
+        return []
+    sequence = _causal_sequence(timestamp)
+    span = claude_lifecycle_observation(
+        mutable,
+        "Assistant",
+        source_sequence=sequence,
+        occurred_at=timestamp,
+    )
+    extracted = _extract_usage(mutable)
+    if extracted is None:
+        return [span]
+    usage, _model = extracted
+    meters: list[Observation] = []
+    for offset, (field, meter_name) in enumerate(
+        (
+            ("input_tokens", "tokens.input"),
+            ("output_tokens", "tokens.output"),
+            ("cache_read_input_tokens", "tokens.cache_read"),
+            ("cache_creation_input_tokens", "tokens.cache_write"),
+        ),
+        start=1,
+    ):
+        quantity = _usage_count(usage, field)
+        if not quantity:
+            continue
+        meters.append(
+            runtime_meter_observation(
+                span.causal,
+                producer="claude_code",
+                idempotency_key=f"{request_id}:{field}",
+                source_sequence=sequence + offset,
+                meter_name=meter_name,
+                quantity_micros=quantity * 1_000_000,
+                occurred_at=timestamp,
+                finality="final",
+            )
+        )
+    return [span, *meters]
+
+
+def ingest_causal_paths(
+    paths: Iterable[Path], state: IngestStateStore, conn
+) -> int:
+    """Incrementally append causal transcript facts using an independent cursor."""
+    inserted = 0
+    source = "claude_code_causal"
+    for path in sorted(set(paths)):
+        if not path.is_file():
+            continue
+        cursor = _decode_cursor(state.get(source, str(path)))
+        offset = _cursor_offset(cursor)
+        prompt_id = _cursor_prompt_id(cursor)
+        safe_offset = offset
+        try:
+            if path.stat().st_size < offset:
+                offset = 0
+                safe_offset = 0
+                prompt_id = None
+            with path.open("rb") as stream:
+                stream.seek(offset)
+                for raw_line in stream:
+                    if not raw_line.endswith(b"\n"):
+                        break
+                    record = _parse_record(raw_line.decode("utf-8", errors="replace").strip())
+                    if record is not None:
+                        prompt_id = _updated_prompt_id(record, prompt_id)
+                        try:
+                            for item in claude_record_observations(record, prompt_id):
+                                inserted += int(append_observation(conn, item))
+                        except (TypeError, ValueError):
+                            log_error(
+                                "adapters.claude_code.causal",
+                                "skipped a schema-invalid structural record",
+                            )
+                    safe_offset += len(raw_line)
+        except OSError as error:
+            log_error("adapters.claude_code.causal", f"read failed for {path.name}: {error!r}")
+        if safe_offset != offset:
+            state.set(
+                source,
+                str(path),
+                json.dumps({"offset": safe_offset, "prompt_id": prompt_id}),
+            )
+    return inserted
 
 
 def _assistant_message(rec: dict) -> Mapping[str, object]:

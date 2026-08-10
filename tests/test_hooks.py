@@ -15,6 +15,7 @@ from forecost.hooks import handlers
 @pytest.fixture
 def hook_ledger(tmp_path, monkeypatch):
     path = tmp_path / "ledger.db"
+    monkeypatch.setenv("FORECOST_HOME", str(tmp_path / "forecost-home"))
     monkeypatch.setattr(ledger_db, "LEDGER_PATH", path)
     monkeypatch.setattr(ledger_db, "_conn", None)
     conn = ledger_db.get_ledger_db()

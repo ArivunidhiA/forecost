@@ -96,13 +96,15 @@ def test_pre_call_fails_open_on_internal_error(tmp_path, monkeypatch):
     assert result == data  # fail-open: gateway keeps working
 
 
-def test_success_event_lands_in_ledger_with_source_reported_cost(ledger_conn, monkeypatch):
+def test_success_event_lands_in_ledger_with_source_reported_cost(
+    ledger_conn, monkeypatch, tmp_path
+):
     import forecost.adapters.litellm_hook as hook_mod
 
     monkeypatch.setattr(hook_mod, "get_ledger_db", lambda _path=None: ledger_conn)
     from forecost.ledger.sink import SyncLedgerSink
 
-    logger = ForecostLogger()
+    logger = ForecostLogger(outbox_path=tmp_path / "litellm.jsonl")
     sink = SyncLedgerSink(ledger_path=None)
     sink._conn = ledger_conn
     logger._sink = sink
@@ -117,6 +119,7 @@ def test_success_event_lands_in_ledger_with_source_reported_cost(ledger_conn, mo
     }
     response_obj = SimpleNamespace(usage=SimpleNamespace(prompt_tokens=100, completion_tokens=50))
     _run(logger.async_log_success_event(kwargs, response_obj, None, None))
+    logger._outbox.drain(sink.emit)
 
     ev = ledger_conn.execute("SELECT * FROM usage_events WHERE source='litellm'").fetchone()
     assert ev is not None
@@ -133,12 +136,12 @@ def test_success_event_lands_in_ledger_with_source_reported_cost(ledger_conn, mo
     assert ("USD", "source_reported") in currencies
 
 
-def test_success_event_never_raises(ledger_conn, monkeypatch):
+def test_success_event_never_raises(ledger_conn, monkeypatch, tmp_path):
 
     def _boom(_path=None):
         raise RuntimeError("boom")
 
-    logger = ForecostLogger()
+    logger = ForecostLogger(outbox_path=tmp_path / "litellm.jsonl")
     monkeypatch.setattr(logger, "_get_sink", _boom)
     # Malformed everything; must not raise (gateway safety)
     _run(logger.async_log_success_event({}, None, None, None))
