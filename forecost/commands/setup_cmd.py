@@ -23,6 +23,10 @@ def _config_path(config_dir: Path | None) -> Path:
     return (config_dir or (Path.home() / ".claude")) / "settings.json"
 
 
+def _protocol_path(settings_path: Path) -> Path:
+    return settings_path.with_name("forecost-hook.json")
+
+
 def _command(name: str) -> str:
     return f"{shlex.quote(sys.executable)} -m forecost.hooks.fastpath {shlex.quote(name)}"
 
@@ -102,7 +106,6 @@ def _install(settings: dict[str, object]) -> dict[str, object]:
         if not isinstance(existing, list):
             raise click.ClickException(f"Claude hook {name} must be an array")
         existing.extend(entries)
-    settings["forecost"] = {"hook_protocol_version": HOOK_PROTOCOL_VERSION}
     return settings
 
 
@@ -135,6 +138,14 @@ def _installed(settings: dict[str, object]) -> bool:
         isinstance(hooks[name], list) and any(_is_managed_entry(item) for item in hooks[name])
         for name in expected
     )
+
+
+def _protocol_installed(settings_path: Path) -> bool:
+    try:
+        value = json.loads(_protocol_path(settings_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(value, dict) and value.get("hook_protocol_version") == HOOK_PROTOCOL_VERSION
 
 
 @click.group()
@@ -177,7 +188,11 @@ def setup_claude(
     path = _config_path(config_dir)
     settings = _read_settings(path)
     if check_only:
-        state = "installed" if _installed(settings) else "not installed"
+        state = (
+            "installed"
+            if _installed(settings) and _protocol_installed(path)
+            else "not installed"
+        )
         click.echo(
             f"Claude plugin package: ready; managed config: {state}; "
             f"protocol v{HOOK_PROTOCOL_VERSION}."
@@ -191,10 +206,13 @@ def setup_claude(
         return
     if uninstall:
         _without_managed(settings)
-        settings.pop("forecost", None)
         _write_settings(path, settings)
+        _protocol_path(path).unlink(missing_ok=True)
         click.echo(f"Removed Forecost-managed Claude hooks from {path}.")
         return
     _write_settings(path, _install(settings))
+    _write_settings(
+        _protocol_path(path), {"hook_protocol_version": HOOK_PROTOCOL_VERSION}
+    )
     action = "Repaired" if repair else "Installed"
     click.echo(f"{action} Forecost-managed Claude hooks in {path}.")

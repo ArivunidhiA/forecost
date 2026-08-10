@@ -51,6 +51,8 @@ def test_claude_setup_apply_repair_uninstall_preserves_unrelated_config(tmp_path
     installed = json.loads(settings.read_text(encoding="utf-8"))
     assert installed["theme"] == "dark"
     assert "SessionEnd" in installed["hooks"]
+    assert "forecost" not in installed
+    assert json.loads((config / "forecost-hook.json").read_text())["hook_protocol_version"] == 1
 
     repaired = runner.invoke(
         setup,
@@ -75,3 +77,4 @@ def test_claude_setup_apply_repair_uninstall_preserves_unrelated_config(tmp_path
     assert uninstalled["theme"] == "dark"
     assert "Notification" in uninstalled["hooks"]
     assert "SessionEnd" not in uninstalled["hooks"]
+    assert not (config / "forecost-hook.json").exists()
