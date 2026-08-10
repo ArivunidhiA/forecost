@@ -3,6 +3,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # pragma: no cover - Python 3.10
+    import tomli as tomllib
+
 from scripts.check_release import check_release, release_versions
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -13,6 +18,18 @@ def test_all_release_versions_agree():
     assert len(set(versions.values())) == 1
     version = next(iter(versions.values()))
     assert check_release() == version
+
+
+def test_base_wheel_contract_includes_claude_plugin_assets():
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    force_include = project["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
+    assert force_include["plugin"] == "forecost/plugin"
+    for relative in (
+        "plugin/.claude-plugin/plugin.json",
+        "plugin/hooks/hooks.json",
+        "plugin/scripts/run-hook.sh",
+    ):
+        assert (ROOT / relative).is_file()
 
 
 def test_machine_readable_capabilities_match_supported_surfaces():

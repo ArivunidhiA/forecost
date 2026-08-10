@@ -16,7 +16,9 @@ from forecost.hooks.state import HOOK_PROTOCOL_VERSION
 
 
 def _plugin_root() -> Path:
-    return Path(__file__).resolve().parents[2] / "plugin"
+    source_root = Path(__file__).resolve().parents[2] / "plugin"
+    installed_root = Path(__file__).resolve().parents[1] / "plugin"
+    return installed_root if installed_root.is_dir() else source_root
 
 
 def _config_path(config_dir: Path | None) -> Path:

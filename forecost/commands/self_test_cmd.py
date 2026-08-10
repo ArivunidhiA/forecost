@@ -14,7 +14,9 @@ from forecost.hooks.state import read_heartbeat
 
 
 def _default_plugin_root() -> Path:
-    return Path(__file__).resolve().parents[2] / "plugin"
+    source_root = Path(__file__).resolve().parents[2] / "plugin"
+    installed_root = Path(__file__).resolve().parents[1] / "plugin"
+    return installed_root if installed_root.is_dir() else source_root
 
 
 def _simulate_launcher(root: Path) -> tuple[bool, list[str]]:

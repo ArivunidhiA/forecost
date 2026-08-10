@@ -145,3 +145,4 @@ packages = ["forecost"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "forecost/py.typed" = "forecost/py.typed"
+"plugin" = "forecost/plugin"
