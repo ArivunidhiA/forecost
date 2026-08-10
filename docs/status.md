@@ -1,58 +1,61 @@
-# Forecost status — 2026-08-02
+# Forecost status — 2026-08-09
+
+<!-- package-version: 0.3.0 -->
+<!-- capability-schema-version: 1 -->
+<!-- product-contract-version: 1.0 -->
 
 ## Current product state
 
-- **Experimental local:** graph-aware run receipts, deterministic offline Run
-  Lab, offline JSON/CSV provider/gateway/OTel import, aggregate reconciliation,
-  and single-host resource envelopes.
-- **Observed only:** Claude Code transcript and LiteLLM adapters. They do not
-  provide full graph identity or a bounded provider-side overrun.
-- **Not claimed:** live provider billing API ingestion, provider-billed cost
-  without an imported export, distributed/resource-provider enforcement,
-  hosted control plane, or task-cost forecasting.
+Forecost 0.3.0 is an **experimental local economic-receipt product**. Its
+canonical store is `~/.forecost/ledger.db`; receipts retain content-free causal,
+meter, valuation, authority, finality, and outcome evidence. Deterministic Run
+Lab fixtures and offline imports can exercise the product without accounts,
+credentials, transcript content, or network access.
 
-## Earlier audit closure
+The separate `~/.forecost/costs.db` file belongs to the retired v0.2 calendar
+forecaster. It is reachable only through `forecost legacy …` or the explicit
+`forecost migrate` copy path. Legacy commands have no hidden root aliases,
+`init --smart` has been removed, and the unauthenticated loopback HTTP server has
+no CLI registration and is not a current API.
 
-- Completed the four-lens production audit and consolidated it in
-  `docs/audit-1.md`.
-- Remediated every P0 integrity, destructive-safety, guessed-price policy,
-  recovery, plugin-bootstrap, and local CI blocker.
-- Aligned the repository around the local, content-free agent cost ledger;
-  refreshed README, architecture, contribution, security, release, and issue
-  surfaces.
-- Verified 366 tests plus one intentional skip, 92% changed-line coverage,
-  Ruff/format/Pyright/Xenon, Bandit, a fresh-resolution `pip-audit`, Twine,
-  wheel contents, and an outside-repository wheel install.
-- Closed the final security re-audit: open-ended identifiers and recovery
-  posting text are irreversibly normalized at sink boundaries; malformed
-  postings cannot partially persist; unowned custom data roots are rejected
-  without changing files, modes, inodes, timestamps, or markers.
-- Measured minimal-wheel median startup at 29.5 ms (`--help`) and 36.3 ms
-  (`ledger status`) on the audit host.
-- Re-ran the 12-thread/3,600-event integrity probe: all 3,600 events were
-  accepted with zero exceptions, orphan events, or duplicate posting keys.
+## Supported claims
 
-## Release evidence
+- Text, JSON, Markdown, CLI, and optional MCP receipts are views of canonical
+  ledger evidence, not provider invoices.
+- Imported provider or gateway amounts retain their source-specific authority;
+  list-rate equivalents remain independent valuations.
+- Claude Code and LiteLLM integration is experimental observation. Claude hooks
+  are fail-open and cannot claim provider-side or distributed containment.
+- OpenAI Agents and LangGraph support is currently an offline mapping contract
+  proven against local fakes; it does not imply an installed SDK or live runtime.
+- Resource envelopes are experimental, single-host controls. Their published
+  boundary does not imply a bounded provider-side overrun; maximum overrun
+  outside the local transaction boundary is not bounded.
+- Explicit test/build exits and user marks are outcome evidence, never proof that
+  a task is correct.
 
-- GitHub Actions run `30758731742` is fully green: lint, security, diff coverage,
-  12 Python/OS test jobs, and built-wheel/plugin smoke on Linux and macOS.
-- No local release blockers remain after the final independent security,
-  architecture, and test/performance closure reviews.
+## Shipped interface boundary
 
-## Deliberately not published
+- The root CLI lists current receipt-product commands and prints each command's
+  store boundary. Retired commands require the `legacy` namespace.
+- The optional MCP module is read-only and exposes only
+  `forecost_list_runs` and `forecost_get_receipt` against `ledger.db`. The base
+  wheel intentionally has no `forecost-mcp` console entry point; after installing
+  `forecost[mcp]`, use `python -m forecost.mcp_launcher`.
+- `docs/capabilities.json` is the machine-readable authority for adapter,
+  interface, store, and claim boundaries. The release validator checks its
+  version and required contract fields against this status file and package
+  metadata.
 
-- The 0.3.0 changelog remains `Unreleased`, and the release validator refuses a
-  `v0.3.0` publish until that marker is replaced with a date.
-- No PyPI release, GitHub release, PR merge, or release tag was created by this
-  audit. Publication is a distinct maintainer-controlled action after remote CI
-  is green.
+## Not claimed
 
-## Next product gates
+Live provider billing APIs, provider-billed authority without an imported
+artifact, complete graph identity across every runtime, verified task
+correctness, distributed enforcement, task-cost forecasting, and a hosted
+control plane are not part of this release.
 
-1. Add real provider export conformance fixtures from willing operators; do not
-   add live HTTP before the input/authority contract is proven.
-2. Migrate MCP reads to receipt/ledger queries and retire legacy HTTP surfaces.
-3. Benchmark aggregate reconciliation and reservation admission at 100k+ facts.
-4. Publish adapter conformance fixtures, then add runtime adapters against the
-   documented conversation/trace/run/span contract.
-5. Add SBOM/provenance and protect main, release tags, and PyPI before publish.
+## Publication state
+
+The 0.3.0 changelog remains `Unreleased`. No PyPI release, GitHub release, tag,
+merge, announcement, or real-data migration is implied by this branch. Those
+remain founder-controlled actions after packaged-product QA.

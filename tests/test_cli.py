@@ -25,6 +25,34 @@ def test_legacy_commands_are_explicitly_quarantined(cli_runner):
     assert result.exit_code == 0
     assert "forecast" in result.output
     assert "init" in result.output
+    assert "legacy costs.db" in result.output
+    assert "serve" not in result.output
+
+
+@pytest.mark.parametrize("command", ["forecast", "init", "serve", "status"])
+def test_legacy_commands_have_no_hidden_root_alias(cli_runner, command):
+    result = cli_runner.invoke(main, [command])
+    assert result.exit_code == 2
+    assert "No such command" in result.output
+
+
+def test_current_help_declares_store_boundaries(cli_runner):
+    result = cli_runner.invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert "canonical ledger.db" in result.output
+    assert "reads legacy costs.db; appends canonical ledger.db" in result.output
+
+
+def test_loaded_command_help_declares_its_store(cli_runner):
+    result = cli_runner.invoke(main, ["runs", "--help"])
+    assert result.exit_code == 0
+    assert "Store boundary: canonical ledger.db (read-only)." in result.output
+
+
+def test_legacy_smart_upload_path_is_retired(cli_runner):
+    result = cli_runner.invoke(main, ["legacy", "init", "--help"])
+    assert result.exit_code == 0
+    assert "--smart" not in result.output
 
 
 def test_forecost_version(cli_runner):

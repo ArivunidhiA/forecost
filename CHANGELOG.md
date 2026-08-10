@@ -2,11 +2,12 @@
 
 ## [0.3.0] - Unreleased
 
-Repositioning: forecost is now a local, content-free **ledger** for AI agent
-work — it records what your agents actually cost across every harness,
-reconciles the meters nobody trusts, and gates budgets via fail-open hooks.
-The legacy calendar-spend forecaster (`forecast`/`track`/`watch`/`demo`/
-`optimize`) still ships but is deprecated.
+Repositioning: Forecost is now an experimental local, content-free **economic
+receipt** for AI-agent runs. It preserves causal and meter evidence, keeps
+independent valuations separate, and makes disagreement and missing evidence
+visible. Claude controls are fail-open and do not claim provider-side or
+distributed containment. The retired calendar-spend forecaster remains only
+under the explicit `forecost legacy` compatibility namespace.
 
 ### Added
 - **`forecost ingest`** — pull Claude Code JSONL transcripts into the ledger
@@ -21,6 +22,10 @@ The legacy calendar-spend forecaster (`forecast`/`track`/`watch`/`demo`/
 - **`forecost pricing-audit`** — reports models priced by guess and table
   freshness.
 - Claude Code hook adapter (`forecost-hook`) and a LiteLLM gateway adapter.
+- Canonical graph-aware receipt schema, deterministic Run Lab fixtures, offline
+  evidence import/reconciliation, and experimental single-host envelopes.
+- Read-only optional MCP tools for canonical run discovery and receipt reads;
+  the base wheel does not advertise an optional-dependency console script.
 
 ### Fixed
 - **Event double-count**: dedup now keys on the API `requestId`, not per-content-
@@ -50,6 +55,9 @@ The legacy calendar-spend forecaster (`forecast`/`track`/`watch`/`demo`/
 - **Packaging**: the optional LiteLLM extra is bounded to the wheel-tested
   compatibility line, avoiding an undeclared modern Rust requirement in CI and
   on macOS/Python 3.12 installs.
+- **Product boundary**: removed hidden root aliases for forecast-era commands,
+  removed the legacy `init --smart` upload path, and made `ledger.db` versus
+  legacy `costs.db` explicit in CLI help and machine-readable capabilities.
 
 ## [0.2.0] - 2026-03-12
 

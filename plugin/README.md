@@ -1,18 +1,25 @@
 # forecost — Claude Code plugin
 
-Runs forecost's fail-open hooks inside Claude Code: it records every turn into your
-local, content-free ledger, gates budgets, and (in shadow mode) accrues the
-calibration record. A forecost failure can never block Claude Code — every hook
-exits 0 on error.
+Runs Forecost's experimental fail-open hooks inside Claude Code. The hooks append
+content-free local observations, evaluate local policy when evidence is healthy,
+and accrue a shadow calibration record. Missing, stale, or broken observation
+degrades to no Forecost decision; it never claims provider-side containment.
 
 ## What it wires
 
 | Hook event | What forecost does |
 |---|---|
-| `SessionStart` | Registers the session/workspace using the explicitly installed `forecost-hook`. |
-| `UserPromptSubmit` | Classifies the turn, records a shadow estimate, evaluates budget policy (can `block` on a hard cap). |
-| `PreToolUse` (Task/Bash/WebFetch/WebSearch) | Cheap budget check; `ask`/`deny` only on an explicit, healthy policy decision. |
-| `Stop` / `SessionEnd` | Ingests the transcript delta, reconciles estimates, logs the shadow guard. |
+| `SessionStart` | Attempts to register an observed session/workspace using the explicitly installed `forecost-hook`. |
+| `UserPromptSubmit` | Records a shadow estimate and may return a local policy decision when its evidence is healthy. |
+| `PreToolUse` (all tool/MCP surfaces) | Performs the cached O(1) local policy check; `ask`/`deny` is neither distributed nor provider-side enforcement. |
+| `PostToolUse` / `PostToolUseFailure` | Asynchronously records content-free tool lifecycle; `ExitPlanMode` and `Agent` retain structural kinds. |
+| `SubagentStart` / `SubagentStop` / `StopFailure` | Asynchronously records the lifecycle event when Claude supplies it. |
+| `Stop` | Asynchronously ingests the transcript delta, reconciles evidence, and updates the bounded post-turn summary. |
+| `SessionEnd` | Synchronously writes only a tiny fsynced pending-settlement marker; idempotent reconciliation follows separately. |
+
+The current capability boundary is published in `docs/capabilities.json`. Graph
+identity is incomplete, provider-billed authority requires an offline export,
+and maximum overrun is not bounded.
 
 ## Install (marketplace)
 
@@ -65,10 +72,28 @@ at a Python that has forecost installed (`pip install -e .` from a clone):
       { "hooks": [ { "type": "command", "command": "/path/to/venv/bin/python -m forecost.hooks.fastpath prompt-submit", "timeout": 10 } ] }
     ],
     "PreToolUse": [
-      { "matcher": "Task|Bash|WebFetch|WebSearch", "hooks": [ { "type": "command", "command": "/path/to/venv/bin/python -m forecost.hooks.fastpath pre-tool", "timeout": 5 } ] }
+      { "hooks": [ { "type": "command", "command": "/path/to/venv/bin/python -m forecost.hooks.fastpath pre-tool", "timeout": 5 } ] }
+    ],
+    "PostToolUse": [
+      { "hooks": [ { "type": "command", "command": "/path/to/venv/bin/python -m forecost.hooks.fastpath lifecycle", "timeout": 5, "async": true } ] }
+    ],
+    "PostToolUseFailure": [
+      { "hooks": [ { "type": "command", "command": "/path/to/venv/bin/python -m forecost.hooks.fastpath lifecycle", "timeout": 5, "async": true } ] }
+    ],
+    "SubagentStart": [
+      { "hooks": [ { "type": "command", "command": "/path/to/venv/bin/python -m forecost.hooks.fastpath lifecycle", "timeout": 5, "async": true } ] }
+    ],
+    "SubagentStop": [
+      { "hooks": [ { "type": "command", "command": "/path/to/venv/bin/python -m forecost.hooks.fastpath lifecycle", "timeout": 5, "async": true } ] }
+    ],
+    "StopFailure": [
+      { "hooks": [ { "type": "command", "command": "/path/to/venv/bin/python -m forecost.hooks.fastpath lifecycle", "timeout": 5, "async": true } ] }
     ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "/path/to/venv/bin/python -m forecost.hooks.fastpath stop", "timeout": 30, "async": true } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "/path/to/venv/bin/python -m forecost.hooks.fastpath session-end", "timeout": 5 } ] }
     ]
   }
 }

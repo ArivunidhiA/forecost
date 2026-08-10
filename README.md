@@ -11,7 +11,7 @@ or disagree about. Local-first. No signup. No cloud.
 
 > **Honest status.** The graph-aware receipt, offline reconciliation importer,
 > and single-host resource envelope are experimental local features. They are
-> fully synthetic-testable today; live provider HTTP ingestion and distributed
+> covered by deterministic synthetic tests today; live provider HTTP ingestion and distributed
 > enforcement are deliberately not claimed. Calendar forecasting is legacy.
 
 ## What it does that other tools don't
@@ -30,17 +30,13 @@ Everyone can meter tokens. Two things are genuinely unoccupied, and forecost doe
 forecost's **ledger** (the `ingest` / hook path) is **content-free by construction**:
 it stores token counts, models, timestamps, valuations, and pseudonymous workspace
 identities — never your prompts, completions, tool output, or raw workspace paths.
-This isn't a promise, it's a
+This boundary is enforced by typed ingestion and a
 [CI-enforced test](https://github.com/ArivunidhiA/forecost/blob/main/tests/test_privacy_canary.py): a sentinel string is planted in a
 synthetic transcript's prompt, tool arguments, and output, and the test fails if it can
-be found anywhere under `~/.forecost/`. The ledger has no cloud tier — there is nothing
-to leave to.
-
-**Two exceptions, both local-first opt-outs, not part of the ledger path:** the legacy
-`forecost init --smart` command sends project excerpts (README, code snippets) to an LLM
-provider to estimate scope — it asks for confirmation first and is entirely optional. And
-the LiteLLM gateway adapter records the gateway's own `response_cost` figure (a number,
-not content). Neither touches transcript content.
+be found in Forecost-owned local state. Forecost has no hosted tier and the supported
+product performs no network-backed ingestion. The retired `init --smart` upload path has
+been removed. A LiteLLM adapter may retain the gateway's numeric `response_cost` evidence;
+it never needs prompt or completion content.
 
 ## Quickstart
 
@@ -58,26 +54,26 @@ forecost envelope --help
 $ # Synthetic example — these are not real usage or engineering values.
 $ forecost ledger status
 Ledger: 42 usage events, 3 workspaces, 5 sessions
-Total USD spend (canonical): 12.34
+Canonical USD valuation: 12.34
 
 Top models by spend:
   example-model-a                          n=30     USD 10.00
   example-model-b                          n=12     USD 2.34
 ```
 
-## Budget enforcement for Claude Code (the plugin)
+## Local Claude Code observation and controls (experimental plugin)
 
-forecost ships a Claude Code plugin (`plugin/`) that installs hooks:
+forecost ships an experimental Claude Code plugin (`plugin/`) that installs local hooks:
 
-- a **budget gate** — if a session crosses a hard limit you set in
-  `~/.forecost/policy.toml`, the
-  next tool call is denied with a reason;
+- a **policy check** — a healthy local hook can return an `ask` or `deny`
+  decision after an observed threshold in `~/.forecost/policy.toml`;
 - a **threshold-gated preflight note** — on fan-out / scope-broadening prompts only
   (never on cheap turns — nobody wants another prompt to rubber-stamp);
 - a **background reconciler** — every session end quietly ingests and scores itself.
 
-Every hook is **fail-open by law**: if forecost breaks, your agent keeps working. A
-broken forecost degrades to "no forecost," never to "no Claude Code."
+Every hook is intentionally fail-open: if Forecost is absent, stale, or broken, the
+agent keeps working. This is local best-effort containment—not provider-side or
+distributed enforcement—and maximum overrun is not bounded.
 
 ```toml
 # ~/.forecost/policy.toml
@@ -96,10 +92,10 @@ repository cannot silently impose enforcement. Set
 
 ## Works with your gateway too
 
-If you run a [LiteLLM](https://github.com/BerriAI/litellm) proxy, forecost provides a
-callback (`examples/litellm/`) that enforces the same budget on the money path and
-records every call — with LiteLLM's own cost figure kept alongside forecost's, so the
-two can be reconciled.
+If you run a [LiteLLM](https://github.com/BerriAI/litellm) proxy, Forecost provides an
+experimental callback (`examples/litellm/`) that observes calls. LiteLLM's numeric cost
+estimate remains separate from Forecost's list-rate valuation so they can be reconciled.
+It does not claim distributed containment or provider-billed authority.
 
 ## Calibration — the honest part
 
@@ -136,22 +132,27 @@ the extractor and backtest; run them against your own history.
 | `forecost lab demo` | Create a complete, isolated synthetic receipt |
 | `forecost runs list` / `show` | Inspect a content-free causal graph |
 | `forecost receipt <run>` | Render stable text, JSON, or Markdown evidence |
+| `forecost capture <run> --kind test -- <command>` | Record only a local test/build exit and Git identity as outcome evidence |
+| `forecost adapters check` | Inspect versioned adapter capability/conformance evidence |
+| `forecost statusline` | Render bounded Claude observation health (`NOT OBSERVED` / `OBSERVED` / `CONTAINED`) |
 | `forecost reconcile import` / `run` | Compare local valuations with offline exports |
 | `forecost envelope` | Exercise experimental local reservations and leases |
 | `forecost ingest` / `ledger` | Existing Claude Code transcript ledger (experimental adapter) |
 
-The optional MCP server is read-only by default. Its legacy `track_call` tool is
-available only when the server process explicitly sets
-`FORECOST_MCP_ALLOW_WRITES=1`; new integrations should prefer harness adapters
-that provide stable event identity and provenance.
+The optional MCP server exposes exactly two canonical, read-only tools:
+`forecost_list_runs` and `forecost_get_receipt`. Install `forecost[mcp]` and launch it
+with `python -m forecost.mcp_launcher`; the base wheel does not advertise a broken
+optional console script. MCP never opens the retired `costs.db` store.
 
 <details>
-<summary>Legacy commands (v0.2 — still work, being superseded)</summary>
+<summary>Unsupported legacy commands (v0.2 compatibility)</summary>
 
 The earlier calendar-forecasting product is quarantined under `forecost legacy`
-(`calc`, `price`, `forecast`, `track`, `watch`, `optimize`, `serve`, `demo`,
+(`calc`, `price`, `forecast`, `track`, `watch`, `optimize`, `demo`,
 `init`, `export`) and will be removed before 1.0. It is not part of the current
-receipt product; see
+receipt product, has no hidden root-command aliases, and uses the separate legacy
+`~/.forecost/costs.db` store. The old local HTTP server has no CLI registration and the old
+`init --smart` network/upload option no longer exists. See
 [the repositioning docs](#background) for why.
 
 </details>

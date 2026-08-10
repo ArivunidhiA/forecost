@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +13,30 @@ def test_all_release_versions_agree():
     assert len(set(versions.values())) == 1
     version = next(iter(versions.values()))
     assert check_release() == version
+
+
+def test_machine_readable_capabilities_match_supported_surfaces():
+    capabilities = json.loads((ROOT / "docs/capabilities.json").read_text(encoding="utf-8"))
+    assert capabilities["stores"]["canonical"]["file"] == "ledger.db"
+    assert capabilities["stores"]["legacy"]["file"] == "costs.db"
+    assert capabilities["interfaces"]["cli"]["legacy_root_aliases"] is False
+    assert capabilities["interfaces"]["mcp"]["tools"] == [
+        "forecost_list_runs",
+        "forecost_get_receipt",
+    ]
+    assert "read-only" in capabilities["interfaces"]["mcp"]["store"]
+    protocols = {
+        item["protocol_name"]
+        for item in capabilities["adapters"].values()
+        if item["protocol_name"] is not None
+    }
+    assert protocols == {
+        "claude_jsonl",
+        "litellm",
+        "otel_genai",
+        "openai_agents",
+        "langgraph",
+    }
 
 
 def test_release_check_cli_rejects_wrong_tag():

@@ -30,7 +30,7 @@ def _init_project(cli_runner, tmp_path, db_path, monkeypatch):
     (tmp_path / "README.md").write_text("chatbot\n")
     monkeypatch.setattr("forecost.db._DB_PATH", db_path)
     monkeypatch.setattr("forecost.db._conn", None)
-    result = cli_runner.invoke(main, ["init"])
+    result = cli_runner.invoke(main, ["legacy", "init"])
     assert result.exit_code == 0
     return result
 
@@ -50,7 +50,7 @@ def _insert_test_data(tmp_path, db_path):
 def test_export_csv(cli_runner, tmp_path, db_path, monkeypatch):
     _init_project(cli_runner, tmp_path, db_path, monkeypatch)
     _insert_test_data(tmp_path, db_path)
-    result = cli_runner.invoke(main, ["export", "--format", "csv"])
+    result = cli_runner.invoke(main, ["legacy", "export", "--format", "csv"])
     assert result.exit_code == 0
     assert "timestamp,model" in result.output
 
@@ -58,7 +58,7 @@ def test_export_csv(cli_runner, tmp_path, db_path, monkeypatch):
 def test_export_json(cli_runner, tmp_path, db_path, monkeypatch):
     _init_project(cli_runner, tmp_path, db_path, monkeypatch)
     _insert_test_data(tmp_path, db_path)
-    result = cli_runner.invoke(main, ["export", "--format", "json"])
+    result = cli_runner.invoke(main, ["legacy", "export", "--format", "json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert isinstance(data, list)
@@ -69,7 +69,7 @@ def test_export_json(cli_runner, tmp_path, db_path, monkeypatch):
 def test_forecast_output_markdown(cli_runner, tmp_path, db_path, monkeypatch):
     _init_project(cli_runner, tmp_path, db_path, monkeypatch)
     _insert_test_data(tmp_path, db_path)
-    result = cli_runner.invoke(main, ["forecast", "--output", "markdown"])
+    result = cli_runner.invoke(main, ["legacy", "forecast", "--output", "markdown"])
     assert result.exit_code == 0
     assert "## Cost Forecast" in result.output
     assert "| Metric |" in result.output
@@ -78,7 +78,7 @@ def test_forecast_output_markdown(cli_runner, tmp_path, db_path, monkeypatch):
 def test_forecast_output_csv(cli_runner, tmp_path, db_path, monkeypatch):
     _init_project(cli_runner, tmp_path, db_path, monkeypatch)
     _insert_test_data(tmp_path, db_path)
-    result = cli_runner.invoke(main, ["forecast", "--output", "csv"])
+    result = cli_runner.invoke(main, ["legacy", "forecast", "--output", "csv"])
     assert result.exit_code == 0
     assert "metric,value" in result.output
 
@@ -89,10 +89,10 @@ def test_forecast_exit_code_on_budget(cli_runner, tmp_path, db_path, monkeypatch
     (tmp_path / "README.md").write_text("chatbot\n")
     monkeypatch.setattr("forecost.db._DB_PATH", db_path)
     monkeypatch.setattr("forecost.db._conn", None)
-    result = cli_runner.invoke(main, ["init", "--budget", "1000"])
+    result = cli_runner.invoke(main, ["legacy", "init", "--budget", "1000"])
     assert result.exit_code == 0
     _insert_test_data(tmp_path, db_path)
-    result = cli_runner.invoke(main, ["forecast", "--exit-code"])
+    result = cli_runner.invoke(main, ["legacy", "forecast", "--exit-code"])
     assert result.exit_code == 0
 
 
@@ -102,7 +102,7 @@ def test_forecast_exit_code_over_budget(cli_runner, tmp_path, db_path, monkeypat
     (tmp_path / "README.md").write_text("chatbot\n")
     monkeypatch.setattr("forecost.db._DB_PATH", db_path)
     monkeypatch.setattr("forecost.db._conn", None)
-    result = cli_runner.invoke(main, ["init", "--budget", "1"])
+    result = cli_runner.invoke(main, ["legacy", "init", "--budget", "1"])
     assert result.exit_code == 0
     conn = get_or_create_db()
     proj = conn.execute("SELECT id FROM projects WHERE path = ?", (str(tmp_path),)).fetchone()
@@ -112,7 +112,7 @@ def test_forecast_exit_code_over_budget(cli_runner, tmp_path, db_path, monkeypat
         (project_id, base.isoformat(), "gpt-4o", "openai", 50000, 20000, 50.0, None),
     ]
     _insert_usage_logs_batch(conn, items)
-    result = cli_runner.invoke(main, ["forecast", "--exit-code"])
+    result = cli_runner.invoke(main, ["legacy", "forecast", "--exit-code"])
     assert result.exit_code == 2
 
 
@@ -125,7 +125,7 @@ def test_reset_keep_data(cli_runner, tmp_path, db_path, monkeypatch):
     ).fetchone()
     before = row["n"]
     assert before == 1
-    result = cli_runner.invoke(main, ["reset", "--keep-data", "--yes"])
+    result = cli_runner.invoke(main, ["legacy", "reset", "--keep-data", "--yes"])
     assert result.exit_code == 0
     assert get_project_by_path(str(tmp_path)) is None
     after = conn.execute("SELECT COUNT(*) AS n FROM usage_logs").fetchone()["n"]
@@ -135,7 +135,7 @@ def test_reset_keep_data(cli_runner, tmp_path, db_path, monkeypatch):
 def test_reset_full(cli_runner, tmp_path, db_path, monkeypatch):
     _init_project(cli_runner, tmp_path, db_path, monkeypatch)
     _insert_test_data(tmp_path, db_path)
-    result = cli_runner.invoke(main, ["reset", "--yes"])
+    result = cli_runner.invoke(main, ["legacy", "reset", "--yes"])
     assert result.exit_code == 0
     assert get_project_by_path(str(tmp_path)) is None
     conn = get_or_create_db()
@@ -233,13 +233,13 @@ def test_log_stream_usage_anthropic_format(db_path, monkeypatch):
 
 
 def test_calc_command_basic(cli_runner):
-    result = cli_runner.invoke(main, ["calc", "Hello world"])
+    result = cli_runner.invoke(main, ["legacy", "calc", "Hello world"])
     assert result.exit_code == 0
     assert "Cost Comparison" in result.output
 
 
 def test_calc_command_json(cli_runner):
-    result = cli_runner.invoke(main, ["calc", "Hello world", "--json"])
+    result = cli_runner.invoke(main, ["legacy", "calc", "Hello world", "--json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert "input_tokens" in data
@@ -247,18 +247,18 @@ def test_calc_command_json(cli_runner):
 
 
 def test_calc_no_prompt_fails(cli_runner):
-    result = cli_runner.invoke(main, ["calc"])
+    result = cli_runner.invoke(main, ["legacy", "calc"])
     assert result.exit_code != 0
 
 
 def test_price_command_table(cli_runner):
-    result = cli_runner.invoke(main, ["price"])
+    result = cli_runner.invoke(main, ["legacy", "price"])
     assert result.exit_code == 0
     assert "LLM Pricing" in result.output
 
 
 def test_price_command_json(cli_runner):
-    result = cli_runner.invoke(main, ["price", "--json"])
+    result = cli_runner.invoke(main, ["legacy", "price", "--json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert isinstance(data, list)
@@ -266,7 +266,7 @@ def test_price_command_json(cli_runner):
 
 
 def test_price_filter_tier(cli_runner):
-    result = cli_runner.invoke(main, ["price", "--tier", "1", "--json"])
+    result = cli_runner.invoke(main, ["legacy", "price", "--tier", "1", "--json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert all(e["tier_num"] == "1" for e in data)

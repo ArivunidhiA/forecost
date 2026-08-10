@@ -1,18 +1,60 @@
 {
   "$schema": "https://forecost.dev/schemas/capabilities/v1.json",
   "schema_version": 1,
+  "package_version": "0.3.0",
+  "product_contract_version": "1.0",
   "product_state": "experimental-local",
+  "primary_artifact": "content-free economic receipt",
+  "stores": {
+    "canonical": {
+      "file": "ledger.db",
+      "status": "supported product store",
+      "authority": "source-specific; never implicitly provider-billed"
+    },
+    "legacy": {
+      "file": "costs.db",
+      "status": "unsupported v0.2 compatibility only",
+      "migration": "explicit copy into ledger.db; source remains legacy-costs-db"
+    }
+  },
+  "interfaces": {
+    "cli": {
+      "status": "supported",
+      "store_boundary_in_help": true,
+      "legacy_root_aliases": false
+    },
+    "mcp": {
+      "status": "optional experimental",
+      "launch": "python -m forecost.mcp_launcher",
+      "transport": "stdio",
+      "store": "canonical ledger.db (read-only)",
+      "tools": [
+        "forecost_list_runs",
+        "forecost_get_receipt"
+      ]
+    },
+    "legacy_http": {
+      "status": "retired; no CLI registration",
+      "store": "legacy costs.db",
+      "bind": "loopback",
+      "authentication": "none"
+    }
+  },
   "adapters": {
     "claude_code": {
-      "identity": "session-only; graph identity not yet observed",
-      "graph": false,
+      "protocol_name": "claude_jsonl",
+      "status": "experimental",
+      "identity": "session-level with best-effort lifecycle identity",
+      "graph": "partial",
       "live_usage": "best-effort local transcript/hook observation",
-      "billing_authority": "list-rate equivalent only",
+      "billing_authority": "list-rate equivalent only unless independent evidence is imported",
       "enforcement_boundary": "local hook, fail-open; no provider-side guarantee",
-      "finality": "provisional until a later transcript ingest",
+      "finality": "provisional until later lifecycle/transcript observation",
       "maximum_overrun": "not bounded"
     },
     "litellm": {
+      "protocol_name": "litellm",
+      "status": "experimental",
       "identity": "call identifier when supplied; session identity is caller-owned",
       "graph": false,
       "live_usage": "callback observation",
@@ -21,7 +63,42 @@
       "finality": "source-dependent",
       "maximum_overrun": "not bounded"
     },
+    "otel_offline": {
+      "protocol_name": "otel_genai",
+      "status": "experimental",
+      "identity": "source-provided trace/span identity when available",
+      "graph": "source-dependent",
+      "live_usage": false,
+      "billing_authority": "source-specific imported evidence",
+      "enforcement_boundary": "none",
+      "finality": "source-dependent",
+      "maximum_overrun": "not applicable"
+    },
+    "openai_agents_offline": {
+      "protocol_name": "openai_agents",
+      "status": "offline mapping against local fakes only",
+      "identity": "source-provided trace/span/run identity when present",
+      "graph": "fixture-proven; runtime availability not implied",
+      "live_usage": false,
+      "billing_authority": "source-specific provider estimate or unknown",
+      "enforcement_boundary": "none",
+      "finality": "source-dependent",
+      "maximum_overrun": "not applicable"
+    },
+    "langgraph_offline": {
+      "protocol_name": "langgraph",
+      "status": "offline mapping against local fakes only",
+      "identity": "derived graph identity with replay watermark",
+      "graph": "fixture-proven; runtime availability not implied",
+      "live_usage": false,
+      "billing_authority": "unknown unless independent evidence is imported",
+      "enforcement_boundary": "none",
+      "finality": "source-dependent",
+      "maximum_overrun": "not applicable"
+    },
     "offline_lab": {
+      "protocol_name": null,
+      "status": "supported synthetic evidence",
       "identity": "versioned causal fixture identity",
       "graph": true,
       "live_usage": "deterministic synthetic observations",
@@ -30,5 +107,23 @@
       "finality": "fixture-defined",
       "maximum_overrun": "not applicable"
     }
-  }
+  },
+  "controls": {
+    "resource_envelopes": {
+      "status": "experimental single-host",
+      "fail_modes": ["shadow", "warn", "ask", "deny", "ci"],
+      "provider_side": false,
+      "distributed": false,
+      "maximum_overrun": "not bounded outside the stated local transaction boundary"
+    }
+  },
+  "not_claimed": [
+    "provider-billed cost without imported provider authority",
+    "live provider HTTP ingestion",
+    "complete graph identity for every adapter",
+    "verified task correctness",
+    "provider-side or distributed hard enforcement",
+    "task-cost forecasting",
+    "hosted control plane"
+  ]
 }

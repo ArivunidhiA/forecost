@@ -20,11 +20,29 @@ _SPOOL_NAME = re.compile(r"(?:legacy-)?recovery\.\d+\.\d+\.[0-9a-f]{32}\.jsonl")
 
 def _doctor_payload(home: Path, conn) -> dict[str, object]:
     spend = q.scope_spend(conn, "USD", _ALL_TIME)
+    claude_observations = conn.execute(
+        "SELECT COUNT(*) FROM usage_events WHERE source LIKE 'claude%'"
+    ).fetchone()[0]
+    resource_scopes = conn.execute("SELECT COUNT(*) FROM resource_scopes").fetchone()[0]
+    billed_charges = conn.execute(
+        "SELECT COUNT(*) FROM charges WHERE authority = 'billed'"
+    ).fetchone()[0]
     return {
         "schema_version": 1,
         "version": __version__,
         "home": str(home),
         "home_exists": home.exists(),
+        "stores": {
+            "canonical": {
+                "path": str(home / "ledger.db"),
+                "role": "supported receipt ledger",
+            },
+            "legacy": {
+                "path": str(home / "costs.db"),
+                "role": "unsupported v0.2 compatibility",
+                "present": (home / "costs.db").exists(),
+            },
+        },
         "pricing_table": PRICING_SNAPSHOT_VERSION,
         "ledger": {
             "usage_events": conn.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0],
@@ -36,14 +54,15 @@ def _doctor_payload(home: Path, conn) -> dict[str, object]:
             ).fetchone()[0],
         },
         "readiness": {
-            "claude_code": "OBSERVED",
-            "resource_envelope": "OBSERVED",
-            "provider_billing": "NOT OBSERVED",
+            "claude_code": "OBSERVED" if claude_observations else "NOT OBSERVED",
+            "resource_envelope": "OBSERVED" if resource_scopes else "NOT OBSERVED",
+            "provider_billing": "OBSERVED" if billed_charges else "NOT OBSERVED",
             "distributed_enforcement": "NOT OBSERVED",
         },
         "limitations": [
             "Claude Code hooks are fail-open local observation, not provider-side containment.",
             "Provider-billed authority requires an imported local export.",
+            "Legacy costs.db is never read by current receipt or MCP queries.",
         ],
     }
 
@@ -61,7 +80,8 @@ def _echo_ledger(conn) -> None:
     spend = q.scope_spend(conn, "USD", _ALL_TIME)
     n_recon = conn.execute("SELECT COUNT(*) FROM reconciliations").fetchone()[0]
     click.echo(
-        f"  ledger: {n_events} events, USD {spend.total:.2f} (canonical), {n_recon} reconciled"
+        f"  canonical ledger.db: {n_events} events, USD {spend.total:.2f} valuation, "
+        f"{n_recon} reconciled"
     )
     if spend.n_unpriced_events:
         click.echo(
@@ -95,7 +115,11 @@ def _echo_recovery(home) -> None:
 
     legacy = home / "costs.db"
     if legacy.exists():
-        click.echo("  note: legacy costs.db present (the old forecaster's data; not migrated)")
+        click.echo(
+            "  legacy costs.db: present (unsupported v0.2 store; never queried by receipts/MCP)"
+        )
+    else:
+        click.echo("  legacy costs.db: absent")
 
 
 def _echo_limitations() -> None:
@@ -107,6 +131,7 @@ def _echo_limitations() -> None:
         "  - Repo-local .forecost.toml is ignored for enforcement unless "
         "FORECOST_TRUST_PROJECT_POLICY=1."
     )
+    click.echo("  - Local controls do not bound provider-side or distributed overrun.")
 
 
 @click.command()

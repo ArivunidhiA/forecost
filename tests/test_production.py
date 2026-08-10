@@ -27,35 +27,35 @@ def test_full_developer_workflow(cli_runner, tmp_path, db_path, monkeypatch):
     monkeypatch.setattr("forecost.db._DB_PATH", db_path)
     monkeypatch.setattr("forecost.db._conn", None)
 
-    result = cli_runner.invoke(main, ["init"])
+    result = cli_runner.invoke(main, ["legacy", "init"])
     assert result.exit_code == 0
 
-    result = cli_runner.invoke(main, ["status"])
+    result = cli_runner.invoke(main, ["legacy", "status"])
     assert result.exit_code == 0
 
-    result = cli_runner.invoke(main, ["forecast"])
+    result = cli_runner.invoke(main, ["legacy", "forecast"])
     assert result.exit_code == 0
 
-    result = cli_runner.invoke(main, ["forecast", "--json"])
+    result = cli_runner.invoke(main, ["legacy", "forecast", "--json"])
     assert result.exit_code == 0
 
-    result = cli_runner.invoke(main, ["track"])
+    result = cli_runner.invoke(main, ["legacy", "track"])
     assert result.exit_code == 0
 
-    result = cli_runner.invoke(main, ["forecast", "--brief"])
+    result = cli_runner.invoke(main, ["legacy", "forecast", "--brief"])
     assert result.exit_code == 0
 
-    result = cli_runner.invoke(main, ["optimize"])
+    result = cli_runner.invoke(main, ["legacy", "optimize"])
     assert result.exit_code == 0
 
-    result = cli_runner.invoke(main, ["reset", "--yes"])
+    result = cli_runner.invoke(main, ["legacy", "reset", "--yes"])
     assert result.exit_code == 0
 
 
 def test_demo_command_works_standalone(cli_runner, db_path, monkeypatch):
     monkeypatch.setattr("forecost.db._DB_PATH", db_path)
     monkeypatch.setattr("forecost.db._conn", None)
-    result = cli_runner.invoke(main, ["demo"])
+    result = cli_runner.invoke(main, ["legacy", "demo"])
     assert result.exit_code == 0
     assert "Projected" in result.output
 
@@ -67,10 +67,10 @@ def test_init_reinit_flow(cli_runner, tmp_path, db_path, monkeypatch):
     monkeypatch.setattr("forecost.db._DB_PATH", db_path)
     monkeypatch.setattr("forecost.db._conn", None)
 
-    result = cli_runner.invoke(main, ["init"])
+    result = cli_runner.invoke(main, ["legacy", "init"])
     assert result.exit_code == 0
 
-    result = cli_runner.invoke(main, ["init"], input="y\n")
+    result = cli_runner.invoke(main, ["legacy", "init"], input="y\n")
     assert result.exit_code == 0
 
 
@@ -81,10 +81,10 @@ def test_forecast_with_no_data_shows_baseline(cli_runner, tmp_path, db_path, mon
     monkeypatch.setattr("forecost.db._DB_PATH", db_path)
     monkeypatch.setattr("forecost.db._conn", None)
 
-    result = cli_runner.invoke(main, ["init"])
+    result = cli_runner.invoke(main, ["legacy", "init"])
     assert result.exit_code == 0
 
-    result = cli_runner.invoke(main, ["forecast"])
+    result = cli_runner.invoke(main, ["legacy", "forecast"])
     assert result.exit_code == 0
 
 
@@ -95,7 +95,7 @@ def test_forecast_json_schema_complete(cli_runner, tmp_path, db_path, monkeypatc
     monkeypatch.setattr("forecost.db._DB_PATH", db_path)
     monkeypatch.setattr("forecost.db._conn", None)
 
-    result = cli_runner.invoke(main, ["init"])
+    result = cli_runner.invoke(main, ["legacy", "init"])
     assert result.exit_code == 0
 
     conn = get_or_create_db()
@@ -109,7 +109,7 @@ def test_forecast_json_schema_complete(cli_runner, tmp_path, db_path, monkeypatc
     ]
     _insert_usage_logs_batch(conn, items)
 
-    result = cli_runner.invoke(main, ["forecast", "--json"])
+    result = cli_runner.invoke(main, ["legacy", "forecast", "--json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert "project_id" in data
@@ -128,7 +128,7 @@ def test_status_does_not_save_forecast(cli_runner, tmp_path, db_path, monkeypatc
     monkeypatch.setattr("forecost.db._DB_PATH", db_path)
     monkeypatch.setattr("forecost.db._conn", None)
 
-    result = cli_runner.invoke(main, ["init"])
+    result = cli_runner.invoke(main, ["legacy", "init"])
     assert result.exit_code == 0
 
     conn = get_or_create_db()
@@ -143,13 +143,13 @@ def test_status_does_not_save_forecast(cli_runner, tmp_path, db_path, monkeypatc
     _insert_usage_logs_batch(conn, items)
 
     for _ in range(5):
-        result = cli_runner.invoke(main, ["status"])
+        result = cli_runner.invoke(main, ["legacy", "status"])
         assert result.exit_code == 0
 
     count = conn.execute("SELECT COUNT(*) AS n FROM forecasts").fetchone()["n"]
     assert count == 0
 
-    result = cli_runner.invoke(main, ["forecast"])
+    result = cli_runner.invoke(main, ["legacy", "forecast"])
     assert result.exit_code == 0
     count = conn.execute("SELECT COUNT(*) AS n FROM forecasts").fetchone()["n"]
     assert count == 1
@@ -223,7 +223,7 @@ def test_forecast_json_includes_total_tokens(cli_runner, tmp_path, db_path, monk
     (tmp_path / "README.md").write_text("chatbot\n")
     monkeypatch.setattr("forecost.db._DB_PATH", db_path)
     monkeypatch.setattr("forecost.db._conn", None)
-    result = cli_runner.invoke(main, ["init"])
+    result = cli_runner.invoke(main, ["legacy", "init"])
     assert result.exit_code == 0
     conn = get_or_create_db()
     proj = conn.execute("SELECT id FROM projects WHERE path = ?", (str(tmp_path),)).fetchone()
@@ -236,7 +236,7 @@ def test_forecast_json_includes_total_tokens(cli_runner, tmp_path, db_path, monk
             (proj["id"], base.isoformat(), "gpt-4o-mini", "openai", 1000, 500, 0.50, None),
         ],
     )
-    result = cli_runner.invoke(main, ["forecast", "--json"])
+    result = cli_runner.invoke(main, ["legacy", "forecast", "--json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert "total_tokens" in data
@@ -249,7 +249,7 @@ def test_status_shows_tokens(cli_runner, tmp_path, db_path, monkeypatch):
     (tmp_path / "README.md").write_text("chatbot\n")
     monkeypatch.setattr("forecost.db._DB_PATH", db_path)
     monkeypatch.setattr("forecost.db._conn", None)
-    result = cli_runner.invoke(main, ["init"])
+    result = cli_runner.invoke(main, ["legacy", "init"])
     assert result.exit_code == 0
     conn = get_or_create_db()
     proj = conn.execute("SELECT id FROM projects WHERE path = ?", (str(tmp_path),)).fetchone()
@@ -262,7 +262,7 @@ def test_status_shows_tokens(cli_runner, tmp_path, db_path, monkeypatch):
             (proj["id"], base.isoformat(), "gpt-4o-mini", "openai", 1000, 500, 0.50, None),
         ],
     )
-    result = cli_runner.invoke(main, ["status"])
+    result = cli_runner.invoke(main, ["legacy", "status"])
     assert result.exit_code == 0
     assert "tokens" in result.output
 
@@ -273,9 +273,9 @@ def test_full_v020_workflow(cli_runner, tmp_path, db_path, monkeypatch):
     (tmp_path / "README.md").write_text("chatbot\n")
     monkeypatch.setattr("forecost.db._DB_PATH", db_path)
     monkeypatch.setattr("forecost.db._conn", None)
-    assert cli_runner.invoke(main, ["init"]).exit_code == 0
-    assert cli_runner.invoke(main, ["calc", "Hello"]).exit_code == 0
-    assert cli_runner.invoke(main, ["price"]).exit_code == 0
-    assert cli_runner.invoke(main, ["forecast"]).exit_code == 0
-    assert cli_runner.invoke(main, ["optimize"]).exit_code == 0
-    assert cli_runner.invoke(main, ["status"]).exit_code == 0
+    assert cli_runner.invoke(main, ["legacy", "init"]).exit_code == 0
+    assert cli_runner.invoke(main, ["legacy", "calc", "Hello"]).exit_code == 0
+    assert cli_runner.invoke(main, ["legacy", "price"]).exit_code == 0
+    assert cli_runner.invoke(main, ["legacy", "forecast"]).exit_code == 0
+    assert cli_runner.invoke(main, ["legacy", "optimize"]).exit_code == 0
+    assert cli_runner.invoke(main, ["legacy", "status"]).exit_code == 0

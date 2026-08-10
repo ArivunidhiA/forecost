@@ -8,7 +8,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from forecost.db import create_project, get_or_create_db, get_project_by_path
-from forecost.scope import analyze_heuristic, analyze_with_llm
+from forecost.scope import analyze_heuristic
 
 console = Console()
 
@@ -93,16 +93,10 @@ def _print_init_summary(
 
 
 @click.command()
-@click.option(
-    "--smart",
-    is_flag=True,
-    help="Use an LLM to analyze project scope (requires forecost[llm]). "
-    "OUTBOUND: sends project excerpts (README, code snippets) to an LLM provider.",
-)
 @click.option("--days", type=int, default=None, help="Override estimated project duration")
 @click.option("--budget", type=float, default=None, help="Set a budget cap in USD")
-def init(smart, days, budget):
-    """Initialize forecost for the current project."""
+def init(days, budget):
+    """Initialize retired, local-only forecast tracking in legacy costs.db."""
     project_path = os.path.abspath(os.getcwd())
     project_name = os.path.basename(project_path)
 
@@ -117,19 +111,7 @@ def init(smart, days, budget):
             raise SystemExit(1)
         _remove_existing_project_data(existing, project_path)
 
-    if smart:
-        console.print(
-            "[yellow]--smart sends project excerpts (README, code snippets) to an LLM "
-            "provider to estimate scope. This is the one forecost path that leaves your "
-            "machine.[/yellow]"
-        )
-        if not click.confirm("Send project excerpts to the configured LLM provider?"):
-            console.print("[dim]Falling back to local heuristic analysis.[/dim]")
-            result = analyze_heuristic(project_path)
-        else:
-            result = analyze_with_llm(project_path)
-    else:
-        result = analyze_heuristic(project_path)
+    result = analyze_heuristic(project_path)
 
     estimated_days = result["estimated_days"]
     if days is not None:

@@ -1,8 +1,9 @@
-"""Optional MCP entry point with a useful base-install diagnostic.
+"""Optional MCP module launcher with a useful base-install diagnostic.
 
-The base wheel intentionally has no MCP dependency.  Console-script discovery
-must therefore stay import-safe and explain how to opt in instead of exposing a
-``ModuleNotFoundError`` from an entry point advertised by package metadata.
+The base wheel intentionally has no MCP dependency or MCP console script.
+After installing ``forecost[mcp]``, launch the server explicitly with
+``python -m forecost.mcp_launcher``.  Keeping this opt-in prevents a broken
+entry point from being advertised by a minimal installation.
 """
 
 from __future__ import annotations
@@ -17,8 +18,9 @@ def main() -> None:
     except ModuleNotFoundError as error:
         if error.name == "mcp":
             sys.stderr.write(
-                "forecost-mcp requires the optional MCP dependency. "
-                "Install it with: pip install 'forecost[mcp]'\n"
+                "Forecost's MCP server is optional. Install it with "
+                "pip install 'forecost[mcp]', then run "
+                "python -m forecost.mcp_launcher.\n"
             )
             raise SystemExit(2) from None
         raise

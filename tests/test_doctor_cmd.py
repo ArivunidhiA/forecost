@@ -43,5 +43,8 @@ def test_doctor_json_reports_explicit_readiness(ledger_conn, monkeypatch, tmp_pa
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    assert payload["readiness"]["claude_code"] == "OBSERVED"
+    assert payload["readiness"]["claude_code"] == "NOT OBSERVED"
     assert payload["readiness"]["distributed_enforcement"] == "NOT OBSERVED"
+    assert payload["stores"]["canonical"]["path"].endswith("ledger.db")
+    assert payload["stores"]["legacy"]["path"].endswith("costs.db")
+    assert payload["stores"]["legacy"]["role"] == "unsupported v0.2 compatibility"

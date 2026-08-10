@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "forecost"
 version = "0.3.0"
-description = "A local, content-free ledger for AI agent work: records what your agents actually cost across every harness, reconciles the meters nobody trusts, and gates budgets via fail-open hooks."
+description = "Local, content-free evidence receipts for AI-agent runs with independent meter reconciliation."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
@@ -63,7 +63,6 @@ dev = [
 
 [project.scripts]
 forecost = "forecost.cli:main"
-forecost-mcp = "forecost.mcp_launcher:main"
 forecost-hook = "forecost.hooks.fastpath:main"
 
 [project.entry-points.pytest11]
