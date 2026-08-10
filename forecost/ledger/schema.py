@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 9
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS workspaces (
@@ -187,11 +187,21 @@ CREATE TABLE IF NOT EXISTS journal_observations (
     causal_json    TEXT NOT NULL,
     payload_json   TEXT NOT NULL,
     supersedes_observation_id TEXT,
+    journal_sequence INTEGER,
+    previous_digest TEXT,
+    entry_digest TEXT,
     UNIQUE(producer, idempotency_key)
 );
 CREATE INDEX IF NOT EXISTS idx_journal_projection_order
     ON journal_observations(producer, source_sequence, idempotency_key);
 CREATE INDEX IF NOT EXISTS idx_journal_occurred_at ON journal_observations(occurred_at);
+CREATE TABLE IF NOT EXISTS journal_integrity_heads (
+    chain_id          TEXT PRIMARY KEY,
+    event_count       INTEGER NOT NULL,
+    head_sequence     INTEGER NOT NULL,
+    head_digest       TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS causal_runs (
     run_id          TEXT PRIMARY KEY,
@@ -201,6 +211,7 @@ CREATE TABLE IF NOT EXISTS causal_runs (
     created_at      TEXT NOT NULL,
     observed_at     TEXT NOT NULL,
     stop_reason     TEXT,
+    source_order    TEXT NOT NULL DEFAULT '',
     source_coverage_json TEXT NOT NULL DEFAULT '{}'
 );
 
@@ -338,6 +349,11 @@ CREATE TABLE IF NOT EXISTS resource_scopes (
     reserved_micros   INTEGER NOT NULL DEFAULT 0,
     returned_micros   INTEGER NOT NULL DEFAULT 0,
     adjustment_micros INTEGER NOT NULL DEFAULT 0,
+    finalization_reserve_micros INTEGER NOT NULL DEFAULT 0,
+    max_overrun_micros INTEGER NOT NULL DEFAULT 0,
+    threat_model      TEXT NOT NULL DEFAULT 'same_user_local',
+    next_fencing_token INTEGER NOT NULL DEFAULT 1,
+    closed_at         TEXT,
     mode              TEXT NOT NULL DEFAULT 'shadow',
     created_at        TEXT NOT NULL,
     metadata_json     TEXT NOT NULL DEFAULT '{}'
@@ -385,6 +401,15 @@ def apply_schema(conn: sqlite3.Connection) -> None:
         current_version = 5
     if current_version < 6:
         _migrate_v6_resource_envelopes(conn)
+        current_version = 6
+    if current_version < 7:
+        _migrate_v7_journal_integrity(conn)
+        current_version = 7
+    if current_version < 8:
+        _migrate_v8_resource_contract(conn)
+        current_version = 8
+    if current_version < 9:
+        _migrate_v9_incremental_projection(conn)
 
 
 def _migrate_reconciliation_uniqueness(conn: sqlite3.Connection) -> None:
@@ -450,6 +475,82 @@ def _migrate_v6_resource_envelopes(conn: sqlite3.Connection) -> None:
     conn.execute("BEGIN IMMEDIATE")
     try:
         conn.execute("PRAGMA user_version = 6")
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _migrate_v7_journal_integrity(conn: sqlite3.Connection) -> None:
+    """Add a deterministic local hash chain without discarding old evidence."""
+    from forecost.ledger.integrity import initialize_journal_chain
+
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        columns = _column_names(conn, "journal_observations")
+        for name, sql_type in (
+            ("journal_sequence", "INTEGER"),
+            ("previous_digest", "TEXT"),
+            ("entry_digest", "TEXT"),
+        ):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE journal_observations ADD COLUMN {name} {sql_type}")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_sequence "
+            "ON journal_observations(journal_sequence) WHERE journal_sequence IS NOT NULL"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS journal_integrity_heads ("
+            "chain_id TEXT PRIMARY KEY, event_count INTEGER NOT NULL, "
+            "head_sequence INTEGER NOT NULL, head_digest TEXT NOT NULL, updated_at TEXT NOT NULL)"
+        )
+        initialize_journal_chain(conn)
+        conn.execute("PRAGMA user_version = 7")
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _migrate_v8_resource_contract(conn: sqlite3.Connection) -> None:
+    """Add explicit containment claims and a protected finalization reserve."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        columns = _column_names(conn, "resource_scopes")
+        additions = (
+            ("finalization_reserve_micros", "INTEGER NOT NULL DEFAULT 0"),
+            ("max_overrun_micros", "INTEGER NOT NULL DEFAULT 0"),
+            ("threat_model", "TEXT NOT NULL DEFAULT 'same_user_local'"),
+            ("next_fencing_token", "INTEGER NOT NULL DEFAULT 1"),
+            ("closed_at", "TEXT"),
+        )
+        for name, declaration in additions:
+            if name not in columns:
+                conn.execute(f"ALTER TABLE resource_scopes ADD COLUMN {name} {declaration}")
+        conn.execute("PRAGMA user_version = 8")
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _migrate_v9_incremental_projection(conn: sqlite3.Connection) -> None:
+    """Record deterministic run projection order for O(1) incremental writes."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if "source_order" not in _column_names(conn, "causal_runs"):
+            conn.execute("ALTER TABLE causal_runs ADD COLUMN source_order TEXT NOT NULL DEFAULT ''")
+        conn.execute(
+            "UPDATE causal_runs SET source_order=COALESCE(("
+            "SELECT MAX(source_order) FROM causal_spans "
+            "WHERE causal_spans.run_id=causal_runs.run_id"
+            "), '') WHERE source_order=''"
+        )
+        conn.execute("PRAGMA user_version = 9")
         conn.commit()
     except BaseException:
         conn.rollback()

@@ -70,3 +70,45 @@ def test_schema_v4_creates_append_only_receipt_kernel(tmp_path):
         "receipt_snapshots",
     } <= tables
     conn.close()
+
+
+def test_v6_database_adds_integrity_and_resource_columns_before_indexes(tmp_path):
+    conn = sqlite3.connect(tmp_path / "v6.db")
+    conn.executescript(
+        """
+        CREATE TABLE journal_observations (
+            observation_id TEXT PRIMARY KEY, schema_version INTEGER NOT NULL,
+            producer TEXT NOT NULL, source_sequence INTEGER NOT NULL,
+            idempotency_key TEXT NOT NULL, event_kind TEXT NOT NULL,
+            occurred_at TEXT NOT NULL, observed_at TEXT NOT NULL,
+            causal_json TEXT NOT NULL, payload_json TEXT NOT NULL,
+            supersedes_observation_id TEXT,
+            UNIQUE(producer, idempotency_key)
+        );
+        CREATE TABLE resource_scopes (
+            scope_id TEXT PRIMARY KEY, parent_scope_id TEXT, dimension TEXT NOT NULL,
+            capacity_micros INTEGER NOT NULL, settled_micros INTEGER NOT NULL DEFAULT 0,
+            reserved_micros INTEGER NOT NULL DEFAULT 0,
+            returned_micros INTEGER NOT NULL DEFAULT 0,
+            adjustment_micros INTEGER NOT NULL DEFAULT 0, mode TEXT NOT NULL DEFAULT 'shadow',
+            created_at TEXT NOT NULL, metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE TABLE causal_runs (
+            run_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, trace_id TEXT NOT NULL,
+            lifecycle TEXT NOT NULL, created_at TEXT NOT NULL, observed_at TEXT NOT NULL,
+            stop_reason TEXT, source_coverage_json TEXT NOT NULL DEFAULT '{}'
+        );
+        PRAGMA user_version = 6;
+        """
+    )
+
+    apply_schema(conn)
+
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    journal_columns = {row[1] for row in conn.execute("PRAGMA table_info(journal_observations)")}
+    resource_columns = {row[1] for row in conn.execute("PRAGMA table_info(resource_scopes)")}
+    run_columns = {row[1] for row in conn.execute("PRAGMA table_info(causal_runs)")}
+    assert {"journal_sequence", "previous_digest", "entry_digest"} <= journal_columns
+    assert {"finalization_reserve_micros", "next_fencing_token", "closed_at"} <= resource_columns
+    assert "source_order" in run_columns
+    conn.close()

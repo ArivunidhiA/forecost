@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from forecost.ledger.contracts import CausalIdentity, Observation, canonical_json, opaque_id
+from forecost.ledger.integrity import advance_chain
 
 _PROJECTION_TABLES = (
     "outcome_evidence",
@@ -17,6 +19,13 @@ _PROJECTION_TABLES = (
     "causal_spans",
     "causal_runs",
 )
+
+
+@dataclass(frozen=True)
+class AppendBatchResult:
+    inserted: int
+    duplicates: int
+    batches: int
 
 
 def _iso(value: datetime) -> str:
@@ -33,26 +42,29 @@ def append_observation(conn: sqlite3.Connection, observation: Observation) -> bo
     item = observation.normalized()
     causal_json = canonical_json(item.causal.to_dict())
     payload_json = canonical_json(item.payload)
-    existing = conn.execute(
-        "SELECT observation_id, causal_json, payload_json, event_kind "
-        "FROM journal_observations WHERE producer = ? AND idempotency_key = ?",
-        (item.producer, item.causal.idempotency_key),
-    ).fetchone()
-    if existing is not None:
-        if (
-            existing["causal_json"] != causal_json
-            or existing["payload_json"] != payload_json
-            or existing["event_kind"] != item.event_kind
-        ):
-            raise ValueError("idempotency key already belongs to different evidence")
-        return False
-
     nested = conn.in_transaction
     if nested:
         conn.execute("SAVEPOINT forecost_append_observation")
     else:
         conn.execute("BEGIN IMMEDIATE")
     try:
+        existing = conn.execute(
+            "SELECT observation_id, causal_json, payload_json, event_kind "
+            "FROM journal_observations WHERE producer = ? AND idempotency_key = ?",
+            (item.producer, item.causal.idempotency_key),
+        ).fetchone()
+        if existing is not None:
+            if (
+                existing["causal_json"] != causal_json
+                or existing["payload_json"] != payload_json
+                or existing["event_kind"] != item.event_kind
+            ):
+                raise ValueError("idempotency key already belongs to different evidence")
+            if nested:
+                conn.execute("RELEASE SAVEPOINT forecost_append_observation")
+            else:
+                conn.commit()
+            return False
         conn.execute(
             """
             INSERT INTO journal_observations(
@@ -75,7 +87,13 @@ def append_observation(conn: sqlite3.Connection, observation: Observation) -> bo
                 item.supersedes_observation_id,
             ),
         )
-        rebuild_projections(conn)
+        advance_chain(conn, item.observation_id)
+        row = conn.execute(
+            "SELECT * FROM journal_observations WHERE observation_id=?", (item.observation_id,)
+        ).fetchone()
+        if row is None:  # pragma: no cover - insert/select invariant
+            raise RuntimeError("observation insert did not yield a row")
+        _project_row(conn, row)
         if nested:
             conn.execute("RELEASE SAVEPOINT forecost_append_observation")
         else:
@@ -88,6 +106,57 @@ def append_observation(conn: sqlite3.Connection, observation: Observation) -> bo
             conn.rollback()
         raise
     return True
+
+
+def append_observations(
+    conn: sqlite3.Connection,
+    observations: Iterable[Observation],
+    *,
+    batch_size: int = 1_000,
+) -> AppendBatchResult:
+    """Append a stream in bounded transactions without materializing it.
+
+    Each committed batch is a durable recovery boundary. A conflict rolls back
+    its entire batch, while earlier batches remain committed and replay-safe.
+    """
+    if (
+        isinstance(batch_size, bool)
+        or not isinstance(batch_size, int)
+        or not 1 <= batch_size <= 10_000
+    ):
+        raise ValueError("batch_size must be an integer between 1 and 10000")
+    inserted = duplicates = batches = 0
+    pending: list[Observation] = []
+
+    def flush(items: list[Observation]) -> tuple[int, int]:
+        conn.execute("BEGIN IMMEDIATE")
+        added = replayed = 0
+        try:
+            for item in items:
+                if append_observation(conn, item):
+                    added += 1
+                else:
+                    replayed += 1
+            conn.commit()
+            return added, replayed
+        except BaseException:
+            conn.rollback()
+            raise
+
+    for item in observations:
+        pending.append(item)
+        if len(pending) >= batch_size:
+            added, replayed = flush(pending)
+            inserted += added
+            duplicates += replayed
+            batches += 1
+            pending.clear()
+    if pending:
+        added, replayed = flush(pending)
+        inserted += added
+        duplicates += replayed
+        batches += 1
+    return AppendBatchResult(inserted, duplicates, batches)
 
 
 def _causal(row: sqlite3.Row) -> dict[str, object]:
@@ -115,19 +184,23 @@ def rebuild_projections(conn: sqlite3.Connection) -> None:
         """
     ).fetchall()
     for row in rows:
-        causal = _causal(row)
-        payload = _payload(row)
-        source_order = f"{row['producer']}:{row['source_sequence']:020d}:{row['idempotency_key']}"
-        if row["event_kind"] == "span":
-            _project_span(conn, row, causal, payload, source_order)
-        elif row["event_kind"] == "meter":
-            _project_meter(conn, row, causal, payload)
-        elif row["event_kind"] == "charge":
-            _project_charge(conn, row, causal, payload)
-        elif row["event_kind"] == "outcome":
-            _project_outcome(conn, row, causal, payload)
-        else:  # pragma: no cover - append validates event kinds
-            raise ValueError(f"unsupported event kind: {row['event_kind']}")
+        _project_row(conn, row)
+
+
+def _project_row(conn: sqlite3.Connection, row: sqlite3.Row) -> None:
+    causal = _causal(row)
+    payload = _payload(row)
+    source_order = f"{row['producer']}:{row['source_sequence']:020d}:{row['idempotency_key']}"
+    if row["event_kind"] == "span":
+        _project_span(conn, row, causal, payload, source_order)
+    elif row["event_kind"] == "meter":
+        _project_meter(conn, row, causal, payload)
+    elif row["event_kind"] == "charge":
+        _project_charge(conn, row, causal, payload)
+    elif row["event_kind"] == "outcome":
+        _project_outcome(conn, row, causal, payload)
+    else:  # pragma: no cover - append validates event kinds
+        raise ValueError(f"unsupported event kind: {row['event_kind']}")
 
 
 def _project_span(
@@ -140,11 +213,13 @@ def _project_span(
     conn.execute(
         """
         INSERT INTO causal_runs(run_id, conversation_id, trace_id, lifecycle, created_at,
-                                observed_at, stop_reason, source_coverage_json)
-        VALUES (?,?,?,?,?,?,?,?)
+                                observed_at, stop_reason, source_coverage_json, source_order)
+        VALUES (?,?,?,?,?,?,?,?,?)
         ON CONFLICT(run_id) DO UPDATE SET
             lifecycle=excluded.lifecycle, observed_at=excluded.observed_at,
-            stop_reason=excluded.stop_reason
+            stop_reason=excluded.stop_reason, source_order=excluded.source_order,
+            created_at=MIN(causal_runs.created_at, excluded.created_at)
+        WHERE excluded.source_order > causal_runs.source_order
         """,
         (
             causal["run_id"],
@@ -155,6 +230,7 @@ def _project_span(
             row["observed_at"],
             payload.get("stop_reason"),
             "{}",
+            source_order,
         ),
     )
     conn.execute(
@@ -167,6 +243,7 @@ def _project_span(
         ON CONFLICT(span_id) DO UPDATE SET
             lifecycle=excluded.lifecycle, observed_at=excluded.observed_at,
             source_order=excluded.source_order
+        WHERE excluded.source_order > causal_spans.source_order
         """,
         (
             causal["span_id"],

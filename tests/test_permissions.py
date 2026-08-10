@@ -10,6 +10,7 @@ from forecost.core.errlog import log_error
 from forecost.core.paths import (
     OWNERSHIP_MARKER,
     UnownedDataRootError,
+    UnsafeDataPathError,
     chmod_private,
     ensure_private_dir,
     forecost_home,
@@ -92,6 +93,53 @@ def test_forecost_home_rejects_relative_override(monkeypatch):
     monkeypatch.setenv("FORECOST_HOME", "relative/data")
     with pytest.raises(ValueError, match="absolute"):
         forecost_home()
+
+
+def test_forecost_home_rejects_parent_traversal(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORECOST_HOME", str(tmp_path / "child" / ".." / "escape"))
+    with pytest.raises(ValueError, match="parent traversal"):
+        forecost_home()
+
+
+def test_ledger_refuses_symlink_file_without_touching_target(tmp_path):
+    from forecost.ledger.db import get_ledger_db
+
+    home = tmp_path / "home"
+    ensure_private_dir(home)
+    target = tmp_path / "unrelated.db"
+    target.write_text("must survive")
+    link = home / "ledger.db"
+    link.symlink_to(target)
+
+    with pytest.raises(UnsafeDataPathError, match="symlink"):
+        get_ledger_db(link)
+    assert target.read_text() == "must survive"
+
+
+def test_chmod_private_does_not_follow_symlink(tmp_path):
+    target = tmp_path / "target"
+    target.write_text("x")
+    target.chmod(0o644)
+    link = tmp_path / "link"
+    link.symlink_to(target)
+
+    chmod_private(link)
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
+
+
+def test_custom_home_rejects_symlinked_ownership_marker(tmp_path, monkeypatch):
+    custom = tmp_path / "custom"
+    custom.mkdir()
+    target = tmp_path / "marker-target"
+    target.write_text("must survive")
+    (custom / OWNERSHIP_MARKER).symlink_to(target)
+    monkeypatch.setenv("FORECOST_HOME", str(custom))
+
+    with pytest.raises(UnownedDataRootError, match="must not be a symlink"):
+        ensure_private_dir(custom)
+
+    assert target.read_text() == "must survive"
 
 
 @_POSIX_ONLY

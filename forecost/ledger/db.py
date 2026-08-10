@@ -9,7 +9,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from forecost.adapters.base import content_free_identifier
-from forecost.core.paths import chmod_private, ensure_private_dir, forecost_home
+from forecost.core.paths import (
+    UnsafeDataPathError,
+    chmod_private,
+    ensure_private_dir,
+    forecost_home,
+    validate_private_file,
+)
 from forecost.ledger.schema import apply_schema
 
 LEDGER_PATH = forecost_home() / "ledger.db"
@@ -102,6 +108,25 @@ def _lock_down_db_files(path: Path) -> None:
     same spend data as the main file, so all three must be private."""
     for p in (path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")):
         chmod_private(p)
+        validate_private_file(p)
+
+
+def _open_ledger(path: Path) -> sqlite3.Connection:
+    """Open a regular owner-controlled file and detect direct replacement races."""
+    if ".." in path.parts:
+        raise UnsafeDataPathError("ledger path must not contain parent traversal")
+    validate_private_file(path)
+    before = path.stat(follow_symlinks=False) if path.exists() else None
+    conn = sqlite3.connect(str(path), check_same_thread=False)
+    try:
+        validate_private_file(path, may_not_exist=False)
+        after = path.stat(follow_symlinks=False)
+        if before is not None and (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+            raise UnsafeDataPathError("ledger file changed while it was being opened")
+        return conn
+    except BaseException:
+        conn.close()
+        raise
 
 
 def _apply_pragmas(conn: sqlite3.Connection) -> None:
@@ -124,7 +149,7 @@ def get_ledger_db(path: Path | None = None) -> sqlite3.Connection:
     global _conn
     if path is not None and path != LEDGER_PATH:
         _ensure_dir(path)
-        conn = sqlite3.connect(str(path), check_same_thread=False)
+        conn = _open_ledger(path)
         conn.row_factory = sqlite3.Row
         _apply_pragmas(conn)
         apply_schema(conn)
@@ -135,7 +160,7 @@ def get_ledger_db(path: Path | None = None) -> sqlite3.Connection:
         if _conn is not None:
             return _conn
         _ensure_dir()
-        _conn = sqlite3.connect(str(LEDGER_PATH), check_same_thread=False)
+        _conn = _open_ledger(LEDGER_PATH)
         _conn.row_factory = sqlite3.Row
         _apply_pragmas(_conn)
         apply_schema(_conn)

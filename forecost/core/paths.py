@@ -47,12 +47,18 @@ class UnownedDataRootError(RuntimeError):
     """A custom FORECOST_HOME points at a directory Forecost does not own."""
 
 
+class UnsafeDataPathError(RuntimeError):
+    """A Forecost-owned path failed symlink, type, or ownership checks."""
+
+
 def forecost_home() -> Path:
     override = os.environ.get("FORECOST_HOME")
     if override:
         path = Path(override).expanduser()
         if not path.is_absolute():
             raise ValueError("FORECOST_HOME must be an absolute path")
+        if ".." in path.parts:
+            raise ValueError("FORECOST_HOME must not contain parent traversal")
         return path
     return Path.home() / ".forecost"
 
@@ -70,6 +76,8 @@ def _validate_custom_home_ownership(
         return
     entries = list(path.iterdir())
     marker = path / OWNERSHIP_MARKER
+    if marker.is_symlink():
+        raise UnownedDataRootError("custom FORECOST_HOME ownership marker must not be a symlink")
     if entries and not marker.is_file() and any(not _is_owned_entry(entry) for entry in entries):
         raise UnownedDataRootError(
             "custom FORECOST_HOME is nonempty and has no Forecost ownership marker"
@@ -87,10 +95,31 @@ def _should_claim_data_root(
 
 def _lock_owned_data_root(path: Path) -> None:
     marker = path / OWNERSHIP_MARKER
+    if marker.is_symlink():
+        raise UnsafeDataPathError(f"refusing symlinked Forecost ownership marker: {marker}")
+    flags = os.O_WRONLY | os.O_CREAT
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(marker, flags, 0o600)
+    try:
+        with contextlib.suppress(OSError):
+            os.fchmod(descriptor, 0o600)
+    finally:
+        os.close(descriptor)
     with contextlib.suppress(OSError):
-        marker.touch(exist_ok=True)
-        marker.chmod(0o600)
         path.chmod(0o700)
+
+
+def _reject_unsafe_existing_path(path: Path, *, directory: bool) -> None:
+    if path.is_symlink():
+        raise UnsafeDataPathError(f"refusing symlinked Forecost path: {path}")
+    if not path.exists():
+        return
+    if directory and not path.is_dir():
+        raise UnsafeDataPathError(f"Forecost directory path is not a directory: {path}")
+    if not directory and not path.is_file():
+        raise UnsafeDataPathError(f"Forecost file path is not a regular file: {path}")
+    if hasattr(os, "getuid") and path.stat(follow_symlinks=False).st_uid != os.getuid():
+        raise UnsafeDataPathError(f"Forecost path is owned by a different OS user: {path}")
 
 
 def ensure_private_dir(path: Path) -> Path:
@@ -100,6 +129,7 @@ def ensure_private_dir(path: Path) -> Path:
     existed with looser permissions (the plain ``mkdir(mode=…)`` only applies to
     newly-created dirs and is masked by umask). The ledger stores spend and
     project-path metadata, so the tree must not be world-readable."""
+    _reject_unsafe_existing_path(path, directory=True)
     existed = path.exists()
     resolved_path = path.resolve()
     is_configured_home = resolved_path == forecost_home().resolve()
@@ -111,6 +141,7 @@ def ensure_private_dir(path: Path) -> Path:
         is_default_home=is_default_home,
     )
     path.mkdir(parents=True, exist_ok=True)
+    _reject_unsafe_existing_path(path, directory=True)
     if _should_claim_data_root(
         path,
         existed=existed,
@@ -124,5 +155,14 @@ def ensure_private_dir(path: Path) -> Path:
 def chmod_private(path: Path) -> None:
     """Make a file owner-only (0600) if it exists. Best-effort, never raises."""
     with contextlib.suppress(OSError):
-        if path.exists():
+        if path.exists() and not path.is_symlink() and path.is_file():
             path.chmod(0o600)
+
+
+def validate_private_file(path: Path, *, may_not_exist: bool = True) -> None:
+    """Reject unsafe data-file targets before a persistence API opens them."""
+    if not path.exists() and not path.is_symlink():
+        if may_not_exist:
+            return
+        raise UnsafeDataPathError(f"Forecost file does not exist: {path}")
+    _reject_unsafe_existing_path(path, directory=False)
