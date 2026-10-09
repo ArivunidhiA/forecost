@@ -227,7 +227,9 @@ def test_legacy_project_row_with_raw_path_is_still_found(db_path):
         " baseline_total_cost, created_at) VALUES ('old', '/tmp/old', 1, 1, 1, 'x')"
     )
     conn.commit()
-    assert get_project_by_path("/tmp/old")["name"] == "old"
+    legacy = get_project_by_path("/tmp/old")
+    assert legacy is not None
+    assert legacy["name"] == "old"
 
 
 def test_project_name_and_metadata_are_content_minimized(db_path):
@@ -246,6 +248,7 @@ def test_project_name_and_metadata_are_content_minimized(db_path):
         },
     )
     proj = get_project_by_path("/Users/someone/secret-client/app")
+    assert proj is not None
     assert proj["name"] == "app"
     assert proj["metadata"] == {"n": 3, "ok": "tier-1"}
     raw = "".join(
@@ -261,4 +264,6 @@ def test_sanitize_metadata_bounds_items():
     assert sanitize_metadata(None) is None
     assert sanitize_metadata({"x": "has spaces"}) is None
     big = {f"k{i}": i for i in range(40)}
-    assert len(json.loads(sanitize_metadata(big))) == 16
+    bounded = sanitize_metadata(big)
+    assert bounded is not None
+    assert len(json.loads(bounded)) == 16

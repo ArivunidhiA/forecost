@@ -137,6 +137,14 @@ _MAX_META_ITEMS = 16
 _MAX_NAME = 80
 
 
+def _meta_item_ok(key: object, value: object) -> bool:
+    if not isinstance(key, str) or not _META_KEY.match(key):
+        return False
+    if isinstance(value, str):
+        return bool(_META_TEXT.match(value))
+    return isinstance(value, (bool, int, float)) and value == value
+
+
 def sanitize_metadata(metadata: dict | None) -> str | None:
     """Return bounded JSON for legacy metadata, dropping free-form content.
 
@@ -151,13 +159,7 @@ def sanitize_metadata(metadata: dict | None) -> str | None:
     for key, value in metadata.items():
         if len(kept) >= _MAX_META_ITEMS:
             break
-        if not isinstance(key, str) or not _META_KEY.match(key):
-            continue
-        if (
-            isinstance(value, bool)
-            or (isinstance(value, (int, float)) and value == value)
-            or (isinstance(value, str) and _META_TEXT.match(value))
-        ):
+        if _meta_item_ok(key, value):
             kept[key] = value
     return json.dumps(kept, sort_keys=True) if kept else None
 
