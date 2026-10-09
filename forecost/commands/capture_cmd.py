@@ -1,4 +1,4 @@
-"""Run a local verification command and record only its content-free exit evidence."""
+"""Run a local verification command and record bounded exit evidence."""
 
 from __future__ import annotations
 

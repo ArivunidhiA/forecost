@@ -4,9 +4,9 @@
 
 | Version | Supported |
 |---|---|
-| Latest published release | Yes |
-| `main` | Best effort; not a release |
-| Older releases | No |
+| Production release | **None currently** |
+| Published v0.1.1 legacy forecaster | Unsupported; private reports still accepted best effort |
+| Unreleased 0.3 / `main` | Best-effort research and controlled-trial review only |
 
 ## Reporting a Vulnerability
 
@@ -28,7 +28,11 @@ Please include:
 
 ## Response Process
 
-1. We acknowledge reports within 72 hours.
+The project currently has no founder-approved, staffed security-response SLA for
+the unreleased 0.3 line. The following is the intended process, not a guaranteed
+response time, until a named maintainer and support window are published:
+
+1. We acknowledge reports as maintainer availability permits.
 2. We validate and triage severity.
 3. We prepare and test a fix.
 4. We publish a patched release and disclose details responsibly.
@@ -40,8 +44,10 @@ This policy applies to:
 - The `forecost` Python package
 - CLI entrypoints, local databases, recovery files, and destructive commands
 - Claude Code plugin hooks and the LiteLLM callback
-- Bundled GitHub Actions and package-release workflows
+- Repository CI/package-release workflows and the proposed user-facing Action
+  once it exists
 
-The legacy `init --smart` cloud-assisted scope analysis is opt-in and is not
-part of the content-free ledger path. Security reports about its outbound-data
-preview, prompt injection, or secret detection remain in scope.
+The former `init --smart` upload path has been removed and is not a supported
+interface. Reports about residual or accidentally reachable network-assisted
+legacy scope-analysis code remain in scope, as do any regressions that could
+send content from the current receipt product.

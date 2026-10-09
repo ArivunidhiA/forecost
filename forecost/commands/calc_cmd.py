@@ -103,13 +103,18 @@ DEFAULT_MODELS = (
 
 
 def _estimate_tokens(text: str) -> int:
-    """Uses tiktoken if available, else char-count heuristic."""
+    """Use a locally available tiktoken encoding, else a character heuristic.
+
+    ``tiktoken`` can be importable while its first encoding lookup still needs a
+    cache download. Legacy ``calc`` must remain offline-safe, so any optional
+    tokenizer initialization/encoding failure falls back deterministically.
+    """
     try:
         import tiktoken  # type: ignore[import-untyped]
 
         enc = tiktoken.get_encoding("cl100k_base")
         return len(enc.encode(text))
-    except ImportError:
+    except Exception:  # optional tokenizer/cache/network failure; deterministic fallback
         return max(1, len(text) // 4)
 
 

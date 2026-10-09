@@ -9,9 +9,9 @@ one place.
 INVARIANT (enforced by validation plus irreversible normalization at every sink
 boundary and tested by the privacy canary): open-ended identifiers are hashed;
 metadata values must be numbers, bools, reviewed enum strings, or opaque ids.
-Prompt text, completion text, file contents, and raw file paths are FORBIDDEN —
-this is the content-free ledger invariant (BASEMENT.md law L5) that the entire
-trust story depends on.
+Prompt text, completion text, file contents, and raw file paths are forbidden at
+this canonical usage/posting payload boundary. This does not prove every owned
+cursor/log/backup surface satisfies the same exclusion; see ``docs/status.md``.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 # Metadata is intentionally a tiny, centrally reviewed vocabulary.  Adding an
-# adapter attribute requires adding its content-free key here; arbitrary keys
+# adapter attribute requires adding its reviewed key here; arbitrary keys
 # are not accepted because names like "payload" can quietly turn the local
 # ledger into a prompt/completion store.
 ALLOWED_METADATA_KEYS = frozenset(
@@ -143,7 +143,7 @@ def _validate_metadata_value(key: str, value: object) -> None:
     if isinstance(value, str):
         _validate_metadata_string(key, value)
         return
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         _validate_metadata_number(key, value)
         return
     raise ValueError("metadata value must be a scalar")
@@ -204,6 +204,10 @@ def _is_absolute_workspace_path(value: str) -> bool:
 def _validate_workspace_path(value: object) -> None:
     if value is None:
         return
+    if isinstance(value, str) and value.startswith("workspace:"):
+        if _OPAQUE_IDENTIFIER.fullmatch(value) is None:
+            raise ValueError("workspace_path opaque identity is invalid")
+        return
     if (
         not isinstance(value, str)
         or not _is_absolute_workspace_path(value)
@@ -227,7 +231,7 @@ def _validate_reported_cost(value: Money | None) -> None:
     if value is None:
         return
     amount = value.amount
-    if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+    if isinstance(amount, bool) or not isinstance(amount, int | float):
         raise ValueError("reported cost must be numeric")
     if not math.isfinite(float(amount)) or amount < 0 or amount > _MAX_MONEY_AMOUNT:
         raise ValueError("reported cost is out of bounds")
@@ -358,6 +362,16 @@ def normalize_usage_event(event: UsageEvent) -> UsageEvent:
         ),
         run_id=(content_free_identifier("run", event.run_id) if event.run_id is not None else None),
         agent=_normalize_enum("agent", event.agent, _KNOWN_AGENTS),
+        workspace_path=(
+            event.workspace_path
+            if isinstance(event.workspace_path, str)
+            and event.workspace_path.startswith("workspace:")
+            else (
+                content_free_identifier("workspace", event.workspace_path)
+                if event.workspace_path is not None
+                else None
+            )
+        ),
         reported_cost=reported_cost,
         metadata=_normalize_metadata(event.metadata),
     )
@@ -368,7 +382,7 @@ def normalize_usage_event(event: UsageEvent) -> UsageEvent:
 def normalize_posting_spec(posting: PostingSpec) -> PostingSpec:
     """Validate one posting and remove caller-controlled textual payloads."""
     amount = posting.amount
-    if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+    if isinstance(amount, bool) or not isinstance(amount, int | float):
         raise ValueError("posting amount must be numeric")
     if not math.isfinite(float(amount)) or amount < 0 or amount > _MAX_POSTING_AMOUNT:
         raise ValueError("posting amount is out of bounds")

@@ -1,4 +1,4 @@
-"""Content-free, fail-open Claude statusline renderer."""
+"""Field-allowlisted, fail-open Claude statusline renderer."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def render_statusline() -> str:
 
 @click.command()
 def statusline() -> None:
-    """Render one bounded content-free status line; blank on internal failure."""
+    """Render one bounded status line; blank on internal failure."""
     try:
         click.echo(render_statusline())
     except Exception:  # nosec B110 - statusline must never disturb the host

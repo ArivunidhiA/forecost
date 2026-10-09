@@ -14,6 +14,33 @@ from pathlib import Path
 from forecost.core.paths import chmod_private, ensure_private_dir
 
 
+def _fsync_directory(path: Path) -> None:
+    """Persist directory-entry changes where the platform supports it."""
+    if os.name == "nt":  # Windows does not support opening directories this way.
+        return
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _ensure_durable_private_dir(path: Path) -> Path:
+    """Create a private directory and persist each newly created name."""
+    missing: list[Path] = []
+    candidate = path
+    while not candidate.exists():
+        missing.append(candidate)
+        if candidate == candidate.parent:  # pragma: no cover - filesystem root exists
+            break
+        candidate = candidate.parent
+    result = ensure_private_dir(path)
+    for created in reversed(missing):
+        _fsync_directory(created.parent)
+    return result
+
+
 def write_immutable_spool(base_path: Path, rows: Iterable[Mapping[str, object]]) -> Path:
     """Fsync rows to a unique file and atomically make the complete spool visible.
 
@@ -21,7 +48,7 @@ def write_immutable_spool(base_path: Path, rows: Iterable[Mapping[str, object]])
     publish new batches under distinct names. This avoids the append-versus-
     rewrite race inherent in one shared ``recovery.jsonl`` file.
     """
-    ensure_private_dir(base_path.parent)
+    _ensure_durable_private_dir(base_path.parent)
     final_path = base_path.with_name(
         f"{base_path.stem}.{time.time_ns()}.{os.getpid()}.{uuid.uuid4().hex}.jsonl"
     )
@@ -44,6 +71,10 @@ def write_immutable_spool(base_path: Path, rows: Iterable[Mapping[str, object]])
         chmod_private(temp_path)
         os.replace(temp_path, final_path)
         chmod_private(final_path)
+        # The file fsync above persists its bytes. The directory fsync makes the
+        # unique published name durable as well. If this fails, keep the complete
+        # visible spool but raise: publication durability is then uncertain.
+        _fsync_directory(final_path.parent)
         return final_path
     except BaseException:
         if temp_name is not None:

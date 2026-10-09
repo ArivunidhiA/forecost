@@ -1,4 +1,4 @@
-"""Offline content-free runtime imports, beginning with OTel-style span fixtures."""
+"""Offline allowlisted runtime imports, beginning with OTel-style span fixtures."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from forecost.ledger.evidence import append_observation
 
 @click.group(name="import")
 def import_data() -> None:
-    """Import content-free runtime evidence from local files only."""
+    """Import allowlisted runtime evidence from local files only."""
 
 
 @import_data.command("otel")

@@ -1,4 +1,4 @@
-"""Explicit, content-free outcome marks for a completed or incomplete run."""
+"""Explicit, bounded outcome marks for a completed or incomplete run."""
 
 from __future__ import annotations
 

@@ -15,7 +15,11 @@ Semantics (BASEMENT.md law L4 applied to the gateway lane):
   (returns an error string, which LiteLLM turns into a 400 to the caller) only
   on a genuine `deny` decision. Any internal forecost failure fails OPEN by
   default — a broken forecost must never take down the gateway. Gateway
-  operators who prefer fail-closed must opt in via policy.mode='ci'.
+  operators who prefer fail-closed must opt in at adapter construction with
+  ``ForecostLogger(ci_fail_closed=True)``. A successfully parsed policy with
+  ``mode='ci'`` and ``on_internal_error='deny'`` also selects that behavior,
+  but the constructor boundary is what still applies if the policy is missing,
+  corrupt, or unreadable.
 - The success hook emits one UsageEvent per completed call, carrying LiteLLM's
   own computed `response_cost` as a source-reported posting alongside the
   pricing-table posting — the two-books structure that makes reconciliation
@@ -64,12 +68,17 @@ class ForecostLogger(CustomLogger):
         policy_path: Path | None = None,
         ledger_path: Path | None = None,
         outbox_path: Path | None = None,
+        *,
+        ci_fail_closed: bool = False,
     ) -> None:
         super().__init__()
+        if not isinstance(ci_fail_closed, bool):
+            raise TypeError("ci_fail_closed must be a bool")
         from forecost.core.paths import forecost_home
 
         self._policy_path = policy_path or (forecost_home() / "policy.toml")
         self._ledger_path = ledger_path
+        self._ci_fail_closed = ci_fail_closed
         self._sink: SyncLedgerSink | None = None
         self._conn: sqlite3.Connection | None = None
         from forecost.core.paths import forecost_home
@@ -93,18 +102,33 @@ class ForecostLogger(CustomLogger):
     ):
         """Budget gate. Returns an error string to reject, or the data to allow."""
         del user_api_key_dict, cache, call_type  # required by LiteLLM's callback protocol
+        policy = None
         try:
+            # Read the protected operator policy before touching mutable ledger/
+            # outbox state so a configured CI fail-closed boundary cannot be
+            # silently converted to allow by an internal storage failure.
+            if self._ci_fail_closed and not self._policy_path.is_file():
+                raise FileNotFoundError("required CI policy is unavailable")
+            policy = load_policy_file(self._policy_path)
             # Bound callback lag before enforcing. At most one configured batch
             # is replayed here; the remaining queue depth is visible in status.
             self._outbox.drain(lambda event: self._get_sink().emit(event))
             conn = self._get_connection()
-            policy = load_policy_file(self._policy_path)
             decision = evaluate(conn, policy, agent="litellm")
             if decision.action == "deny":
                 return f"forecost budget gate: {decision.reason}"
             return data
         except Exception as exc:  # nosec B110 - fail-open: gateway must never break
-            log_error("adapters.litellm.pre_call", f"gate failed open: {exc!r}")
+            fail_closed = self._ci_fail_closed or (
+                policy is not None and policy.mode == "ci" and policy.on_internal_error == "deny"
+            )
+            log_error(
+                "adapters.litellm.pre_call",
+                ("LITELLM_GATE_FAILED_CLOSED" if fail_closed else "LITELLM_GATE_FAILED_OPEN"),
+                fingerprint_source=exc,
+            )
+            if fail_closed:
+                return "forecost budget gate: internal error (CI fail-closed)"
             return data
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
@@ -113,11 +137,15 @@ class ForecostLogger(CustomLogger):
         try:
             accepted = self._outbox.enqueue(_kwargs_to_event(kwargs, response_obj))
             if not accepted:
-                log_error("adapters.litellm.success", "outbox full; callback failed open")
+                log_error("adapters.litellm.success", "LITELLM_OUTBOX_FULL")
                 return
             self._outbox.start(lambda event: self._get_sink().emit(event))
         except Exception as exc:  # nosec B110 - ingestion must never break the gateway
-            log_error("adapters.litellm.success", f"ingest failed: {exc!r}")
+            log_error(
+                "adapters.litellm.success",
+                "LITELLM_INGEST_FAILED",
+                fingerprint_source=exc,
+            )
 
     def outbox_status(self) -> dict[str, object]:
         """Expose bounded queue depth/age/replay/drop diagnostics."""

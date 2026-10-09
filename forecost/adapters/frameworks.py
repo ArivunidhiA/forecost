@@ -61,6 +61,11 @@ def _mapped_span(
             "checkpoint_id",
             "occurred_at",
             "observed_at",
+            "started_at",
+            "ended_at",
+            "start_time",
+            "end_time",
+            "duration_micros",
         )
         if record.get(key) is not None
     }

@@ -22,7 +22,10 @@ def _default_plugin_root() -> Path:
 def _simulate_launcher(root: Path) -> tuple[bool, list[str]]:
     commands = ["session-start", "prompt-submit", "pre-tool", "lifecycle", "stop", "session-end"]
     with tempfile.TemporaryDirectory(prefix="forecost-claude-self-test-") as raw:
-        temporary = Path(raw)
+        # macOS commonly reports /var/... for a directory whose canonical path
+        # is /private/var/.... The production launcher intentionally rejects
+        # symlinked path components, so exercise it with the canonical path.
+        temporary = Path(raw).resolve()
         bin_dir = temporary / "venv" / "bin"
         bin_dir.mkdir(parents=True)
         log_path = temporary / "calls.log"
@@ -92,7 +95,12 @@ def _missing_events(hooks: dict[str, object]) -> list[str]:
 def _result(root: Path) -> dict[str, object]:
     hooks, launcher = _load_plugin(root)
     missing = _missing_events(hooks)
-    launcher_ok = "forecost-hook" in launcher and "|| exit 0" in launcher
+    launcher_ok = (
+        "forecost-hook" in launcher
+        and "|| exit 0" in launcher
+        and "safe_owned_path" in launcher
+        and "command -v forecost-hook" not in launcher
+    )
     simulation_passed, simulated_commands = _simulate_launcher(root)
     real_observed = read_heartbeat() is not None
     healthy = not missing and launcher_ok and simulation_passed
@@ -102,6 +110,7 @@ def _result(root: Path) -> dict[str, object]:
         "required_events_present": not missing,
         "missing_events": missing,
         "fail_open_launcher": launcher_ok,
+        "exact_owned_launcher": launcher_ok,
         "simulation_passed": simulation_passed,
         "simulated_commands": simulated_commands,
         "real_hook_heartbeat_observed": real_observed,

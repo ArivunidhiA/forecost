@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import os
 import re
+import stat
 from pathlib import Path
 
 OWNERSHIP_MARKER = ".forecost-owned"
@@ -26,6 +27,8 @@ _OWNED_EXACT_NAMES = frozenset(
         "costs.db-shm",
         "costs.db-wal",
         "error.log",
+        "installation-hmac.key",
+        "installation-hmac.key.id",
         "ledger.db",
         "ledger.db-journal",
         "ledger.db-shm",
@@ -166,3 +169,26 @@ def validate_private_file(path: Path, *, may_not_exist: bool = True) -> None:
             return
         raise UnsafeDataPathError(f"Forecost file does not exist: {path}")
     _reject_unsafe_existing_path(path, directory=False)
+
+
+def open_private_file_descriptor(path: Path, flags: int, mode: int = 0o600) -> int:
+    """Open an owner-controlled regular file without following its final symlink.
+
+    This narrows accidental/symlink clobbering. It is not a same-user TOCTOU
+    boundary: a process with the same privileges can still race or replace
+    local state outside this check.
+    """
+    validate_private_file(path)
+    descriptor = os.open(path, flags | getattr(os, "O_NOFOLLOW", 0), mode)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise UnsafeDataPathError(f"Forecost path is not a regular file: {path}")
+        if hasattr(os, "getuid") and metadata.st_uid != os.getuid():
+            raise UnsafeDataPathError(f"Forecost path is owned by a different OS user: {path}")
+        with contextlib.suppress(OSError):
+            os.fchmod(descriptor, 0o600)
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise

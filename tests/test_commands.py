@@ -1,9 +1,11 @@
 import json
+import sys
 import threading
 import time
 import urllib.request
 from datetime import datetime, timezone
 from http.server import HTTPServer
+from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
@@ -244,6 +246,17 @@ def test_calc_command_json(cli_runner):
     data = json.loads(result.output)
     assert "input_tokens" in data
     assert "models" in data
+
+
+def test_calc_command_falls_back_when_tiktoken_cache_is_unavailable(cli_runner, monkeypatch):
+    def _offline_encoding(_name):
+        raise RuntimeError("external network disabled")
+
+    monkeypatch.setitem(sys.modules, "tiktoken", SimpleNamespace(get_encoding=_offline_encoding))
+    result = cli_runner.invoke(main, ["legacy", "calc", "Hello world", "--json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.output)["input_tokens"] == len("Hello world") // 4
 
 
 def test_calc_no_prompt_fails(cli_runner):

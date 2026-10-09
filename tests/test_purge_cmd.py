@@ -6,6 +6,7 @@ import pytest
 from click.testing import CliRunner
 
 from forecost.cli import main
+from forecost.core.local_identity import INSTALLATION_KEY_ID_NAME, INSTALLATION_KEY_NAME
 from forecost.core.paths import ensure_private_dir
 
 
@@ -25,7 +26,8 @@ def test_purge_removes_forecost_dir(tmp_path, monkeypatch):
 
     assert result.exit_code == 0
     assert not forecost_dir.exists()
-    assert "Purge complete" in result.output
+    assert "Known-file purge finished" in result.output
+    assert "does not prove" in result.output
 
 
 def test_purge_removes_local_toml(tmp_path, monkeypatch):
@@ -139,6 +141,7 @@ def test_purge_preserves_unknown_entries(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert user_file.exists()
     assert "Preserved unknown entries" in result.output
+    assert "retained entries remain" in result.output
 
 
 def test_purge_removes_only_strict_recovery_spool_names(tmp_path, monkeypatch):
@@ -159,6 +162,64 @@ def test_purge_removes_only_strict_recovery_spool_names(tmp_path, monkeypatch):
     assert not active.exists()
     assert not archived.exists()
     assert unrelated.exists()
+
+
+def test_purge_removes_manifested_identity_hook_and_outbox_state(tmp_path, monkeypatch):
+    forecost_dir = tmp_path / "home" / ".forecost"
+    ensure_private_dir(forecost_dir)
+    (forecost_dir / INSTALLATION_KEY_NAME).write_bytes(b"k" * 32)
+    (forecost_dir / INSTALLATION_KEY_ID_NAME).write_text("0" * 64)
+    (forecost_dir / "ledger.db.pre-v11-20260813T120000123456Z.bak").write_text("backup")
+    (forecost_dir / ".recovery-spill-abcdef.tmp").write_text("interrupted")
+    (forecost_dir / ".recovery-abcdef.tmp").write_text("interrupted")
+    hooks = forecost_dir / "hooks"
+    outbox = forecost_dir / "outbox"
+    hooks.mkdir()
+    outbox.mkdir()
+    (hooks / ".forecost-owned").write_text("")
+    (outbox / ".forecost-owned").write_text("")
+    for name in ("heartbeat.json", "last-summary.json", "settlement-required.jsonl"):
+        (hooks / name).write_text("synthetic")
+    (hooks / ".heartbeat.json.abcdef12").write_text("interrupted atomic write")
+    for name in (
+        "litellm.jsonl",
+        "litellm.jsonl.lock",
+        "litellm.jsonl.poison.jsonl",
+        "litellm.jsonl.stats.json",
+    ):
+        (outbox / name).write_text("synthetic")
+    (outbox / ".litellm.jsonl.stats.json.abcdef12").write_text("interrupted atomic write")
+    monkeypatch.setenv("FORECOST_HOME", str(forecost_dir))
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["purge", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert not forecost_dir.exists()
+
+
+def test_purge_preserves_unknown_files_inside_owned_state_directories(tmp_path, monkeypatch):
+    forecost_dir = tmp_path / "home" / ".forecost"
+    ensure_private_dir(forecost_dir)
+    hooks = forecost_dir / "hooks"
+    outbox = forecost_dir / "outbox"
+    hooks.mkdir()
+    outbox.mkdir()
+    (hooks / "heartbeat.json").write_text("owned")
+    hook_unknown = hooks / "operator-notes.txt"
+    hook_unknown.write_text("preserve")
+    (outbox / "litellm.jsonl").write_text("owned")
+    outbox_unknown = outbox / "custom-queue.jsonl"
+    outbox_unknown.write_text("preserve")
+    monkeypatch.setenv("FORECOST_HOME", str(forecost_dir))
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["purge", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert hook_unknown.read_text() == "preserve"
+    assert outbox_unknown.read_text() == "preserve"
+    assert "Preserved unknown entries" in result.output
 
 
 def test_purge_refuses_data_home_that_is_a_file(tmp_path, monkeypatch):

@@ -45,6 +45,19 @@ def test_parse_policy_toml_rejects_fail_closed_outside_ci():
 def test_parse_policy_toml_allows_fail_closed_in_ci_mode():
     config = parse_policy_toml('[policy]\nmode = "ci"\non_internal_error = "deny"\n')
     assert config.on_internal_error == "deny"
+    assert config.mode == "ci"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ('[policy]\nmode = "mystery"\n', "policy.mode"),
+        ('[policy]\non_internal_error = "warn"\n', "policy.on_internal_error"),
+    ],
+)
+def test_parse_policy_toml_rejects_unknown_failure_modes(text, expected):
+    with pytest.raises(ValueError, match=expected):
+        parse_policy_toml(text)
 
 
 def test_parse_policy_toml_rejects_invalid_action():
@@ -113,6 +126,18 @@ def test_evaluate_fails_open_on_internal_error(ledger_conn):
     d = evaluate(ledger_conn, Broken())  # type: ignore[arg-type]  # intentionally malformed
     assert d.action == "allow"
     assert "fail-open" in d.reason
+
+
+def test_evaluate_fails_closed_on_internal_error_only_in_ci(ledger_conn):
+    class BrokenCI:
+        rules = None  # not iterable -> forces an internal exception
+        mode = "ci"
+        on_internal_error = "deny"
+
+    d = evaluate(ledger_conn, BrokenCI())  # type: ignore[arg-type]  # malformed on purpose
+
+    assert d.action == "deny"
+    assert d.reason == "forecost internal error (CI fail-closed)"
 
 
 def test_evaluate_strictest_rule_wins_across_multiple_rules(ledger_conn):

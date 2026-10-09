@@ -1,5 +1,11 @@
 # Forecost QA profile
 
+> **Historical QA input; not a current release verdict.** The 2026-08-13 red
+> team disproved several assumptions below, including end-to-end content-free
+> persistence and claim-independent “complete” evidence. Use
+> [`../status.md`](../status.md) and the
+> [current launch checklist](../research/2026-08-13-master-product-launch-checklist.md).
+
 **Profile version:** 1  
 **Created:** 2026-08-09  
 **Authority order:** `docs/product-contract.md`, public CLI behavior, canonical
@@ -7,8 +13,8 @@ schemas/contracts, `docs/capabilities.json`, then public documentation.
 
 ## Product and users
 
-- **Product:** local Python CLI/library that creates content-free economic
-  receipts for causal AI-agent runs.
+- **Product as scoped for this QA pass:** local Python CLI/library intended to
+  create content-minimized economic receipts for causal AI-agent runs.
 - **Primary user:** engineer or platform team operating API-billed autonomous or
   graph-shaped agent work.
 - **Primary job:** determine what a run consumed, what independent sources value

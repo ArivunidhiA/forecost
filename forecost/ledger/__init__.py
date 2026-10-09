@@ -1,4 +1,4 @@
-"""The ledger: a multi-currency, local-first, content-free flight recorder for AI work.
+"""The ledger: a multi-currency, local-first, content-minimizing recorder for AI work.
 
 Public surface: get_ledger_db (connection), SyncLedgerSink (write), and
 forecost.ledger.queries (read-only, used by estimate/ and policy/).

@@ -1,4 +1,4 @@
-"""Deterministic, synthetic, content-free product fixtures for Forecost Run Lab."""
+"""Deterministic synthetic fixtures using the intended field allowlist."""
 
 from __future__ import annotations
 

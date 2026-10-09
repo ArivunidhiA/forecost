@@ -56,8 +56,8 @@ def _policy_path(cwd: str | None) -> Path:
         return candidate
     log_error(
         "hooks.policy",
-        f"ignoring repo-local .forecost.toml at {cwd} for enforcement "
-        "(set FORECOST_TRUST_PROJECT_POLICY=1 to trust project policy files)",
+        "HOOK_POLICY_IGNORED",
+        fingerprint_source=cwd,
     )
     return home_policy
 
@@ -81,20 +81,21 @@ def _evaluate_policy(conn, cwd: str, workspace_id, session_db_id):
 
 
 def handle_session_start(payload: dict) -> dict:
-    from forecost.hooks.state import clear_settlements, pending_settlements
+    from forecost.hooks.state import clear_settlements, snapshot_settlements
 
     conn = get_ledger_db()
     cwd = payload.get("cwd", "")
     session_id_raw = payload.get("session_id")
     _resolve_ids(conn, cwd, session_id_raw)
-    if pending_settlements():
+    settlement_snapshot = snapshot_settlements()
+    if settlement_snapshot.pending:
         # Recovery is intentionally deferred from SessionEnd.  SessionStart is
         # allowed to do the heavier content-free transcript delta scan.
         adapter = ClaudeCodeAdapter()
         sink = SyncLedgerSink()
         adapter.poll(LedgerIngestStateStore(conn), sink)
         sink.flush()
-        clear_settlements()
+        clear_settlements(settlement_snapshot)
     _record_hook("SessionStart")
     return {}
 
@@ -265,7 +266,11 @@ def _shadow_guard_scan(conn, payload: dict, transcript_path) -> None:
         _, session_db_id = _resolve_ids(conn, payload.get("cwd", ""), session_id_raw)
         record_guard_flag(conn, session_db_id, session_id_raw, evidence, shadow=True)
     except Exception as exc:  # nosec B110 - guard is telemetry; never break reconcile
-        log_error("hooks.guard", f"shadow guard scan failed: {exc!r}")
+        log_error(
+            "hooks.guard",
+            "HOOK_SHADOW_GUARD_FAILED",
+            fingerprint_source=exc,
+        )
 
 
 def _now_iso() -> str:

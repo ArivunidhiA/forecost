@@ -13,21 +13,28 @@ from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import cast
 
-from forecost.ledger.contracts import CausalIdentity, canonical_json, opaque_id
+from forecost.ledger.contracts import (
+    Authority,
+    CausalIdentity,
+    Observation,
+    canonical_json,
+    opaque_id,
+)
 from forecost.ledger.evidence import append_observation, observation
 
 _SOURCES = frozenset({"openai", "anthropic", "gateway", "otel"})
+_OFFLINE_IMPORT_AUTHORITY = Authority.USER_IMPORTED_CLAIM.value
 
 
 def _as_micros(value: object) -> int:
     if isinstance(value, bool):
-        raise ValueError("billing amount must be numeric")
+        raise ValueError("economic claim amount must be numeric")
     try:
         decimal = Decimal(str(value))
     except Exception as error:
-        raise ValueError("billing amount must be numeric") from error
+        raise ValueError("economic claim amount must be numeric") from error
     if not decimal.is_finite() or decimal < 0:
-        raise ValueError("billing amount must be finite and non-negative")
+        raise ValueError("economic claim amount must be finite and non-negative")
     return int((decimal * Decimal("1000000")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
@@ -38,17 +45,17 @@ def _timestamp(value: object) -> datetime:
         try:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError as error:
-            raise ValueError("billing timestamp is invalid") from error
+            raise ValueError("economic claim timestamp is invalid") from error
         if parsed.tzinfo is not None:
             return parsed.astimezone(timezone.utc)
-    raise ValueError("billing record needs a timezone-aware timestamp")
+    raise ValueError("economic claim record needs a timezone-aware timestamp")
 
 
 def _records_from_json(value: object) -> list[Mapping[str, object]]:
     if isinstance(value, list):
         return [item for item in value if isinstance(item, Mapping)]
     if not isinstance(value, Mapping):
-        raise ValueError("billing JSON must be an object or array")
+        raise ValueError("economic claim JSON must be an object or array")
     data = value.get("data", value.get("results", value))
     if isinstance(data, list):
         return _flatten_records(data)
@@ -90,14 +97,16 @@ def _record_amount(record: Mapping[str, object]) -> int:
     for key in ("cost_usd", "amount", "cost"):
         if key in record:
             return _as_micros(record[key])
-    raise ValueError("billing record needs amount_micros, amount, cost, or cost_usd")
+    raise ValueError("economic claim record needs amount_micros, amount, cost, or cost_usd")
 
 
 def _record_timestamp(record: Mapping[str, object]) -> datetime:
     for key in ("timestamp", "starting_at", "start_time", "time", "date"):
         if key in record:
             return _timestamp(record[key])
-    raise ValueError("billing record needs timestamp, starting_at, start_time, time, or date")
+    raise ValueError(
+        "economic claim record needs timestamp, starting_at, start_time, time, or date"
+    )
 
 
 def _stable_file_digest(path: Path) -> str:
@@ -180,11 +189,17 @@ def _account_scope(record: Mapping[str, object]) -> str | None:
     return str(value)
 
 
-def _fact_id(record: Mapping[str, object]) -> str | None:
+def _fact_id(record: Mapping[str, object], *, digest: str, index: int) -> str:
     value = record.get("fact_id")
     if value is not None and not isinstance(value, str):
         raise ValueError("fact_id must be a string when supplied")
-    return value
+    if value is not None:
+        return value
+    # Every imported record is additive work unless the source explicitly
+    # gives two records the same fact identity. Falling back to the shared root
+    # span would incorrectly collapse multiple aggregate rows into competing
+    # valuations. File digest + record index is replay-stable and content-free.
+    return opaque_id("fact", f"offline-import-v1:{digest}:{index}")
 
 
 def _append_import_record(
@@ -197,25 +212,60 @@ def _append_import_record(
 ) -> bool:
     occurred_at = _record_timestamp(record)
     causal = replace(root, source_sequence=index, idempotency_key=f"import-{digest}-{index}")
-    return append_observation(
-        conn,
-        observation(
-            producer=f"billing-{source}",
-            event_kind="charge",
-            causal=causal,
-            payload={
-                "fact_id": _fact_id(record),
-                "amount_micros": _record_amount(record),
-                "currency": "USD",
-                "authority": "billed",
-                "line_item": _line_item(record),
-                "tariff": {},
-                "account_scope": _account_scope(record),
-                "finality": "final",
-            },
-            occurred_at=occurred_at,
-            observed_at=occurred_at,
-        ),
+    item = observation(
+        # Keep this historical producer name so replay remains keyed to the
+        # pre-fix import path.  Economic authority comes only from the payload.
+        producer=f"billing-{source}",
+        event_kind="charge",
+        causal=causal,
+        payload={
+            "fact_id": _fact_id(record, digest=digest, index=index),
+            "amount_micros": _record_amount(record),
+            "currency": "USD",
+            # A path plus a user-selected source name cannot authenticate
+            # provider origin.  This API intentionally exposes no override;
+            # billed is reserved for a separate authenticated profile.
+            "authority": _OFFLINE_IMPORT_AUTHORITY,
+            "line_item": _line_item(record),
+            "tariff": {},
+            "account_scope": _account_scope(record),
+            "finality": "final",
+        },
+        occurred_at=occurred_at,
+        observed_at=occurred_at,
+    )
+    if _legacy_unidentified_import_replay(conn, item):
+        return False
+    return append_observation(conn, item)
+
+
+def _legacy_unidentified_import_replay(conn: sqlite3.Connection, item: Observation) -> bool:
+    """Recognize exact replays written before per-record fact identity.
+
+    Schema v11 supersedes provenance-proven arbitrary-file ``billed`` rows with
+    ``user_imported_claim`` corrections.  The old row deliberately retains its
+    replay key, so an identical file should return duplicate rather than fail
+    or add another valuation. Files imported after v11 but before per-record
+    identities likewise replay as duplicates. Any other difference still
+    reaches the journal's normal idempotency-conflict rejection.
+    """
+    normalized = item.normalized()
+    existing = conn.execute(
+        "SELECT causal_json, payload_json, event_kind FROM journal_observations "
+        "WHERE producer = ? AND idempotency_key = ?",
+        (normalized.producer, normalized.causal.idempotency_key),
+    ).fetchone()
+    if existing is None:
+        return False
+    unidentified_claim = dict(normalized.payload)
+    unidentified_claim["fact_id"] = None
+    unidentified_billed = dict(unidentified_claim)
+    unidentified_billed["authority"] = Authority.BILLED.value
+    return bool(
+        existing["event_kind"] == normalized.event_kind
+        and existing["causal_json"] == canonical_json(normalized.causal.to_dict())
+        and existing["payload_json"]
+        in {canonical_json(unidentified_claim), canonical_json(unidentified_billed)}
     )
 
 
@@ -226,13 +276,14 @@ def import_bill_file(
     *,
     run_id: str | None = None,
 ) -> tuple[str, int]:
-    """Import representative provider/gateway/OTel exports without HTTP or credentials.
+    """Import a user-declared economic claim without authenticating its origin.
 
     Any unsupported columns are ignored and never persisted.  The accepted
     fields are deliberately small: timestamp, amount, optional line item, and
     optional account scope.  An imported aggregate without a caller-provided
     run becomes its own evidence-only run rather than being falsely matched to
-    local callbacks.
+    local callbacks.  Every new row is ``user_imported_claim``; this function
+    has no path to ``billed`` authority.
     """
     if source not in _SOURCES:
         raise ValueError(f"unsupported import source: {source}")
@@ -260,13 +311,13 @@ def _reconciliation_queries() -> tuple[str, str]:
             )
             AND (? IS NULL OR EXISTS (
                 SELECT 1 FROM causal_spans s
-                WHERE s.span_id = c.span_id AND s.run_id = ?
+                WHERE s.span_key = c.span_key AND s.run_id = ?
             ))
         ),
         ranked_local AS (
             SELECT active.*,
                    ROW_NUMBER() OVER (
-                       PARTITION BY COALESCE(fact_id, span_id), currency, line_item
+                       PARTITION BY COALESCE(fact_id, span_key), currency, line_item
                        ORDER BY CASE authority
                            WHEN 'provider_estimate' THEN 0
                            WHEN 'gateway_estimate' THEN 1
@@ -278,12 +329,15 @@ def _reconciliation_queries() -> tuple[str, str]:
             WHERE authority IN ('provider_estimate', 'gateway_estimate', 'list_rate')
         ),
         local AS (SELECT * FROM ranked_local WHERE authority_rank = 1),
-        provider AS (SELECT * FROM active WHERE authority = 'billed'),
+        imported_claim AS (
+            SELECT * FROM active WHERE authority = 'user_imported_claim'
+        ),
         local_keys AS (
             SELECT DISTINCT fact_id, currency, line_item FROM local WHERE fact_id IS NOT NULL
         ),
-        provider_keys AS (
-            SELECT DISTINCT fact_id, currency, line_item FROM provider WHERE fact_id IS NOT NULL
+        imported_keys AS (
+            SELECT DISTINCT fact_id, currency, line_item
+            FROM imported_claim WHERE fact_id IS NOT NULL
         )
     """
     stats_sql = (
@@ -291,23 +345,23 @@ def _reconciliation_queries() -> tuple[str, str]:
         + """
         SELECT
             (SELECT COUNT(*) FROM local) AS local_count,
-            (SELECT COUNT(*) FROM provider) AS provider_count,
+            (SELECT COUNT(*) FROM imported_claim) AS imported_count,
             COALESCE((SELECT SUM(amount_micros) FROM local), 0) AS local_total,
-            COALESCE((SELECT SUM(amount_micros) FROM provider), 0) AS provider_total,
+            COALESCE((SELECT SUM(amount_micros) FROM imported_claim), 0) AS imported_total,
             (SELECT COUNT(*) FROM local_keys l
-             JOIN provider_keys p USING(fact_id, currency, line_item)) AS exact_match_count,
+             JOIN imported_keys i USING(fact_id, currency, line_item)) AS exact_match_count,
             (SELECT COUNT(*) FROM local l
-             JOIN provider_keys p USING(fact_id, currency, line_item)) AS matched_local_count,
-            (SELECT COUNT(*) FROM provider p
+             JOIN imported_keys i USING(fact_id, currency, line_item)) AS matched_local_count,
+            (SELECT COUNT(*) FROM imported_claim i
              JOIN local_keys l USING(fact_id, currency, line_item)) AS matched_provider_count,
             COALESCE((SELECT MIN(finality = 'final') FROM (
-                SELECT finality FROM local UNION ALL SELECT finality FROM provider
+                SELECT finality FROM local UNION ALL SELECT finality FROM imported_claim
             )), 0) AS all_inputs_final,
             (SELECT MIN(occurred_at) FROM (
-                SELECT occurred_at FROM local UNION ALL SELECT occurred_at FROM provider
+                SELECT occurred_at FROM local UNION ALL SELECT occurred_at FROM imported_claim
             )) AS window_start,
             (SELECT MAX(occurred_at) FROM (
-                SELECT occurred_at FROM local UNION ALL SELECT occurred_at FROM provider
+                SELECT occurred_at FROM local UNION ALL SELECT occurred_at FROM imported_claim
             )) AS window_end
         """
     )
@@ -315,15 +369,15 @@ def _reconciliation_queries() -> tuple[str, str]:
         cte  # noqa: S608  # nosec B608
         + """
         SELECT l.observation_id, 'local' AS source_role,
-               CASE WHEN p.fact_id IS NOT NULL
+               CASE WHEN i.fact_id IS NOT NULL
                     THEN 'exact_identity' ELSE 'aggregate_constraint' END AS match_state
         FROM local l
-        LEFT JOIN provider_keys p USING(fact_id, currency, line_item)
+        LEFT JOIN imported_keys i USING(fact_id, currency, line_item)
         UNION ALL
-        SELECT p.observation_id, 'provider_bill' AS source_role,
+        SELECT i.observation_id, 'user_imported_claim' AS source_role,
                CASE WHEN l.fact_id IS NOT NULL
                     THEN 'exact_identity' ELSE 'aggregate_constraint' END AS match_state
-        FROM provider p
+        FROM imported_claim i
         LEFT JOIN local_keys l USING(fact_id, currency, line_item)
         ORDER BY source_role, observation_id
         """
@@ -334,23 +388,23 @@ def _reconciliation_queries() -> tuple[str, str]:
 @dataclass(frozen=True)
 class _ReconciliationStats:
     local_count: int
-    provider_count: int
+    imported_count: int
     local_total: int
-    provider_total: int
+    imported_total: int
     exact_match_count: int
     unmatched_local_count: int
-    unmatched_provider_count: int
+    unmatched_imported_count: int
     window_start: str | None
     window_end: str | None
     all_inputs_final: bool
 
     @property
     def residual(self) -> int:
-        return self.provider_total - self.local_total
+        return self.imported_total - self.local_total
 
     @property
     def observed(self) -> int:
-        return int(self.local_count > 0) + int(self.provider_count > 0)
+        return int(self.local_count > 0) + int(self.imported_count > 0)
 
 
 def _load_reconciliation_stats(
@@ -358,15 +412,15 @@ def _load_reconciliation_stats(
 ) -> _ReconciliationStats:
     row = conn.execute(stats_sql, params).fetchone()
     local_count = int(row["local_count"])
-    provider_count = int(row["provider_count"])
+    imported_count = int(row["imported_count"])
     return _ReconciliationStats(
         local_count=local_count,
-        provider_count=provider_count,
+        imported_count=imported_count,
         local_total=int(row["local_total"]),
-        provider_total=int(row["provider_total"]),
+        imported_total=int(row["imported_total"]),
         exact_match_count=int(row["exact_match_count"]),
         unmatched_local_count=local_count - int(row["matched_local_count"]),
-        unmatched_provider_count=provider_count - int(row["matched_provider_count"]),
+        unmatched_imported_count=imported_count - int(row["matched_provider_count"]),
         window_start=row["window_start"],
         window_end=row["window_end"],
         all_inputs_final=bool(row["all_inputs_final"]),
@@ -404,15 +458,15 @@ def _reconciliation_material(
     return {
         "run_id": normalized_run,
         "local_total": stats.local_total,
-        "provider_total": stats.provider_total,
+        "user_imported_claim_total": stats.imported_total,
         "residual": stats.residual,
         "tolerance": tolerance_micros,
         "state": state,
         "local_count": stats.local_count,
-        "provider_count": stats.provider_count,
+        "user_imported_claim_count": stats.imported_count,
         "exact_match_count": stats.exact_match_count,
         "unmatched_local_count": stats.unmatched_local_count,
-        "unmatched_provider_count": stats.unmatched_provider_count,
+        "unmatched_user_imported_claim_count": stats.unmatched_imported_count,
         "expected": 2,
         "observed": stats.observed,
         "evidence_digest": evidence_digest,
@@ -468,6 +522,9 @@ def _persist_reconciliation(
         INSERT INTO reconciliation_batches(
             batch_id, schema_version, run_id, source_set_json, account_scope, dimensions_json,
             window_start, window_end, watermarks_json, expected_count, observed_count,
+            -- Legacy v5 column names are retained for file compatibility;
+            -- source_set_json is the semantic label and identifies these as
+            -- user-imported claims, never authenticated provider bills.
             unmatched_local_count, unmatched_provider_count, local_amount_micros,
             provider_amount_micros, residual_micros, tolerance_micros, finality, state, created_at,
             supersedes_batch_id
@@ -478,7 +535,10 @@ def _persist_reconciliation(
             1,
             normalized_run,
             canonical_json(
-                {"local": stats.local_count > 0, "provider_bill": stats.provider_count > 0}
+                {
+                    "local": stats.local_count > 0,
+                    "user_imported_claim": stats.imported_count > 0,
+                }
             ),
             None,
             "{}",
@@ -488,9 +548,9 @@ def _persist_reconciliation(
             2,
             stats.observed,
             stats.unmatched_local_count,
-            stats.unmatched_provider_count,
+            stats.unmatched_imported_count,
             stats.local_total,
-            stats.provider_total,
+            stats.imported_total,
             stats.residual,
             tolerance_micros,
             finality,
@@ -517,7 +577,7 @@ def reconcile_run(
     *,
     tolerance_micros: int = 1_000,
 ) -> dict[str, object]:
-    """Compare local valuations and provider bills without forced matching.
+    """Compare local valuations and user-imported claims without forced matching.
 
     Canonical authority selection and aggregate constraints execute in SQLite.
     Python receives one statistics row and streams evidence identifiers, so the

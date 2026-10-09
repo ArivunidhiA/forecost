@@ -21,6 +21,24 @@ def test_claude_setup_is_non_mutating_and_checkable():
     assert "no files changed" in result.output
 
 
+def test_claude_setup_check_does_not_claim_install_readiness(tmp_path):
+    result = CliRunner().invoke(
+        setup,
+        [
+            "claude",
+            "--check",
+            "--config-dir",
+            str(tmp_path),
+            "--plugin-root",
+            str(_plugin_root()),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "not approved/install-ready" in result.output
+    assert "release hold" in result.output
+
+
 def test_claude_self_test_reports_observed_boundary():
     result = CliRunner().invoke(
         self_test, ["claude", "--plugin-root", str(_plugin_root()), "--json"]
@@ -30,6 +48,7 @@ def test_claude_self_test_reports_observed_boundary():
     payload = json.loads(result.output)
     assert payload["readiness"] == "OBSERVED"
     assert payload["simulation_passed"] is True
+    assert payload["exact_owned_launcher"] is True
     assert "not provider-side containment" in payload["claim_boundary"]
 
 
@@ -41,6 +60,8 @@ def test_claude_setup_apply_repair_uninstall_preserves_unrelated_config(tmp_path
         json.dumps({"theme": "dark", "hooks": {"Notification": [{"hooks": []}]}}),
         encoding="utf-8",
     )
+    legacy_backup = settings.with_suffix(settings.suffix + ".forecost.bak")
+    legacy_backup.write_text('{"secret":"must-not-survive"}', encoding="utf-8")
     runner = CliRunner()
 
     applied = runner.invoke(
@@ -48,17 +69,22 @@ def test_claude_setup_apply_repair_uninstall_preserves_unrelated_config(tmp_path
         ["claude", "--apply", "--config-dir", str(config), "--plugin-root", str(_plugin_root())],
     )
     assert applied.exit_code == 0, applied.output
+    assert not legacy_backup.exists()
     installed = json.loads(settings.read_text(encoding="utf-8"))
     assert installed["theme"] == "dark"
     assert "SessionEnd" in installed["hooks"]
     assert "forecost" not in installed
     assert json.loads((config / "forecost-hook.json").read_text())["hook_protocol_version"] == 1
 
+    protocol_backup = config / "forecost-hook.json.forecost.bak"
+    protocol_backup.write_text('{"old":"private"}', encoding="utf-8")
+
     repaired = runner.invoke(
         setup,
         ["claude", "--repair", "--config-dir", str(config), "--plugin-root", str(_plugin_root())],
     )
     assert repaired.exit_code == 0
+    assert not protocol_backup.exists()
     assert len(json.loads(settings.read_text())["hooks"]["SessionEnd"]) == 1
 
     removed = runner.invoke(

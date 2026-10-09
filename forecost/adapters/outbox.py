@@ -8,37 +8,110 @@ import json
 import os
 import tempfile
 import threading
+from _thread import LockType
 from collections.abc import Callable, Iterator
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
 from forecost.adapters.base import Money, UsageEvent, normalize_usage_event
-from forecost.core.paths import chmod_private, ensure_private_dir, forecost_home
+from forecost.core.paths import (
+    chmod_private,
+    ensure_private_dir,
+    forecost_home,
+    open_private_file_descriptor,
+)
 
 OUTBOX_SCHEMA_VERSION = 1
+_THREAD_LOCKS_GUARD = threading.Lock()
+_THREAD_LOCKS: dict[str, LockType] = {}
+
+
+def _fsync_directory(path: Path) -> None:
+    """Persist directory-entry changes where the platform supports it."""
+    if os.name == "nt":  # Windows does not support opening directories this way.
+        return
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _ensure_durable_private_dir(path: Path) -> Path:
+    """Create a private directory and persist each newly created name."""
+    missing: list[Path] = []
+    candidate = path
+    while not candidate.exists():
+        missing.append(candidate)
+        if candidate == candidate.parent:  # pragma: no cover - filesystem root exists
+            break
+        candidate = candidate.parent
+    result: Path = ensure_private_dir(path)
+    for created in reversed(missing):
+        _fsync_directory(created.parent)
+    return result
+
+
+def _open_append(path: Path) -> tuple[int, bool]:
+    """Open an append target and report whether this call created its name."""
+    flags = os.O_WRONLY | os.O_APPEND
+    try:
+        return open_private_file_descriptor(path, flags | os.O_CREAT | os.O_EXCL), True
+    except FileExistsError:
+        return open_private_file_descriptor(path, flags), False
+
+
+def _thread_lock(path: Path) -> LockType:
+    key = os.path.normcase(os.path.abspath(os.fspath(path)))
+    with _THREAD_LOCKS_GUARD:
+        lock = _THREAD_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _THREAD_LOCKS[key] = lock
+        return lock
+
+
+def _lock_descriptor(descriptor: int) -> None:
+    if os.name == "nt":  # pragma: no cover - exercised on Windows CI
+        import msvcrt
+
+        if os.fstat(descriptor).st_size == 0:
+            os.write(descriptor, b"\0")
+            os.fsync(descriptor)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
+        return
+    import fcntl
+
+    fcntl.flock(descriptor, fcntl.LOCK_EX)
+
+
+def _unlock_descriptor(descriptor: int) -> None:
+    if os.name == "nt":  # pragma: no cover - exercised on Windows CI
+        import msvcrt
+
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
+        return
+    import fcntl
+
+    fcntl.flock(descriptor, fcntl.LOCK_UN)
 
 
 @contextlib.contextmanager
 def _file_lock(path: Path) -> Iterator[None]:
-    """Cross-process advisory lock on POSIX; process-local fallback elsewhere."""
-    descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
-    try:
+    """Serialize one queue across threads and processes on POSIX and Windows."""
+    with _thread_lock(path):
+        descriptor = open_private_file_descriptor(path, os.O_CREAT | os.O_RDWR)
         try:
-            import fcntl
-
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
-        except ImportError:  # pragma: no cover - Windows fallback
-            pass
-        yield
-    finally:
-        try:
-            import fcntl
-
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-        except ImportError:  # pragma: no cover - Windows fallback
-            pass
-        os.close(descriptor)
+            _lock_descriptor(descriptor)
+            yield
+        finally:
+            with contextlib.suppress(OSError):
+                _unlock_descriptor(descriptor)
+            os.close(descriptor)
 
 
 def _event_dict(event: UsageEvent) -> dict[str, object]:
@@ -91,9 +164,11 @@ class DurableEventOutbox:
 
     def _read_lines(self) -> list[str]:
         try:
-            return [line for line in self.path.read_text(encoding="utf-8").splitlines() if line]
+            descriptor = open_private_file_descriptor(self.path, os.O_RDONLY)
         except FileNotFoundError:
             return []
+        with os.fdopen(descriptor, "r", encoding="utf-8") as stream:
+            return [line for line in stream.read().splitlines() if line]
 
     def _write_lines(self, lines: list[str]) -> None:
         descriptor, temporary = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
@@ -105,6 +180,7 @@ class DurableEventOutbox:
                 os.fsync(stream.fileno())
             os.replace(temporary, self.path)
             chmod_private(self.path)
+            _fsync_directory(self.path.parent)
         except BaseException:
             with contextlib.suppress(OSError):
                 os.unlink(temporary)
@@ -128,18 +204,24 @@ class DurableEventOutbox:
         descriptor, temporary = tempfile.mkstemp(
             prefix=f".{self.stats_path.name}.", dir=self.stats_path.parent
         )
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(stats, stream, sort_keys=True, separators=(",", ":"))
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, self.stats_path)
-        chmod_private(self.stats_path)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                json.dump(stats, stream, sort_keys=True, separators=(",", ":"))
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.stats_path)
+            chmod_private(self.stats_path)
+            _fsync_directory(self.stats_path.parent)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(temporary)
+            raise
 
     def enqueue(self, event: UsageEvent) -> bool:
         with contextlib.suppress(ValueError):
             self.path.resolve().relative_to(forecost_home().resolve())
-            ensure_private_dir(forecost_home())
-        ensure_private_dir(self.path.parent)
+            _ensure_durable_private_dir(forecost_home())
+        _ensure_durable_private_dir(self.path.parent)
         queued_at = datetime.now(timezone.utc).isoformat()
         line = json.dumps(
             {
@@ -159,11 +241,14 @@ class DurableEventOutbox:
                 self._increment("dropped")
                 self._increment("fail_open")
                 return False
-            with self.path.open("a", encoding="utf-8") as stream:
+            descriptor, created = _open_append(self.path)
+            with os.fdopen(descriptor, "a", encoding="utf-8") as stream:
                 stream.write(line + "\n")
                 stream.flush()
                 os.fsync(stream.fileno())
             chmod_private(self.path)
+            if created:
+                _fsync_directory(self.path.parent)
             self._increment("accepted")
         self._wake.set()
         return True
@@ -175,11 +260,14 @@ class DurableEventOutbox:
             "error_type": type(error).__name__,
             "observed_at": datetime.now(timezone.utc).isoformat(),
         }
-        with self.poison_path.open("a", encoding="utf-8") as stream:
+        descriptor, created = _open_append(self.poison_path)
+        with os.fdopen(descriptor, "a", encoding="utf-8") as stream:
             stream.write(json.dumps(diagnostic, sort_keys=True, separators=(",", ":")) + "\n")
             stream.flush()
             os.fsync(stream.fileno())
         chmod_private(self.poison_path)
+        if created:
+            _fsync_directory(self.poison_path.parent)
         self._increment("poison")
 
     def drain(self, emit: Callable[[UsageEvent], object]) -> int:

@@ -7,8 +7,11 @@ import json
 import math
 import os
 import re
+import stat
 import tempfile
-from contextlib import suppress
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,7 +20,14 @@ import click
 
 from forecost.adapters.base import Money, PostingSpec, UsageEvent
 from forecost.core.errlog import log_error
-from forecost.core.paths import chmod_private, forecost_home
+from forecost.core.paths import (
+    OWNERSHIP_MARKER,
+    UnsafeDataPathError,
+    chmod_private,
+    ensure_private_dir,
+    forecost_home,
+    open_private_file_descriptor,
+)
 from forecost.ledger.sink import SyncLedgerSink
 
 _RECOVERY_FILES = ("recovery.jsonl", "legacy-recovery.jsonl")
@@ -25,6 +35,7 @@ _RECOVERY_GLOBS = ("recovery.*.jsonl", "legacy-recovery.*.jsonl")
 _POSTING_BASES = frozenset({"pricing_table", "source_reported", "plan_model"})
 _MAX_RECOVERY_BYTES = 64 * 1024 * 1024
 _SPOOL_NAME = re.compile(r"(?:legacy-)?recovery\.\d+\.\d+\.[0-9a-f]{32}\.jsonl")
+_RECOVERY_THREAD_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -35,6 +46,55 @@ class ReplayResult:
     pending: int
     archive: Path | None = None
     error: str | None = None
+    skipped: bool = False
+
+
+def _lock_descriptor(descriptor: int) -> None:
+    if os.name == "nt":  # pragma: no cover - exercised on Windows CI
+        import msvcrt
+
+        if os.fstat(descriptor).st_size == 0:
+            os.write(descriptor, b"\0")
+            os.fsync(descriptor)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
+        return
+    import fcntl
+
+    fcntl.flock(descriptor, fcntl.LOCK_EX)
+
+
+def _unlock_descriptor(descriptor: int) -> None:
+    if os.name == "nt":  # pragma: no cover - exercised on Windows CI
+        import msvcrt
+
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
+        return
+    import fcntl
+
+    fcntl.flock(descriptor, fcntl.LOCK_UN)
+
+
+@contextmanager
+def _recovery_root_lock(home: Path) -> Iterator[None]:
+    """Serialize destructive recovery acknowledgements across processes.
+
+    The ownership marker is a stable, owner-controlled inode, so replacement
+    of a queue cannot evade the lock. Current writers publish immutable unique
+    spools and do not need this lock; a spool created during replay remains a
+    separately discoverable queue for the next pass.
+    """
+    with _RECOVERY_THREAD_LOCK:
+        ensure_private_dir(home)
+        descriptor = open_private_file_descriptor(home / OWNERSHIP_MARKER, os.O_CREAT | os.O_RDWR)
+        try:
+            _lock_descriptor(descriptor)
+            yield
+        finally:
+            with suppress(OSError):
+                _unlock_descriptor(descriptor)
+            os.close(descriptor)
 
 
 def _legacy_event_uid(row: dict) -> str:
@@ -109,7 +169,7 @@ def _posting_basis(raw: dict) -> str:
 
 def _posting_amount(raw: dict) -> float:
     amount = raw.get("amount")
-    if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+    if isinstance(amount, bool) or not isinstance(amount, int | float):
         raise ValueError("posting amount must be numeric")
     numeric_amount = float(amount)
     if not math.isfinite(numeric_amount) or numeric_amount < 0:
@@ -167,6 +227,7 @@ def _rewrite_failed_lines(recovery: Path, failed_lines: list[str]) -> None:
         chmod_private(temp_path)
         os.replace(temp_path, recovery)
         chmod_private(recovery)
+        _fsync_directory(recovery.parent)
     except OSError:
         if temp_name is not None:
             with suppress(OSError):
@@ -208,7 +269,11 @@ def _replay_lines(sink: SyncLedgerSink, lines: list[str]) -> tuple[int, int, lis
                 duplicate += 1
         except Exception as exc:  # one bad record must not block independent records
             failed_lines.append(raw_line)
-            log_error("commands.recover", f"could not replay a recovery line: {exc!r}")
+            log_error(
+                "commands.recover",
+                "RECOVERY_RECORD_REJECTED",
+                fingerprint_source=exc,
+            )
     return replayed, duplicate, failed_lines
 
 
@@ -221,13 +286,25 @@ def _flush_or_retain_all(
     except Exception as exc:
         # The durable outcome is uncertain. Retaining every record is safe
         # because event_uid makes replay idempotent.
-        log_error("commands.recover", f"could not flush replayed records: {exc!r}")
+        log_error(
+            "commands.recover",
+            "RECOVERY_FLUSH_FAILED",
+            fingerprint_source=exc,
+        )
         return [line for line in lines if line.strip()]
 
 
-def _recover_file(recovery: Path) -> ReplayResult:
+def _recover_file_locked(recovery: Path) -> ReplayResult:
     try:
-        if recovery.stat().st_size > _MAX_RECOVERY_BYTES:
+        descriptor = open_private_file_descriptor(recovery, os.O_RDONLY)
+    except FileNotFoundError:
+        # Another recovery process may have completed this queue after both
+        # processes discovered it but before this process acquired the lock.
+        return ReplayResult(recovery, 0, 0, 0, skipped=True)
+    except (OSError, UnsafeDataPathError) as exc:
+        return ReplayResult(recovery, 0, 0, 0, error=f"could not read queue: {exc!r}")
+    try:
+        if os.fstat(descriptor).st_size > _MAX_RECOVERY_BYTES:
             return ReplayResult(
                 recovery,
                 0,
@@ -235,9 +312,14 @@ def _recover_file(recovery: Path) -> ReplayResult:
                 0,
                 error=f"queue exceeds {_MAX_RECOVERY_BYTES} bytes; split it before replay",
             )
-        lines = recovery.read_text(encoding="utf-8").splitlines()
+        with os.fdopen(descriptor, "r", encoding="utf-8") as stream:
+            descriptor = -1
+            lines = stream.read().splitlines()
     except (OSError, UnicodeError) as exc:
         return ReplayResult(recovery, 0, 0, 0, error=f"could not read queue: {exc!r}")
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     sink = SyncLedgerSink()
     replayed, duplicate, failed_lines = _replay_lines(sink, lines)
     failed_lines = _flush_or_retain_all(sink, lines, failed_lines)
@@ -247,16 +329,51 @@ def _recover_file(recovery: Path) -> ReplayResult:
     return _archive_replayed(recovery, replayed, duplicate)
 
 
+def _recover_file(recovery: Path) -> ReplayResult:
+    """Replay one queue while serializing its rewrite/unlink acknowledgement."""
+    with _recovery_root_lock(recovery.parent):
+        return _recover_file_locked(recovery)
+
+
+def _recovery_candidates(home: Path) -> set[Path]:
+    candidates = {home / name for name in _RECOVERY_FILES}
+    try:
+        for pattern in _RECOVERY_GLOBS:
+            candidates.update(
+                path for path in home.glob(pattern) if _SPOOL_NAME.fullmatch(path.name)
+            )
+    except OSError as exc:
+        raise click.ClickException(
+            "recovery discovery is inconclusive: the selected Forecost home could not be inspected"
+        ) from exc
+    return candidates
+
+
+def _recovery_metadata(path: Path) -> os.stat_result | None:
+    try:
+        return path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise click.ClickException(
+            "recovery discovery is inconclusive: a declared queue path could not be inspected"
+        ) from exc
+
+
 def _pending_recovery_paths(home: Path) -> list[Path]:
     """Find legacy shared queues and every immutable per-batch spool."""
-    candidates = {home / name for name in _RECOVERY_FILES}
-    for pattern in _RECOVERY_GLOBS:
-        candidates.update(path for path in home.glob(pattern) if _SPOOL_NAME.fullmatch(path.name))
-    return sorted(
-        path
-        for path in candidates
-        if ".replayed" not in path.name and path.is_file() and path.stat().st_size > 0
-    )
+    pending: list[Path] = []
+    for path in _recovery_candidates(home):
+        metadata = _recovery_metadata(path)
+        if metadata is None:
+            continue
+        # Unsafe candidate types remain visible to `_recover_file`, which will
+        # reject them without following a symlink or opening a device. Empty
+        # regular queues are the only discovered names that need no action.
+        is_regular = stat.S_ISREG(metadata.st_mode)
+        if ".replayed" not in path.name and (not is_regular or metadata.st_size > 0):
+            pending.append(path)
+    return sorted(pending)
 
 
 def _retain_failed(
@@ -265,40 +382,160 @@ def _retain_failed(
     try:
         _rewrite_failed_lines(recovery, failed_lines)
     except OSError as exc:
-        log_error("commands.recover", f"could not retain failed recovery lines: {exc!r}")
+        log_error(
+            "commands.recover",
+            "RECOVERY_RETAIN_FAILED",
+            fingerprint_source=exc,
+        )
         return ReplayResult(
             recovery,
             replayed,
             duplicate,
             len(failed_lines),
-            error="partial replay; original queue was left in place because rewrite failed",
+            error=(
+                "partial replay; pending-queue publication durability could not be confirmed; "
+                "inspect the current queue before retry"
+            ),
         )
     return ReplayResult(recovery, replayed, duplicate, len(failed_lines))
 
 
 def _archive_replayed(recovery: Path, replayed: int, duplicate: int) -> ReplayResult:
+    """Publish a finite replay receipt, then remove the successful raw queue.
+
+    Historical queues may contain raw paths. Moving the original bytes to a
+    ``.replayed`` file would keep the privacy defect alive after a successful
+    recovery. The archive therefore records counts and the queue schema only;
+    canonical normalized events already live in the ledger. The original is
+    deleted only after the summary is fsynced, so publication failure leaves it
+    available for idempotent retry.
+    """
     archive = _next_archive_path(recovery)
+    summary = json.dumps(
+        {
+            "schema_version": 2,
+            "record_type": "recovery_replay_summary",
+            "replayed": replayed,
+            "duplicate": duplicate,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     try:
-        recovery.replace(archive)
+        _write_replay_summary(archive, summary)
     except OSError as exc:
-        log_error("commands.recover", f"could not archive recovery file: {exc!r}")
+        log_error(
+            "commands.recover",
+            "RECOVERY_ARCHIVE_FAILED",
+            fingerprint_source=exc,
+        )
         return ReplayResult(
             recovery,
             replayed,
             duplicate,
             0,
-            error="replay succeeded, but the queue could not be archived and remains for retry",
+            error=(
+                "replay succeeded, but replay-summary publication durability could not be "
+                "confirmed; the source queue remains for idempotent retry"
+            ),
+        )
+    try:
+        recovery.unlink()
+    except OSError as exc:
+        log_error(
+            "commands.recover",
+            "RECOVERY_QUEUE_UNLINK_FAILED",
+            fingerprint_source=exc,
+        )
+        return ReplayResult(
+            recovery,
+            replayed,
+            duplicate,
+            0,
+            archive=archive,
+            error=(
+                "the replay summary is durable, but the raw queue could not be removed and "
+                "remains for idempotent retry"
+            ),
+        )
+    try:
+        _fsync_directory(recovery.parent)
+    except OSError as exc:
+        # Do not recreate successfully removed raw content merely to regain a
+        # retry path. The finite summary is durable; only crash persistence of
+        # the already-completed unlink is uncertain.
+        log_error(
+            "commands.recover",
+            "RECOVERY_QUEUE_UNLINK_SYNC_FAILED",
+            fingerprint_source=exc,
+        )
+        return ReplayResult(
+            recovery,
+            replayed,
+            duplicate,
+            0,
+            archive=archive,
+            error=(
+                "the replay summary is durable and the raw queue was removed, but crash "
+                "durability of that removal could not be confirmed"
+            ),
         )
     return ReplayResult(recovery, replayed, duplicate, 0, archive=archive)
 
 
+def _write_replay_summary(archive: Path, summary: str) -> None:
+    """Atomically publish a complete, non-content summary without overwriting."""
+    descriptor, temporary_raw = tempfile.mkstemp(
+        prefix=f".{archive.name}.", suffix=".tmp", dir=archive.parent
+    )
+    temporary = Path(temporary_raw)
+    try:
+        try:
+            material = (summary + "\n").encode("utf-8")
+            written = 0
+            while written < len(material):
+                count = os.write(descriptor, material[written:])
+                if count <= 0:  # pragma: no cover - OS write contract
+                    raise OSError("replay summary write made no progress")
+                written += count
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        # Hard-link publication is atomic and refuses an archive name won by a
+        # concurrent recovery process. The temporary and final names refer to
+        # the same already-fsynced inode until the private temporary is removed.
+        os.link(temporary, archive)
+        temporary.unlink()
+        _fsync_directory(archive.parent)
+    except BaseException:
+        with suppress(OSError):
+            temporary.unlink(missing_ok=True)
+        raise
+
+
+def _fsync_directory(path: Path) -> None:
+    """Persist directory-entry changes where the platform supports it."""
+    if os.name == "nt":  # Windows does not support opening directories this way.
+        return
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _report_result(result: ReplayResult) -> None:
+    if result.skipped:
+        click.echo(f"{result.path.name}: Already handled by another recovery process.")
+        return
     summary = (
         f"{result.path.name}: Recovered {result.replayed} event(s) "
         f"({result.duplicate} already present, {result.pending} still pending)."
     )
     if result.error:
-        click.echo(f"{summary} ERROR: {result.error}.")
+        archive_note = f" Durable summary: {result.archive.name}." if result.archive else ""
+        click.echo(f"{summary} ERROR: {result.error}.{archive_note}")
     elif result.archive:
         click.echo(f"{summary} Archived to {result.archive.name}.")
     else:

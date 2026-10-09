@@ -64,7 +64,11 @@ def main() -> None:
         with contextlib.suppress(Exception):
             from forecost.core.errlog import log_error
 
-            log_error(f"hooks.{command}", f"handler failed: {exc!r}")
+            log_error(
+                f"hooks.{command}",
+                "HOOK_HANDLER_FAILED",
+                fingerprint_source=exc,
+            )
     sys.exit(0)
 
 

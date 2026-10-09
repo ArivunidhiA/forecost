@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -113,11 +112,16 @@ def _install(settings: dict[str, object]) -> dict[str, object]:
 
 
 def _write_settings(path: Path, settings: dict[str, object]) -> None:
+    """Atomically replace one managed JSON file without retaining host content.
+
+    Older Forecost builds copied the complete host settings file to a durable
+    ``.forecost.bak`` sibling. That could retain unrelated credentials and
+    settings after uninstall. Atomic replacement already leaves the original
+    intact until commit, so current writes remove that exact legacy-owned
+    backup after a successful replace instead of creating another copy.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     backup = path.with_suffix(path.suffix + ".forecost.bak")
-    if path.is_file() and not backup.exists():
-        shutil.copy2(path, backup)
-        backup.chmod(0o600)
     descriptor, temporary_raw = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(temporary_raw)
     try:
@@ -127,6 +131,7 @@ def _write_settings(path: Path, settings: dict[str, object]) -> None:
             os.fsync(stream.fileno())
         temporary.chmod(0o600)
         temporary.replace(path)
+        backup.unlink(missing_ok=True)
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
@@ -179,7 +184,9 @@ def _validate_plugin(root: Path) -> None:
 def _check(path: Path, settings: dict[str, object]) -> None:
     state = "installed" if _installed(settings) and _protocol_installed(path) else "not installed"
     click.echo(
-        f"Claude plugin package: ready; managed config: {state}; protocol v{HOOK_PROTOCOL_VERSION}."
+        "Claude plugin source shape: present (not approved/install-ready); "
+        f"managed config: {state}; protocol v{HOOK_PROTOCOL_VERSION}; "
+        "0.3 remains under the release hold in docs/status.md."
     )
 
 

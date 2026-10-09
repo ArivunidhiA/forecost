@@ -25,17 +25,21 @@ def _doctor_payload(home: Path, conn) -> dict[str, object]:
     ).fetchone()[0]
     resource_scopes = conn.execute("SELECT COUNT(*) FROM resource_scopes").fetchone()[0]
     billed_charges = conn.execute(
-        "SELECT COUNT(*) FROM charges WHERE authority = 'billed'"
+        "SELECT COUNT(*) FROM charges c WHERE authority = 'billed' AND NOT EXISTS ("
+        "SELECT 1 FROM charges newer WHERE newer.supersedes_charge_id = c.charge_id)"
     ).fetchone()[0]
     return {
         "schema_version": 1,
         "version": __version__,
+        "product_state": "UNRELEASED EXPERIMENTAL",
+        "release_hold": True,
+        "release_hold_reference": "docs/status.md",
         "home": str(home),
         "home_exists": home.exists(),
         "stores": {
             "canonical": {
                 "path": str(home / "ledger.db"),
-                "role": "supported receipt ledger",
+                "role": "unreleased experimental receipt ledger",
             },
             "legacy": {
                 "path": str(home / "costs.db"),
@@ -56,13 +60,25 @@ def _doctor_payload(home: Path, conn) -> dict[str, object]:
         "readiness": {
             "claude_code": "OBSERVED" if claude_observations else "NOT OBSERVED",
             "resource_envelope": "OBSERVED" if resource_scopes else "NOT OBSERVED",
-            "provider_billing": "OBSERVED" if billed_charges else "NOT OBSERVED",
+            "provider_billing": (
+                "BILLED-LABELLED EVIDENCE PRESENT; AUTHENTICATION NOT VERIFIED BY DOCTOR"
+                if billed_charges
+                else "NOT OBSERVED"
+            ),
             "distributed_enforcement": "NOT OBSERVED",
         },
         "limitations": [
             "Claude Code hooks are fail-open local observation, not provider-side containment.",
-            "Provider-billed authority requires an imported local export.",
-            "Legacy costs.db is never read by current receipt or MCP queries.",
+            "Provider-billed authority requires an authenticated provider source/profile; "
+            "an arbitrary local export is only a user-imported claim.",
+            "The 0.3 checkout is under a P0 release hold; see docs/status.md.",
+            "Legacy costs.db is never read by current receipt or MCP queries, but the "
+            "legacy SDK can persist project names, paths, and metadata there.",
+            "Privacy verification and purge cover one selected Forecost home; exports, "
+            "integration configuration/backups, and configured state outside that root "
+            "need a separate inventory.",
+            "Local digests and ownership checks do not resist coordinated rewrite by "
+            "code running as the same OS user.",
         ],
     }
 
@@ -73,6 +89,7 @@ def _echo_home(home: Path) -> None:
     click.echo(f"  home: {home}" + (" (via FORECOST_HOME)" if override else " (default)"))
     click.echo(f"  home exists: {home.exists()}")
     click.echo(f"  pricing table: {PRICING_SNAPSHOT_VERSION}")
+    click.echo("  state: UNRELEASED EXPERIMENTAL — P0 RELEASE HOLD (see docs/status.md)")
 
 
 def _echo_ledger(conn) -> None:
@@ -124,7 +141,13 @@ def _echo_recovery(home) -> None:
 
 def _echo_limitations() -> None:
     click.echo("\nKnown limitations:")
-    click.echo("  - Marketplace plugin bootstrap is currently supported on macOS/Linux.")
+    click.echo("  - No supported PyPI or marketplace install exists for unreleased 0.3.")
+    click.echo("  - An arbitrary local billing export is not authenticated provider evidence.")
+    click.echo("  - Legacy SDK/costs.db project configuration is outside the current-ledger")
+    click.echo("    content-exclusion contract.")
+    click.echo("  - Privacy verification and purge cover one selected Forecost home, not")
+    click.echo("    exports, integration backups, or configured state outside that root.")
+    click.echo("  - Local digests and ownership checks do not resist the same OS user.")
     click.echo("  - Estimator stays in shadow mode until calibration gates pass (see")
     click.echo("    `forecost calibration`).")
     click.echo(

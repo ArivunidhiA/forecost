@@ -1,6 +1,9 @@
 """Tests for `forecost recover` (recovery.jsonl replay)."""
 
 import json
+import multiprocessing
+import os
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -12,6 +15,39 @@ from forecost.adapters.base import content_free_identifier
 from forecost.cli import main
 from forecost.commands import recover_cmd
 from forecost.ledger.db import get_ledger_db
+
+
+def _recovery_result(label, result):
+    return {
+        "label": label,
+        "replayed": result.replayed,
+        "pending": result.pending,
+        "skipped": result.skipped,
+        "error": result.error,
+    }
+
+
+def _paused_recovery_worker(home, replay_started, release_replay, results):
+    os.environ["FORECOST_HOME"] = home
+    original_replay = recover_cmd._replay_lines
+
+    def replay_after_release(sink, lines):
+        replay_started.set()
+        if not release_replay.wait(10):
+            raise TimeoutError("test did not release recovery replay")
+        return original_replay(sink, lines)
+
+    recover_cmd._replay_lines = replay_after_release
+    result = recover_cmd._recover_file(Path(home) / "recovery.jsonl")
+    results.put(_recovery_result("first", result))
+
+
+def _contending_recovery_worker(home, attempted, finished, results):
+    os.environ["FORECOST_HOME"] = home
+    attempted.set()
+    result = recover_cmd._recover_file(Path(home) / "recovery.jsonl")
+    results.put(_recovery_result("second", result))
+    finished.set()
 
 
 def _spill_line(event_uid, tokens_out=1_000_000):
@@ -50,7 +86,16 @@ def test_recover_replays_and_archives(tmp_path, monkeypatch):
     assert n == 2
     # File archived, so a second run is a no-op replay.
     assert not (tmp_path / "recovery.jsonl").exists()
-    assert (tmp_path / "recovery.replayed.jsonl").exists()
+    archive = tmp_path / "recovery.replayed.jsonl"
+    assert archive.exists()
+    archived = json.loads(archive.read_text())
+    assert archived == {
+        "duplicate": 0,
+        "record_type": "recovery_replay_summary",
+        "replayed": 2,
+        "schema_version": 2,
+    }
+    assert "/tmp/p" not in archive.read_text()
     ledger_db.reset_connection_for_tests()
 
 
@@ -59,6 +104,43 @@ def test_recover_no_file(tmp_path, monkeypatch):
     result = CliRunner().invoke(main, ["recover"])
     assert result.exit_code == 0
     assert "No recovery file" in result.output
+
+
+def test_recover_is_inconclusive_when_declared_queue_cannot_be_statted(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORECOST_HOME", str(tmp_path))
+    target = tmp_path / "recovery.jsonl"
+    real_lstat = recover_cmd.Path.lstat
+
+    def denied(path):
+        if path == target:
+            raise PermissionError("synthetic queue denial")
+        return real_lstat(path)
+
+    monkeypatch.setattr(recover_cmd.Path, "lstat", denied)
+
+    result = CliRunner().invoke(main, ["recover"])
+
+    assert result.exit_code != 0
+    assert "recovery discovery is inconclusive" in result.output
+    assert "No recovery file" not in result.output
+
+
+def test_recover_is_inconclusive_when_home_glob_fails(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORECOST_HOME", str(tmp_path))
+    real_glob = recover_cmd.Path.glob
+
+    def denied(path, pattern):
+        if path == tmp_path:
+            raise PermissionError("synthetic home denial")
+        return real_glob(path, pattern)
+
+    monkeypatch.setattr(recover_cmd.Path, "glob", denied)
+
+    result = CliRunner().invoke(main, ["recover"])
+
+    assert result.exit_code != 0
+    assert "recovery discovery is inconclusive" in result.output
+    assert "No recovery file" not in result.output
 
 
 def test_recover_keeps_only_failed_lines_for_retry(tmp_path, monkeypatch):
@@ -201,6 +283,58 @@ def test_spill_published_during_recovery_remains_for_next_pass(tmp_path, monkeyp
     ledger_db.reset_connection_for_tests()
 
 
+def test_cross_process_recovery_serializes_rewrite_and_unlink(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORECOST_HOME", str(tmp_path))
+    (tmp_path / "recovery.jsonl").write_text(_spill_line("one-cross-process-record") + "\n")
+    context = multiprocessing.get_context("spawn")
+    replay_started = context.Event()
+    release_replay = context.Event()
+    contender_attempted = context.Event()
+    contender_finished = context.Event()
+    results = context.Queue()
+    first = context.Process(
+        target=_paused_recovery_worker,
+        args=(str(tmp_path), replay_started, release_replay, results),
+    )
+    second = context.Process(
+        target=_contending_recovery_worker,
+        args=(str(tmp_path), contender_attempted, contender_finished, results),
+    )
+
+    first.start()
+    try:
+        assert replay_started.wait(10)
+        second.start()
+        assert contender_attempted.wait(10)
+        assert not contender_finished.wait(0.25)
+    finally:
+        release_replay.set()
+    first.join(15)
+    second.join(15)
+
+    assert first.exitcode == 0
+    assert second.exitcode == 0
+    outcomes = {item["label"]: item for item in (results.get(timeout=2), results.get(timeout=2))}
+    assert outcomes["first"] == {
+        "label": "first",
+        "replayed": 1,
+        "pending": 0,
+        "skipped": False,
+        "error": None,
+    }
+    assert outcomes["second"] == {
+        "label": "second",
+        "replayed": 0,
+        "pending": 0,
+        "skipped": True,
+        "error": None,
+    }
+    with sqlite3.connect(tmp_path / "ledger.db") as conn:
+        assert conn.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0] == 1
+    assert not (tmp_path / "recovery.jsonl").exists()
+    assert len(list(tmp_path.glob("recovery.replayed*.jsonl"))) == 1
+
+
 def test_recover_processes_current_and_legacy_queue_files(tmp_path, monkeypatch):
     monkeypatch.setenv("FORECOST_HOME", str(tmp_path))
     from forecost.ledger import db as ledger_db
@@ -279,6 +413,18 @@ def test_rewrite_failed_lines_cleans_temporary_file_on_replace_failure(tmp_path,
     assert list(tmp_path.glob(".recovery-*.tmp")) == []
 
 
+def test_rewrite_failed_lines_fsyncs_replacement_directory(tmp_path, monkeypatch):
+    recovery = tmp_path / "recovery.jsonl"
+    recovery.write_text("original\n")
+    synced: list[Path] = []
+    monkeypatch.setattr(recover_cmd, "_fsync_directory", synced.append)
+
+    recover_cmd._rewrite_failed_lines(recovery, ["pending"])
+
+    assert recovery.read_text() == "pending\n"
+    assert synced == [tmp_path]
+
+
 def test_archive_path_skips_existing_numbered_archives(tmp_path):
     recovery = tmp_path / "recovery.jsonl"
     (tmp_path / "recovery.replayed.jsonl").touch()
@@ -316,6 +462,35 @@ def test_recover_file_reports_unreadable_queue(tmp_path):
     assert "could not read queue" in result.error
 
 
+def test_recovery_discovery_and_open_never_follow_queue_symlink(tmp_path):
+    target = tmp_path / "operator-private.jsonl"
+    original = _spill_line("must-not-be-replayed") + "\n"
+    target.write_text(original)
+    recovery = tmp_path / "recovery.jsonl"
+    recovery.symlink_to(target)
+
+    assert recover_cmd._pending_recovery_paths(tmp_path) == [recovery]
+    result = recover_cmd._recover_file(recovery)
+
+    assert result.error is not None
+    assert "could not read queue" in result.error
+    assert recovery.is_symlink()
+    assert target.read_text() == original
+    assert not (tmp_path / "ledger.db").exists()
+
+
+def test_recovery_discovery_surfaces_nonregular_queue_for_safe_rejection(tmp_path):
+    recovery = tmp_path / "recovery.jsonl"
+    recovery.mkdir()
+
+    assert recover_cmd._pending_recovery_paths(tmp_path) == [recovery]
+    result = recover_cmd._recover_file(recovery)
+
+    assert result.error is not None
+    assert "could not read queue" in result.error
+    assert recovery.is_dir()
+
+
 def test_retain_failed_reports_atomic_rewrite_failure(tmp_path, monkeypatch):
     recovery = tmp_path / "recovery.jsonl"
     recovery.write_text("original\n")
@@ -329,23 +504,101 @@ def test_retain_failed_reports_atomic_rewrite_failure(tmp_path, monkeypatch):
 
     assert result.pending == 1
     assert result.error is not None
-    assert "original queue was left in place" in result.error
+    assert "publication durability could not be confirmed" in result.error
 
 
 def test_archive_failure_is_reported_as_retryable(tmp_path, monkeypatch):
     recovery = tmp_path / "recovery.jsonl"
-    recovery.write_text(_spill_line("archive-failure") + "\n")
+    original = _spill_line("archive-failure") + "\n"
+    recovery.write_text(original)
 
-    def fail_replace(self, target):
+    def fail_summary(archive, summary):
         raise OSError("read-only filesystem")
 
-    monkeypatch.setattr(Path, "replace", fail_replace)
+    monkeypatch.setattr(recover_cmd, "_write_replay_summary", fail_summary)
 
     result = recover_cmd._archive_replayed(recovery, 1, 0)
 
     assert result.archive is None
     assert result.error is not None
-    assert "could not be archived" in result.error
+    assert "publication durability could not be confirmed" in result.error
+    assert recovery.read_text() == original
+
+
+def test_archive_keeps_raw_queue_when_source_unlink_fails(tmp_path, monkeypatch):
+    recovery = tmp_path / "recovery.jsonl"
+    original = _spill_line("unlink-failure") + "\n"
+    recovery.write_text(original)
+    real_unlink = Path.unlink
+
+    def fail_source_unlink(self, *args, **kwargs):
+        if self == recovery:
+            raise OSError("synthetic unlink failure")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_source_unlink)
+
+    result = recover_cmd._archive_replayed(recovery, 1, 0)
+
+    archive = tmp_path / "recovery.replayed.jsonl"
+    assert result.archive == archive
+    assert result.error is not None
+    assert "raw queue could not be removed" in result.error
+    assert recovery.read_text() == original
+    assert archive.exists()
+
+
+def test_archive_reports_uncertain_summary_publication_and_keeps_raw_queue(tmp_path, monkeypatch):
+    recovery = tmp_path / "recovery.jsonl"
+    original = _spill_line("summary-directory-sync") + "\n"
+    recovery.write_text(original)
+
+    def fail_directory_sync(path: Path) -> None:
+        raise OSError(f"could not sync {path}")
+
+    monkeypatch.setattr(recover_cmd, "_fsync_directory", fail_directory_sync)
+
+    result = recover_cmd._archive_replayed(recovery, 1, 0)
+
+    assert result.archive is None
+    assert result.error is not None
+    assert "summary publication durability could not be confirmed" in result.error
+    assert recovery.read_text() == original
+    archive = tmp_path / "recovery.replayed.jsonl"
+    assert json.loads(archive.read_text()) == {
+        "duplicate": 0,
+        "record_type": "recovery_replay_summary",
+        "replayed": 1,
+        "schema_version": 2,
+    }
+    assert not list(tmp_path.glob(".recovery.replayed.jsonl.*.tmp"))
+
+
+def test_archive_reports_final_unlink_sync_failure_without_recreating_raw_content(
+    tmp_path, monkeypatch
+):
+    recovery = tmp_path / "recovery.jsonl"
+    recovery.write_text(_spill_line("unlink-directory-sync") + "\n")
+    sync_count = 0
+
+    def fail_second_directory_sync(path: Path) -> None:
+        nonlocal sync_count
+        assert path == tmp_path
+        sync_count += 1
+        if sync_count == 2:
+            raise OSError("final directory sync failed")
+
+    monkeypatch.setattr(recover_cmd, "_fsync_directory", fail_second_directory_sync)
+
+    result = recover_cmd._archive_replayed(recovery, 1, 0)
+
+    archive = tmp_path / "recovery.replayed.jsonl"
+    assert sync_count == 2
+    assert result.archive == archive
+    assert result.error is not None
+    assert "crash durability of that removal could not be confirmed" in result.error
+    assert archive.exists()
+    assert not recovery.exists()
 
 
 def test_recover_exits_nonzero_when_any_queue_needs_retry(tmp_path, monkeypatch):

@@ -1,4 +1,4 @@
-"""forecost - a local, content-free ledger for AI agent work.
+"""forecost - an experimental local, content-minimizing ledger for AI agent work.
 
 The public SDK names below (auto_track/track/interceptor) are the LEGACY
 calendar-spend product's surface, kept for backward compatibility; the current

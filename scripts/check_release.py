@@ -63,7 +63,11 @@ def _validate_capabilities(version: str) -> None:
     if cli.get("legacy_root_aliases") is not False:
         raise ValueError("capabilities may not advertise hidden legacy root aliases")
     mcp = capabilities.get("interfaces", {}).get("mcp", {})
-    if mcp.get("tools") != ["forecost_list_runs", "forecost_get_receipt"]:
+    if mcp.get("tools") != [
+        "forecost_list_runs",
+        "forecost_get_receipt",
+        "forecost_compare_runs",
+    ]:
         raise ValueError("MCP capability surface must contain only canonical read tools")
     if "read-only" not in str(mcp.get("store", "")):
         raise ValueError("MCP capability store boundary must be read-only")
@@ -116,6 +120,18 @@ def _validate_public_claims() -> None:
                 )
 
 
+def _validate_release_authorization() -> None:
+    """Refuse an external tag while the machine-readable release hold is active."""
+    capabilities = json.loads((ROOT / "docs/capabilities.json").read_text(encoding="utf-8"))
+    if capabilities.get("release_hold") is not False:
+        raise ValueError(
+            "docs/capabilities.json release_hold must be explicitly false before publication"
+        )
+    blockers = capabilities.get("known_p0_blockers")
+    if not isinstance(blockers, list) or blockers:
+        raise ValueError("known_p0_blockers must be an explicit empty list before publication")
+
+
 def check_release(tag: str | None = None) -> str:
     """Validate release metadata and return the unique package version."""
     versions = release_versions()
@@ -136,6 +152,8 @@ def check_release(tag: str | None = None) -> str:
         rf"^## \[{re.escape(version)}\]\s+-\s+Unreleased\s*$", changelog, re.MULTILINE
     ):
         raise ValueError(f"CHANGELOG.md still marks {version} as Unreleased")
+    if tag is not None:
+        _validate_release_authorization()
     return version
 
 

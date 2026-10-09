@@ -29,7 +29,7 @@ class ReceiptGroup(click.Group):
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
         if args and args[0] != "diff" and not args[0].startswith("-"):
             args[:] = _reorder_receipt_args(args)
-        return super().parse_args(ctx, args)
+        return cast(list[str], super().parse_args(ctx, args))
 
 
 def _validated_run_id(run_id: str | None, json_output: bool, markdown: bool) -> str:

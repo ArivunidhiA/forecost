@@ -1,5 +1,17 @@
 # Forecost completion checklist
 
+> **Superseded as a release decision on 2026-08-13.** Checked boxes below record
+> what the 2026-08-09 implementation effort believed it had completed. A later
+> source/security red team found P0 raw-path/log, trace identity, timing,
+> competing-valuation, evidence-denominator, authority, purge, durability,
+> fail-closed, and installer defects. The current worktree has internal repairs
+> for those current-kernel paths, while external review, legacy-state,
+> authenticated-source, live-runtime, and publication gates remain open. Use
+> [`status.md`](status.md) and the
+> [master product/launch checklist](research/2026-08-13-master-product-launch-checklist.md).
+> This file does not authorize release or substitute for current receipt-v2 and
+> privacy evidence.
+
 **Execution branch:** `codex/forecost-product-core`  
 **Scope frozen:** 2026-08-09  
 **Authority:** this file tracks the work required before Forecost is ready for

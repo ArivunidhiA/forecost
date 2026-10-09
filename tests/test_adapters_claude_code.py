@@ -1,10 +1,24 @@
 import json
+import os
+from pathlib import Path
 
 import pytest
 
+from forecost.adapters import claude_code as claude_adapter
 from forecost.adapters.base import LedgerSink, UsageEvent, content_free_identifier
-from forecost.adapters.claude_code import ClaudeCodeAdapter
+from forecost.adapters.claude_code import (
+    ClaudeCodeAdapter,
+    _cursor_key,
+    ingest_causal_paths,
+)
+from forecost.core.local_identity import installation_key
 from forecost.ledger.state_store import LedgerIngestStateStore
+
+
+@pytest.fixture(autouse=True)
+def _isolated_identity_home(tmp_path, monkeypatch):
+    """Cursor HMAC keys must never escape a test's temporary installation."""
+    monkeypatch.setenv("FORECOST_HOME", str(tmp_path / "forecost-home"))
 
 
 class _CollectingSink(LedgerSink):
@@ -513,4 +527,508 @@ def test_prompt_identity_survives_incremental_poll_boundary(tmp_path, ledger_con
         )
 
     assert adapter.poll(state, sink) == 1
-    assert sink.events[0].run_id == "persisted-prompt"
+    assert sink.events[0].run_id == content_free_identifier("run", "persisted-prompt")
+
+
+def test_cursor_keys_are_keyed_distinct_and_cover_usage_and_causal_state(tmp_path, ledger_conn):
+    left = tmp_path / "workspace-left"
+    right = tmp_path / "workspace-right"
+    left.mkdir()
+    right.mkdir()
+    record = {
+        "type": "assistant",
+        "requestId": "cursor-key-test",
+        "uuid": "cursor-key-test",
+        "sessionId": "cursor-session",
+        "promptId": "cursor-prompt",
+        "timestamp": "2026-07-01T00:00:00Z",
+        "message": {
+            "model": "claude-sonnet-4-20250514",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        },
+    }
+    first = left / "same-name.jsonl"
+    second = right / "same-name.jsonl"
+    _write_session(first, [record])
+    _write_session(second, [{**record, "requestId": "cursor-key-test-2"}])
+    state = LedgerIngestStateStore(ledger_conn)
+    adapter = ClaudeCodeAdapter(claude_dir=tmp_path)
+
+    assert adapter.poll(state, _CollectingSink()) == 2
+    assert ingest_causal_paths([first, second], state, ledger_conn) > 0
+
+    rows = ledger_conn.execute(
+        "SELECT source, cursor_key, cursor_val FROM ingest_state ORDER BY source, cursor_key"
+    ).fetchall()
+    assert len(rows) == 4
+    assert len({str(row["cursor_key"]) for row in rows}) == 4
+    for row in rows:
+        assert str(row["cursor_key"]).startswith("cursor-hmac:v1:")
+        assert str(first) not in str(row["cursor_key"])
+        assert str(second) not in str(row["cursor_key"])
+        assert "cursor-prompt" not in str(row["cursor_val"])
+
+
+def test_boolean_cursor_offset_rewinds_instead_of_skipping_transcript(tmp_path, ledger_conn):
+    transcript = tmp_path / "session.jsonl"
+    _write_session(
+        transcript,
+        [
+            {
+                "type": "assistant",
+                "requestId": "boolean-offset",
+                "sessionId": "boolean-session",
+                "timestamp": "2026-07-01T00:00:00Z",
+                "message": {
+                    "model": "claude-sonnet-4-20250514",
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                },
+            }
+        ],
+    )
+    state = LedgerIngestStateStore(ledger_conn)
+    key = _cursor_key("claude_code", str(transcript), installation_key())
+    state.set("claude_code", key, json.dumps({"offset": True}))
+    sink = _CollectingSink()
+
+    assert ClaudeCodeAdapter(claude_dir=tmp_path).poll(state, sink) == 1
+    assert [event.event_uid for event in sink.events] == ["cc:boolean-offset"]
+
+
+def test_same_path_atomic_replacement_resets_cursor_and_ingests_new_record(tmp_path, ledger_conn):
+    transcript = tmp_path / "session.jsonl"
+
+    def record(request_id: str) -> dict[str, object]:
+        return {
+            "type": "assistant",
+            "requestId": request_id,
+            "sessionId": "replacement-session",
+            "timestamp": "2026-07-01T00:00:00Z",
+            "message": {
+                "model": "claude-sonnet-4-20250514",
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            },
+        }
+
+    _write_session(transcript, [record("replacement-first")])
+    state = LedgerIngestStateStore(ledger_conn)
+    adapter = ClaudeCodeAdapter(claude_dir=tmp_path)
+    first_sink = _CollectingSink()
+    assert adapter.poll(state, first_sink) == 1
+
+    replacement = tmp_path / "replacement.jsonl"
+    _write_session(replacement, [record("replacement-second")])
+    replacement.replace(transcript)
+    second_sink = _CollectingSink()
+
+    assert adapter.poll(state, second_sink) == 1
+    assert [event.event_uid for event in second_sink.events] == ["cc:replacement-second"]
+
+
+def test_same_inode_prefix_rewrite_resets_cursor(tmp_path, ledger_conn):
+    transcript = tmp_path / "session.jsonl"
+    first = {
+        "type": "assistant",
+        "requestId": "same-inode-first",
+        "sessionId": "same-inode-session",
+        "timestamp": "2026-07-01T00:00:00Z",
+        "message": {
+            "model": "claude-sonnet-4-20250514",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        },
+    }
+    second = {**first, "requestId": "same-inode-other"}
+    _write_session(transcript, [first])
+    state = LedgerIngestStateStore(ledger_conn)
+    adapter = ClaudeCodeAdapter(claude_dir=tmp_path)
+    assert adapter.poll(state, _CollectingSink()) == 1
+
+    # Rewrite in place to preserve the inode and keep the file at least as long
+    # as the old cursor. The keyed prefix/boundary checkpoint must still reset.
+    transcript.write_text(json.dumps(second) + "\n " * 20, encoding="utf-8")
+    sink = _CollectingSink()
+
+    assert adapter.poll(state, sink) == 1
+    assert [event.event_uid for event in sink.events] == ["cc:same-inode-other"]
+
+
+def test_same_inode_middle_rewrite_resets_full_prefix_cursor(tmp_path, ledger_conn):
+    transcript = tmp_path / "long-session.jsonl"
+
+    def record(index: int, label: str = "old") -> dict[str, object]:
+        return {
+            "type": "assistant",
+            "requestId": f"middle-{label}-{index:03d}",
+            "sessionId": "middle-rewrite-session",
+            "timestamp": f"2026-07-01T00:00:{index % 60:02d}Z",
+            "message": {
+                "model": "claude-sonnet-4-20250514",
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            },
+        }
+
+    records = [record(index) for index in range(48)]
+    _write_session(transcript, records)
+    original_inode = transcript.stat().st_ino
+    original_size = transcript.stat().st_size
+    state = LedgerIngestStateStore(ledger_conn)
+    adapter = ClaudeCodeAdapter(claude_dir=tmp_path)
+    assert adapter.poll(state, _CollectingSink()) == 48
+
+    records[24] = record(24, "new")
+    _write_session(transcript, records)
+    assert transcript.stat().st_ino == original_inode
+    assert transcript.stat().st_size == original_size
+
+    replay = _CollectingSink()
+    assert adapter.poll(state, replay) == 48
+    assert "cc:middle-new-024" in {event.event_uid for event in replay.events}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows does not replace an open transcript")
+def test_atomic_replacement_between_validation_and_usage_read_loses_no_prefix(
+    tmp_path, ledger_conn, monkeypatch
+):
+    transcript = tmp_path / "race-session.jsonl"
+
+    def record(request_id: str, second: int) -> dict[str, object]:
+        return {
+            "type": "assistant",
+            "requestId": request_id,
+            "sessionId": "race-session",
+            "timestamp": f"2026-07-01T00:00:{second:02d}Z",
+            "message": {
+                "model": "claude-sonnet-4-20250514",
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            },
+        }
+
+    _write_session(transcript, [record("race-old", 0)])
+    state = LedgerIngestStateStore(ledger_conn)
+    adapter = ClaudeCodeAdapter(claude_dir=tmp_path)
+    assert adapter.poll_paths([transcript], state, _CollectingSink()) == 1
+
+    replacement = tmp_path / "race-replacement.jsonl"
+    _write_session(replacement, [record("race-new-prefix", 1), record("race-new-tail", 2)])
+    original_resume = claude_adapter._resume_cursor
+    swapped = False
+
+    def swap_after_validation(stream, cursor, identity_key):
+        nonlocal swapped
+        result = original_resume(stream, cursor, identity_key)
+        offset = result[0]
+        if result and offset > 0 and not swapped:
+            replacement.replace(transcript)
+            swapped = True
+        return result
+
+    monkeypatch.setattr(claude_adapter, "_resume_cursor", swap_after_validation)
+
+    # The already-open descriptor finishes the old file. The following poll
+    # detects the new inode, rewinds, and ingests the complete replacement.
+    assert adapter.poll_paths([transcript], state, _CollectingSink()) == 0
+    replay = _CollectingSink()
+    assert adapter.poll_paths([transcript], state, replay) == 2
+    assert [event.event_uid for event in replay.events] == [
+        "cc:race-new-prefix",
+        "cc:race-new-tail",
+    ]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows does not replace an open transcript")
+def test_atomic_replacement_between_validation_and_causal_read_loses_no_prefix(
+    tmp_path, ledger_conn, monkeypatch
+):
+    transcript = tmp_path / "causal-race-session.jsonl"
+
+    def record(request_id: str, second: int) -> dict[str, object]:
+        return {
+            "type": "assistant",
+            "requestId": request_id,
+            "uuid": request_id,
+            "sessionId": "causal-race-session",
+            "promptId": "causal-race-prompt",
+            "timestamp": f"2026-07-01T00:00:{second:02d}Z",
+            "message": {
+                "model": "claude-sonnet-4-20250514",
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            },
+        }
+
+    _write_session(transcript, [record("causal-race-old", 0)])
+    state = LedgerIngestStateStore(ledger_conn)
+    assert ingest_causal_paths([transcript], state, ledger_conn) == 3
+
+    replacement = tmp_path / "causal-race-replacement.jsonl"
+    _write_session(
+        replacement,
+        [record("causal-race-new-prefix", 1), record("causal-race-new-tail", 2)],
+    )
+    original_resume = claude_adapter._resume_cursor
+    swapped = False
+
+    def swap_after_validation(stream, cursor, identity_key):
+        nonlocal swapped
+        result = original_resume(stream, cursor, identity_key)
+        offset = result[0]
+        if result and offset > 0 and not swapped:
+            replacement.replace(transcript)
+            swapped = True
+        return result
+
+    monkeypatch.setattr(claude_adapter, "_resume_cursor", swap_after_validation)
+
+    assert ingest_causal_paths([transcript], state, ledger_conn) == 0
+    assert ingest_causal_paths([transcript], state, ledger_conn) == 6
+
+
+@pytest.mark.parametrize("causal", [False, True], ids=["usage", "causal"])
+def test_fresh_cursor_attests_to_exact_bytes_processed(tmp_path, ledger_conn, monkeypatch, causal):
+    transcript = tmp_path / f"fresh-{causal}.jsonl"
+
+    def record(request_id: str) -> dict[str, object]:
+        return {
+            "type": "assistant",
+            "requestId": request_id,
+            "uuid": request_id,
+            "sessionId": "fresh-attestation-session",
+            "promptId": "fresh-attestation-prompt",
+            "timestamp": "2026-07-01T00:00:00Z",
+            "message": {
+                "model": "claude-sonnet-4-20250514",
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            },
+        }
+
+    old = record("fresh-request-old")
+    new = record("fresh-request-new")
+    _write_session(transcript, [old])
+    original_inode = transcript.stat().st_ino
+    original_size = transcript.stat().st_size
+    state = LedgerIngestStateStore(ledger_conn)
+    adapter = ClaudeCodeAdapter(claude_dir=tmp_path)
+    original_verify = claude_adapter._verified_processed_checkpoint
+    mutated = False
+
+    def mutate_before_verify(stream, offset, identity_key, processed_digest):
+        nonlocal mutated
+        if not mutated:
+            _write_session(transcript, [new])
+            mutated = True
+        return original_verify(stream, offset, identity_key, processed_digest)
+
+    monkeypatch.setattr(
+        claude_adapter,
+        "_verified_processed_checkpoint",
+        mutate_before_verify,
+    )
+
+    expected = 3 if causal else 1
+    if causal:
+        first = ingest_causal_paths([transcript], state, ledger_conn)
+        second = ingest_causal_paths([transcript], state, ledger_conn)
+        third = ingest_causal_paths([transcript], state, ledger_conn)
+    else:
+        first_sink = _CollectingSink()
+        second_sink = _CollectingSink()
+        first = adapter.poll_paths([transcript], state, first_sink)
+        second = adapter.poll_paths([transcript], state, second_sink)
+        third = adapter.poll_paths([transcript], state, _CollectingSink())
+        assert [event.event_uid for event in first_sink.events] == ["cc:fresh-request-old"]
+        assert [event.event_uid for event in second_sink.events] == ["cc:fresh-request-new"]
+
+    assert (first, second, third) == (expected, expected, 0)
+    assert transcript.stat().st_ino == original_inode
+    assert transcript.stat().st_size == original_size
+
+
+@pytest.mark.parametrize("causal", [False, True], ids=["usage", "causal"])
+def test_resumed_cursor_attests_to_exact_new_bytes_processed(
+    tmp_path, ledger_conn, monkeypatch, causal
+):
+    transcript = tmp_path / f"resumed-{causal}.jsonl"
+
+    def record(request_id: str, second: int) -> dict[str, object]:
+        return {
+            "type": "assistant",
+            "requestId": request_id,
+            "uuid": request_id,
+            "sessionId": "resumed-attestation-session",
+            "promptId": "resumed-attestation-prompt",
+            "timestamp": f"2026-07-01T00:00:{second:02d}Z",
+            "message": {
+                "model": "claude-sonnet-4-20250514",
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            },
+        }
+
+    base = record("resumed-base-000", 0)
+    old = record("resumed-request-old", 1)
+    new = record("resumed-request-new", 1)
+    _write_session(transcript, [base])
+    state = LedgerIngestStateStore(ledger_conn)
+    adapter = ClaudeCodeAdapter(claude_dir=tmp_path)
+    if causal:
+        assert ingest_causal_paths([transcript], state, ledger_conn) == 3
+    else:
+        assert adapter.poll_paths([transcript], state, _CollectingSink()) == 1
+    _write_session(transcript, [base, old])
+    original_inode = transcript.stat().st_ino
+    original_size = transcript.stat().st_size
+    original_verify = claude_adapter._verified_processed_checkpoint
+    mutated = False
+
+    def mutate_before_verify(stream, offset, identity_key, processed_digest):
+        nonlocal mutated
+        if not mutated:
+            _write_session(transcript, [base, new])
+            mutated = True
+        return original_verify(stream, offset, identity_key, processed_digest)
+
+    monkeypatch.setattr(
+        claude_adapter,
+        "_verified_processed_checkpoint",
+        mutate_before_verify,
+    )
+
+    expected = 3 if causal else 1
+    if causal:
+        first = ingest_causal_paths([transcript], state, ledger_conn)
+        second = ingest_causal_paths([transcript], state, ledger_conn)
+        third = ingest_causal_paths([transcript], state, ledger_conn)
+    else:
+        first_sink = _CollectingSink()
+        second_sink = _CollectingSink()
+        first = adapter.poll_paths([transcript], state, first_sink)
+        second = adapter.poll_paths([transcript], state, second_sink)
+        third = adapter.poll_paths([transcript], state, _CollectingSink())
+        assert [event.event_uid for event in first_sink.events] == ["cc:resumed-request-old"]
+        assert [event.event_uid for event in second_sink.events] == ["cc:resumed-request-new"]
+
+    assert (first, second, third) == (expected, expected, 0)
+    assert transcript.stat().st_ino == original_inode
+    assert transcript.stat().st_size == original_size
+
+
+def test_legacy_raw_cursor_migration_rewinds_conflict_and_removes_paths(tmp_path, ledger_conn):
+    project = tmp_path / "workspace"
+    project.mkdir()
+    transcript = project / "session.jsonl"
+    first = {
+        "type": "user",
+        "promptId": "legacy-secret-prompt",
+        "timestamp": "2026-07-01T00:00:00Z",
+        "message": {"content": "not persisted"},
+    }
+    second = {
+        "type": "assistant",
+        "requestId": "after-legacy-offset",
+        "sessionId": "legacy-session",
+        "timestamp": "2026-07-01T00:00:01Z",
+        "message": {
+            "model": "claude-sonnet-4-20250514",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        },
+    }
+    first_line = json.dumps(first) + "\n"
+    transcript.write_text(first_line + json.dumps(second) + "\n", encoding="utf-8")
+    state = LedgerIngestStateStore(ledger_conn)
+    source = ClaudeCodeAdapter.name
+    opaque = _cursor_key(source, str(transcript), installation_key())
+    now = "2026-07-01T00:00:00+00:00"
+    ledger_conn.executemany(
+        "INSERT INTO ingest_state (source, cursor_key, cursor_val, updated_at) VALUES (?,?,?,?)",
+        [
+            (
+                source,
+                str(transcript),
+                json.dumps(
+                    {"offset": len(first_line.encode()), "prompt_id": "legacy-secret-prompt"}
+                ),
+                now,
+            ),
+            (
+                source,
+                opaque,
+                json.dumps({"offset": transcript.stat().st_size, "prompt_id": "newer-prompt"}),
+                now,
+            ),
+        ],
+    )
+    ledger_conn.commit()
+
+    sink = _CollectingSink()
+    assert ClaudeCodeAdapter(claude_dir=tmp_path).poll(state, sink) == 1
+    assert [event.event_uid for event in sink.events] == ["cc:after-legacy-offset"]
+    rows = ledger_conn.execute(
+        "SELECT cursor_key, cursor_val FROM ingest_state WHERE source = ?", (source,)
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["cursor_key"] == opaque
+    assert str(transcript) not in rows[0]["cursor_key"]
+    assert "legacy-secret-prompt" not in rows[0]["cursor_val"]
+    assert "newer-prompt" not in rows[0]["cursor_val"]
+    database_path = next(
+        row[2] for row in ledger_conn.execute("PRAGMA database_list") if row[1] == "main"
+    )
+    for suffix in ("", "-wal", "-shm"):
+        candidate = Path(str(database_path) + suffix)
+        if candidate.is_file():
+            persisted = candidate.read_bytes()
+            assert str(transcript).encode() not in persisted
+            assert b"legacy-secret-prompt" not in persisted
+            assert b"newer-prompt" not in persisted
+
+
+def test_cursor_migration_collision_rolls_back_without_conflating_rows(ledger_conn):
+    state = LedgerIngestStateStore(ledger_conn)
+    now = "2026-07-01T00:00:00+00:00"
+    ledger_conn.executemany(
+        "INSERT INTO ingest_state (source, cursor_key, cursor_val, updated_at) VALUES (?,?,?,?)",
+        [
+            ("claude_code", "/workspace-a/same.jsonl", '{"offset":10}', now),
+            ("claude_code", "/workspace-b/same.jsonl", '{"offset":20}', now),
+        ],
+    )
+    ledger_conn.commit()
+
+    with pytest.raises(RuntimeError, match="identity collision"):
+        state.migrate_legacy_keys(
+            "claude_code",
+            lambda _old: "cursor-hmac:v1:" + "0" * 64,
+            lambda current, legacy: current or legacy,
+        )
+
+    keys = {
+        row["cursor_key"]
+        for row in ledger_conn.execute(
+            "SELECT cursor_key FROM ingest_state WHERE source='claude_code'"
+        )
+    }
+    assert keys == {"/workspace-a/same.jsonl", "/workspace-b/same.jsonl"}
+
+
+def test_legacy_cursor_migrates_even_when_transcript_tree_is_missing(tmp_path, ledger_conn):
+    state = LedgerIngestStateStore(ledger_conn)
+    raw_path = "/deleted/private/workspace/session.jsonl"
+    for source in ("claude_code", "claude_code_causal"):
+        state.set(
+            source,
+            raw_path,
+            json.dumps({"offset": 123, "prompt_id": "private-run-id"}),
+        )
+
+    adapter = ClaudeCodeAdapter(claude_dir=tmp_path / "does-not-exist")
+    assert adapter.poll(state, _CollectingSink()) == 0
+    assert ingest_causal_paths([], state, ledger_conn) == 0
+
+    rows = ledger_conn.execute(
+        "SELECT source, cursor_key, cursor_val FROM ingest_state "
+        "WHERE source IN ('claude_code', 'claude_code_causal')"
+    ).fetchall()
+    assert {row["source"] for row in rows} == {"claude_code", "claude_code_causal"}
+    for row in rows:
+        assert row["cursor_key"].startswith("cursor-hmac:v1:")
+        assert raw_path not in row["cursor_key"]
+        assert "private-run-id" not in row["cursor_val"]
+        assert json.loads(row["cursor_val"])["offset"] == 123

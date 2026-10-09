@@ -37,8 +37,14 @@ _CURRENT_COMMANDS: dict[str, _LazyCommand] = {
     "capture": (
         "forecost.commands.capture_cmd",
         "capture",
-        "Record content-free local test/build exit evidence.",
+        "Record bounded local test/build exit evidence.",
         "canonical ledger.db",
+    ),
+    "compare": (
+        "forecost.commands.compare_cmd",
+        "compare",
+        "Compare matched economic/outcome evidence or explain why it cannot qualify.",
+        "canonical ledger.db (read-only); optional caller-selected JSON manifests",
     ),
     "doctor": (
         "forecost.commands.doctor_cmd",
@@ -79,7 +85,7 @@ _CURRENT_COMMANDS: dict[str, _LazyCommand] = {
     "mark": (
         "forecost.commands.mark_cmd",
         "mark",
-        "Record explicit, content-free outcome evidence.",
+        "Record explicit, bounded outcome evidence.",
         "canonical ledger.db",
     ),
     "migrate": (
@@ -103,8 +109,8 @@ _CURRENT_COMMANDS: dict[str, _LazyCommand] = {
     "purge": (
         "forecost.commands.purge_cmd",
         "purge",
-        "Safely remove declared Forecost-owned data.",
-        "canonical ledger.db and explicitly listed legacy files",
+        "Remove a bounded file allowlist and report retained state.",
+        "known FORECOST_HOME files and cwd .forecost.toml; not exports/integration backups",
     ),
     "reconcile": (
         "forecost.commands.reconcile_cmd",
@@ -139,7 +145,7 @@ _CURRENT_COMMANDS: dict[str, _LazyCommand] = {
     "setup": (
         "forecost.commands.setup_cmd",
         "setup",
-        "Prepare integrations without host mutation.",
+        "Inspect or reversibly manage integrations; dry-run/check do not mutate.",
         "integration configuration; no ledger writes in dry-run/check mode",
     ),
     "statusline": (
@@ -281,7 +287,7 @@ class LazyLegacyGroup(click.Group):
 @click.group(cls=LazyGroup)
 @click.version_option(__version__, "--version", prog_name="forecost")
 def main() -> None:
-    """Local, content-free evidence receipts for AI-agent runs."""
+    """Experimental local, content-minimizing evidence receipts for AI-agent runs."""
 
 
 @main.group("legacy", cls=LazyLegacyGroup)

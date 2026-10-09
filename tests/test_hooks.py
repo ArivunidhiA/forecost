@@ -97,7 +97,7 @@ def test_handler_reconcile_ingests_from_transcript_path(hook_ledger, tmp_path):
 
 
 def _run_hook(command, payload, env):
-    proc = subprocess.run(  # noqa: S603 - fixed interpreter + module path, not user input
+    proc = subprocess.run(
         [sys.executable, "-m", "forecost.hooks.fastpath", command],
         input=json.dumps(payload),
         capture_output=True,
@@ -141,6 +141,7 @@ def test_prompt_submit_speaks_on_fanout(tmp_path):
 
 
 def test_malformed_stdin_fails_open(tmp_path):
+    # Fixed interpreter/module argv; malformed text is stdin, never a command.
     proc = subprocess.run(
         [sys.executable, "-m", "forecost.hooks.fastpath", "prompt-submit"],
         input="not json {{{",

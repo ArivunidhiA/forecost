@@ -47,7 +47,7 @@ def _log_internal_error(e: Exception) -> None:
     # and world-readable-log findings on the legacy stack.
     from forecost.core.errlog import log_error
 
-    log_error("interceptor", repr(e))
+    log_error("interceptor", "INTERCEPTOR_FAILED", fingerprint_source=e)
 
 
 def _extract_usage(data: dict) -> tuple[int, int, str] | None:

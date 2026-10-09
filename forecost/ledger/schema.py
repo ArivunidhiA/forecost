@@ -18,9 +18,20 @@ linear PRAGMA user_version ladder, not a migration framework.
 
 from __future__ import annotations
 
+import json
 import sqlite3
+from datetime import datetime
 
-SCHEMA_VERSION = 9
+from forecost.ledger.contracts import (
+    CAUSAL_SCHEMA_VERSION,
+    Authority,
+    CausalIdentity,
+    Observation,
+    opaque_id,
+    trace_scoped_span_key,
+)
+
+SCHEMA_VERSION = 11
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS workspaces (
@@ -172,7 +183,7 @@ CREATE TABLE IF NOT EXISTS guard_flags (
     user_action   TEXT
 );
 
--- v4: immutable, content-free causal/economic evidence.  These tables are
+-- v4: immutable, field-allowlisted causal/economic evidence. These tables are
 -- intentionally additive: v3 usage_events/postings remain readable while
 -- adapters graduate to the receipt kernel.
 CREATE TABLE IF NOT EXISTS journal_observations (
@@ -215,35 +226,63 @@ CREATE TABLE IF NOT EXISTS causal_runs (
     source_coverage_json TEXT NOT NULL DEFAULT '{}'
 );
 
+-- v10: identity registries enforce one trace per run and one owner per
+-- trace-scoped span even when a meter or charge arrives before the span.
+CREATE TABLE IF NOT EXISTS causal_run_identities (
+    run_id          TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    trace_id        TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS causal_span_identities (
+    span_key        TEXT PRIMARY KEY,
+    span_id         TEXT NOT NULL,
+    run_id          TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    trace_id        TEXT NOT NULL,
+    UNIQUE(trace_id, span_id)
+);
+
 CREATE TABLE IF NOT EXISTS causal_spans (
-    span_id          TEXT PRIMARY KEY,
+    span_key         TEXT PRIMARY KEY,
+    span_id          TEXT NOT NULL,
     run_id           TEXT NOT NULL,
     conversation_id  TEXT NOT NULL,
     trace_id         TEXT NOT NULL,
+    parent_span_key  TEXT,
     parent_span_id   TEXT,
     operation_kind   TEXT NOT NULL,
     lifecycle        TEXT NOT NULL,
     agent_id         TEXT,
     workflow_node_id TEXT,
     branch_id        TEXT,
+    attempt_of_span_key TEXT,
     attempt_of_span_id TEXT,
     checkpoint_id    TEXT,
     occurred_at      TEXT NOT NULL,
     observed_at      TEXT NOT NULL,
+    started_at       TEXT,
+    ended_at         TEXT,
+    duration_micros  INTEGER,
+    timing_semantic  TEXT,
+    timing_producer  TEXT,
     source_order     TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_causal_spans_run ON causal_spans(run_id, source_order);
 
 CREATE TABLE IF NOT EXISTS span_links (
+    span_key         TEXT NOT NULL,
+    linked_span_key  TEXT NOT NULL,
     span_id          TEXT NOT NULL,
     linked_span_id   TEXT NOT NULL,
     link_type        TEXT NOT NULL,
     observation_id   TEXT NOT NULL,
-    PRIMARY KEY(span_id, linked_span_id, link_type, observation_id)
+    PRIMARY KEY(span_key, linked_span_key, link_type, observation_id)
 );
 
 CREATE TABLE IF NOT EXISTS meter_facts (
     fact_id          TEXT PRIMARY KEY,
+    span_key         TEXT NOT NULL,
     span_id          TEXT NOT NULL,
     meter_name       TEXT NOT NULL,
     unit             TEXT NOT NULL,
@@ -256,11 +295,12 @@ CREATE TABLE IF NOT EXISTS meter_facts (
     observed_at      TEXT NOT NULL,
     observation_id   TEXT NOT NULL UNIQUE
 );
-CREATE INDEX IF NOT EXISTS idx_meter_facts_span ON meter_facts(span_id, meter_name);
+CREATE INDEX IF NOT EXISTS idx_meter_facts_span ON meter_facts(span_key, meter_name);
 
 CREATE TABLE IF NOT EXISTS charges (
     charge_id        TEXT PRIMARY KEY,
     fact_id          TEXT,
+    span_key         TEXT NOT NULL,
     span_id          TEXT NOT NULL,
     amount_micros    INTEGER NOT NULL,
     currency         TEXT NOT NULL,
@@ -275,7 +315,7 @@ CREATE TABLE IF NOT EXISTS charges (
     supersedes_charge_id TEXT,
     observation_id   TEXT NOT NULL UNIQUE
 );
-CREATE INDEX IF NOT EXISTS idx_charges_span ON charges(span_id, currency, authority);
+CREATE INDEX IF NOT EXISTS idx_charges_span ON charges(span_key, currency, authority);
 CREATE INDEX IF NOT EXISTS idx_charges_supersedes ON charges(supersedes_charge_id);
 CREATE INDEX IF NOT EXISTS idx_charges_authority_fact
     ON charges(authority, fact_id, currency, line_item, observed_at);
@@ -305,8 +345,9 @@ CREATE TABLE IF NOT EXISTS receipt_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_receipts_run ON receipt_snapshots(run_id, generated_at DESC);
 
--- v5: reproducible, source-aware reconciliation.  Aggregate provider exports
--- are evidence too; they are not force-matched to a local callback.
+-- v5: reproducible, source-aware reconciliation. Aggregate imports are
+-- evidence too; they are not force-matched to a local callback. Historical
+-- provider_* column names are compatibility storage labels, not authority.
 CREATE TABLE IF NOT EXISTS reconciliation_batches (
     batch_id          TEXT PRIMARY KEY,
     schema_version    INTEGER NOT NULL,
@@ -413,6 +454,12 @@ def apply_schema(conn: sqlite3.Connection) -> None:
         current_version = 8
     if current_version < 9:
         _migrate_v9_incremental_projection(conn)
+        current_version = 9
+    if current_version < 10:
+        _migrate_v10_trace_scoped_identity_and_timing(conn)
+        current_version = 10
+    if current_version < 11:
+        _migrate_v11_offline_import_authority(conn)
 
 
 def _migrate_reconciliation_uniqueness(conn: sqlite3.Connection) -> None:
@@ -554,6 +601,316 @@ def _migrate_v9_incremental_projection(conn: sqlite3.Connection) -> None:
             "), '') WHERE source_order=''"
         )
         conn.execute("PRAGMA user_version = 9")
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+_V10_PROJECTION_STATEMENTS = (
+    """
+    CREATE TABLE causal_run_identities (
+        run_id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        trace_id TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE causal_span_identities (
+        span_key TEXT PRIMARY KEY,
+        span_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        trace_id TEXT NOT NULL,
+        UNIQUE(trace_id, span_id)
+    )
+    """,
+    """
+    CREATE TABLE causal_runs (
+        run_id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        trace_id TEXT NOT NULL,
+        lifecycle TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        observed_at TEXT NOT NULL,
+        stop_reason TEXT,
+        source_order TEXT NOT NULL DEFAULT '',
+        source_coverage_json TEXT NOT NULL DEFAULT '{}'
+    )
+    """,
+    """
+    CREATE TABLE causal_spans (
+        span_key TEXT PRIMARY KEY,
+        span_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        trace_id TEXT NOT NULL,
+        parent_span_key TEXT,
+        parent_span_id TEXT,
+        operation_kind TEXT NOT NULL,
+        lifecycle TEXT NOT NULL,
+        agent_id TEXT,
+        workflow_node_id TEXT,
+        branch_id TEXT,
+        attempt_of_span_key TEXT,
+        attempt_of_span_id TEXT,
+        checkpoint_id TEXT,
+        occurred_at TEXT NOT NULL,
+        observed_at TEXT NOT NULL,
+        started_at TEXT,
+        ended_at TEXT,
+        duration_micros INTEGER,
+        timing_semantic TEXT,
+        timing_producer TEXT,
+        source_order TEXT NOT NULL,
+        UNIQUE(trace_id, span_id)
+    )
+    """,
+    "CREATE INDEX idx_causal_spans_run ON causal_spans(run_id, source_order)",
+    """
+    CREATE TABLE span_links (
+        span_key TEXT NOT NULL,
+        linked_span_key TEXT NOT NULL,
+        span_id TEXT NOT NULL,
+        linked_span_id TEXT NOT NULL,
+        link_type TEXT NOT NULL,
+        observation_id TEXT NOT NULL,
+        PRIMARY KEY(span_key, linked_span_key, link_type, observation_id)
+    )
+    """,
+    """
+    CREATE TABLE meter_facts (
+        fact_id TEXT PRIMARY KEY,
+        span_key TEXT NOT NULL,
+        span_id TEXT NOT NULL,
+        meter_name TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        quantity_micros INTEGER NOT NULL,
+        aggregation TEXT NOT NULL,
+        dimensions_json TEXT NOT NULL,
+        source TEXT NOT NULL,
+        finality TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        observed_at TEXT NOT NULL,
+        observation_id TEXT NOT NULL UNIQUE
+    )
+    """,
+    "CREATE INDEX idx_meter_facts_span ON meter_facts(span_key, meter_name)",
+    """
+    CREATE TABLE charges (
+        charge_id TEXT PRIMARY KEY,
+        fact_id TEXT,
+        span_key TEXT NOT NULL,
+        span_id TEXT NOT NULL,
+        amount_micros INTEGER NOT NULL,
+        currency TEXT NOT NULL,
+        authority TEXT NOT NULL,
+        line_item TEXT NOT NULL,
+        tariff_json TEXT NOT NULL,
+        account_scope TEXT,
+        billing_period TEXT,
+        finality TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        observed_at TEXT NOT NULL,
+        supersedes_charge_id TEXT,
+        observation_id TEXT NOT NULL UNIQUE
+    )
+    """,
+    "CREATE INDEX idx_charges_span ON charges(span_key, currency, authority)",
+    "CREATE INDEX idx_charges_supersedes ON charges(supersedes_charge_id)",
+    """
+    CREATE INDEX idx_charges_authority_fact
+    ON charges(authority, fact_id, currency, line_item, observed_at)
+    """,
+    """
+    CREATE TABLE outcome_evidence (
+        evidence_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        outcome_status TEXT NOT NULL,
+        reason_code TEXT,
+        evidence_type TEXT NOT NULL,
+        source TEXT NOT NULL,
+        confidence TEXT NOT NULL,
+        observed_at TEXT NOT NULL,
+        supersedes_evidence_id TEXT,
+        observation_id TEXT NOT NULL UNIQUE
+    )
+    """,
+    """
+    CREATE INDEX idx_outcome_evidence_run
+    ON outcome_evidence(run_id, observed_at)
+    """,
+)
+
+
+def _validate_legacy_identities(conn: sqlite3.Connection) -> None:
+    """Reject journals whose old projections could not identify one owner.
+
+    The v9 primary key silently conflated equal ``span_id`` values across
+    traces.  The journal normally retains enough composite identity to repair
+    this loss.  A reused run ID across traces, or one trace-scoped span owned by
+    multiple runs/conversations, is genuinely ambiguous and must be repaired by
+    an operator instead of guessed during migration.
+    """
+    runs: dict[str, tuple[str, str]] = {}
+    spans: dict[str, tuple[str, str, str, str]] = {}
+    rows = conn.execute(
+        "SELECT observation_id, causal_json FROM journal_observations ORDER BY journal_sequence"
+    ).fetchall()
+    for row in rows:
+        observation_id, causal_json = row[0], row[1]
+        try:
+            causal = json.loads(causal_json)
+            run_id = str(causal["run_id"])
+            conversation_id = str(causal["conversation_id"])
+            trace_id = str(causal["trace_id"])
+            span_id = str(causal["span_id"])
+        except (KeyError, TypeError, json.JSONDecodeError) as error:
+            raise RuntimeError(
+                f"v10 migration blocked: invalid legacy causal identity in {observation_id}"
+            ) from error
+        run_owner = (conversation_id, trace_id)
+        prior_run_owner = runs.setdefault(run_id, run_owner)
+        if prior_run_owner != run_owner:
+            raise RuntimeError(
+                "v10 migration blocked: legacy identity ambiguity; "
+                f"run {run_id} maps to multiple conversation/trace owners"
+            )
+        span_key = trace_scoped_span_key(trace_id, span_id)
+        span_owner = (span_id, run_id, conversation_id, trace_id)
+        prior_span_owner = spans.setdefault(span_key, span_owner)
+        if prior_span_owner != span_owner:
+            raise RuntimeError(
+                "v10 migration blocked: legacy identity ambiguity; "
+                f"trace-scoped span {span_key} maps to multiple run/conversation owners"
+            )
+
+
+def _migrate_v10_trace_scoped_identity_and_timing(conn: sqlite3.Connection) -> None:
+    """Rebuild projections with trace-scoped keys and explicit timing evidence."""
+    from forecost.ledger.evidence import rebuild_projections
+
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        _validate_legacy_identities(conn)
+        for table in (
+            "outcome_evidence",
+            "charges",
+            "meter_facts",
+            "span_links",
+            "causal_spans",
+            "causal_runs",
+            "causal_span_identities",
+            "causal_run_identities",
+        ):
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        for statement in _V10_PROJECTION_STATEMENTS:
+            conn.execute(statement)
+        rebuild_projections(conn)
+        conn.execute("PRAGMA user_version = 10")
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+_LEGACY_LOCAL_IMPORT_PRODUCERS = frozenset(
+    opaque_id("producer", f"billing-{source}")
+    for source in ("openai", "anthropic", "gateway", "otel")
+)
+
+
+def _migration_causal(row: dict[str, object], causal: dict[str, object]) -> CausalIdentity:
+    """Rehydrate a normalized identity for an append-only authority correction."""
+    links = causal.get("links", [])
+    if not isinstance(links, list) or not all(isinstance(value, str) for value in links):
+        raise RuntimeError(
+            f"v11 migration blocked: invalid causal links in {row['observation_id']}"
+        )
+    journal_sequence = row["journal_sequence"]
+    if isinstance(journal_sequence, bool) or not isinstance(journal_sequence, int):
+        raise RuntimeError(
+            f"v11 migration blocked: invalid journal sequence in {row['observation_id']}"
+        )
+    try:
+        return CausalIdentity(
+            conversation_id=str(causal["conversation_id"]),
+            trace_id=str(causal["trace_id"]),
+            run_id=str(causal["run_id"]),
+            span_id=str(causal["span_id"]),
+            parent_span_id=(
+                str(causal["parent_span_id"]) if causal.get("parent_span_id") is not None else None
+            ),
+            links=tuple(links),
+            source_sequence=900_000_000_000_000 + journal_sequence,
+            idempotency_key=f"authority-repair-v11-{row['observation_id']}",
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise RuntimeError(
+            f"v11 migration blocked: invalid import identity in {row['observation_id']}"
+        ) from error
+
+
+def _migrate_v11_offline_import_authority(conn: sqlite3.Connection) -> None:
+    """Supersede provenance-proven local imports that were falsely ``billed``.
+
+    The pre-v11 ``reconcile import`` path used one of four fixed producer IDs
+    and had no authentication profile.  Those producer IDs therefore prove the
+    claim came from the arbitrary-file path.  We preserve the original journal
+    row, append a linked correction with ``user_imported_claim``, and supersede
+    the projected old charge.  Other ``billed`` producers remain untouched.
+    """
+    from forecost.ledger.evidence import append_observation
+
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        raw_rows = conn.execute(
+            "SELECT observation_id, producer, journal_sequence, payload_json, causal_json, "
+            "occurred_at, observed_at FROM journal_observations WHERE event_kind = 'charge' "
+            "ORDER BY journal_sequence, observation_id"
+        ).fetchall()
+        columns = (
+            "observation_id",
+            "producer",
+            "journal_sequence",
+            "payload_json",
+            "causal_json",
+            "occurred_at",
+            "observed_at",
+        )
+        for raw_row in raw_rows:
+            row = {key: raw_row[index] for index, key in enumerate(columns)}
+            if row["producer"] not in _LEGACY_LOCAL_IMPORT_PRODUCERS:
+                continue
+            try:
+                payload = json.loads(row["payload_json"])
+                causal = json.loads(row["causal_json"])
+            except (TypeError, json.JSONDecodeError) as error:
+                raise RuntimeError(
+                    f"v11 migration blocked: invalid import evidence in {row['observation_id']}"
+                ) from error
+            if not isinstance(payload, dict) or not isinstance(causal, dict):
+                raise RuntimeError(
+                    f"v11 migration blocked: invalid import evidence in {row['observation_id']}"
+                )
+            if payload.get("authority") != Authority.BILLED.value:
+                continue
+            payload["authority"] = Authority.USER_IMPORTED_CLAIM.value
+            payload["supersedes_charge_id"] = opaque_id("charge", row["observation_id"])
+            append_observation(
+                conn,
+                Observation(
+                    producer=str(row["producer"]),
+                    event_kind="charge",
+                    causal=_migration_causal(row, causal),
+                    occurred_at=datetime.fromisoformat(str(row["occurred_at"])),
+                    observed_at=datetime.fromisoformat(str(row["observed_at"])),
+                    payload=payload,
+                    supersedes_observation_id=str(row["observation_id"]),
+                    schema_version=CAUSAL_SCHEMA_VERSION,
+                ),
+            )
+        conn.execute("PRAGMA user_version = 11")
         conn.commit()
     except BaseException:
         conn.rollback()

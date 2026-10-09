@@ -285,7 +285,7 @@ def _log_unknown_model(model: str) -> None:
     with contextlib.suppress(Exception):
         from forecost.core.errlog import log_error
 
-        log_error("pricing", f"unknown model: {model}")
+        log_error("pricing", "PRICING_MODEL_UNKNOWN", fingerprint_source=model)
 
 
 def _resolve_model_key(model: str) -> Optional[str]:

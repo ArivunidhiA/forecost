@@ -16,7 +16,7 @@ from forecost.core.paths import (
     forecost_home,
     validate_private_file,
 )
-from forecost.ledger.schema import apply_schema
+from forecost.ledger.schema import SCHEMA_VERSION, apply_schema
 
 LEDGER_PATH = forecost_home() / "ledger.db"
 
@@ -129,11 +129,69 @@ def _open_ledger(path: Path) -> sqlite3.Connection:
         raise
 
 
+def _open_readonly_ledger(path: Path) -> sqlite3.Connection:
+    """Open an existing current-schema ledger without creating or migrating it."""
+    if ".." in path.parts:
+        raise UnsafeDataPathError("ledger path must not contain parent traversal")
+    validate_private_file(path, may_not_exist=False)
+    before = path.stat(follow_symlinks=False)
+    uri = f"{path.resolve().as_uri()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
+    try:
+        validate_private_file(path, may_not_exist=False)
+        after = path.stat(follow_symlinks=False)
+        if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+            raise UnsafeDataPathError("ledger file changed while it was being opened")
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA query_only=ON")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA foreign_keys=ON")
+        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if version != SCHEMA_VERSION:
+            raise sqlite3.DatabaseError(
+                f"ledger schema {version} is not readable as schema {SCHEMA_VERSION}; "
+                "run an explicit ledger migration first"
+            )
+        return conn
+    except BaseException:
+        conn.close()
+        raise
+
+
 def _apply_pragmas(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
-    conn.execute("PRAGMA synchronous=NORMAL")
+    # The receipt journal is Forecost's canonical evidence store.  FULL makes a
+    # successful commit wait for SQLite's WAL and commit boundary to be synced,
+    # rather than accepting NORMAL's documented power-loss window.  This is a
+    # local durability boundary, not protection from a same-user rewrite or a
+    # storage device that lies about fsync.
+    conn.execute("PRAGMA synchronous=FULL")
     conn.execute("PRAGMA foreign_keys=ON")
+    # Runtime cursor migration deletes legacy transcript-path keys. Overwrite
+    # deleted cells instead of retaining their bytes on SQLite's freelist; the
+    # migrator separately attempts to truncate obsolete WAL frames.
+    conn.execute("PRAGMA secure_delete=ON")
+
+
+def create_verified_snapshot(source: sqlite3.Connection, destination_path: Path) -> None:
+    """Create and integrity-check a standalone SQLite snapshot.
+
+    SQLite's backup API includes committed pages that still live in WAL; a
+    filesystem copy of only the main file does not.  Callers own destination
+    naming, collision policy, permission hardening, and cleanup on failure.
+    """
+    destination = sqlite3.connect(str(destination_path))
+    try:
+        destination.execute("PRAGMA synchronous=FULL")
+        source.backup(destination)
+        findings = [str(row[0]) for row in destination.execute("PRAGMA integrity_check")]
+        if findings != ["ok"]:
+            detail = "; ".join(findings[:3]) or "no result"
+            raise sqlite3.DatabaseError(f"snapshot failed SQLite integrity_check: {detail}")
+        destination.commit()
+    finally:
+        destination.close()
 
 
 def get_ledger_db(path: Path | None = None) -> sqlite3.Connection:
@@ -166,6 +224,18 @@ def get_ledger_db(path: Path | None = None) -> sqlite3.Connection:
         apply_schema(_conn)
         _lock_down_db_files(LEDGER_PATH)  # main + -wal/-shm sidecars
         return _conn
+
+
+def get_readonly_ledger_db(path: Path | None = None) -> sqlite3.Connection:
+    """Return a non-cached, query-only connection to an existing current ledger.
+
+    Unlike :func:`get_ledger_db`, this function never creates the data root,
+    creates a database, applies pragmas that change journal state, or migrates a
+    schema. SQLite may create or update WAL/SHM coordination sidecars while
+    opening a live WAL database; those are not Forecost evidence mutations.
+    Callers must close the returned connection.
+    """
+    return _open_readonly_ledger(path or LEDGER_PATH)
 
 
 def reset_connection_for_tests() -> None:

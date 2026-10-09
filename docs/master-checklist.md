@@ -1,5 +1,12 @@
 # Forecost master checklist — production product plan
 
+> **Historical plan; superseded on 2026-08-13.** This unchecked 2026-08-02
+> inventory is not an implementation-status or release document, and its
+> “content-free” north star is not proven by the current code. Use
+> [`status.md`](status.md) for current truth and the
+> [2026-08-13 product/launch checklist](research/2026-08-13-master-product-launch-checklist.md)
+> for conditional next work.
+
 **Prepared:** 2026-08-02  
 **Planning basis:** `docs/audit-2.md`, current branch `e4076b32`, local history, cold-start
 testing, and final modeled OpenAI-runtime and Anthropic-coding-agent reviews.  
@@ -16,7 +23,7 @@ testing, and final modeled OpenAI-runtime and Anthropic-coding-agent reviews.
 
 ## Product north star
 
-**Recommended first product:**
+**Recommended first product at the time:**
 
 > Forecost produces an independent, content-free, graph-aware economic receipt for an
 > autonomous-agent run: what the runtime observed, what each meter valued, what the provider

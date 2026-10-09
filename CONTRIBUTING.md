@@ -5,13 +5,22 @@ contribution is a trustworthy adapter for another agent harness or billing
 source; the checklist below is designed to make one reviewable in under an
 hour without sharing private transcripts.
 
+If this is your first time in the repository, read
+[`101/README.md`](101/README.md) before making changes. It explains the current
+receipt product, the parallel evidence lanes in `ledger.db`, and the boundary
+between current and legacy code.
+
 ## Development Setup
 
+The public `main` branch is still the legacy product. For this unreleased 0.3
+work, start in the reviewed local checkout. Its existing ignored `.venv` is stale
+and has an absolute shebang to another directory, so create a fresh environment
+with a distinct name:
+
 ```bash
-git clone https://github.com/ArivunidhiA/forecost.git
-cd forecost
-python -m venv .venv
-source .venv/bin/activate
+cd "<path-to-reviewed-0.3-checkout>"
+python -m venv .venv-review
+source .venv-review/bin/activate
 pip install -e ".[dev,forecast,llm]"
 ```
 
@@ -20,6 +29,7 @@ pip install -e ".[dev,forecast,llm]"
 ```bash
 pytest tests/ -v --tb=short
 pyright
+mypy forecost/
 xenon forecost/ -b B -m A -a A
 bandit -r forecost/ -c pyproject.toml
 ```
@@ -30,7 +40,7 @@ We use ruff for linting and formatting:
 
 ```bash
 ruff check forecost/ tests/
-ruff format forecost/ tests/
+ruff format --check forecost/ tests/
 ```
 
 ## Pull Request Process
@@ -39,7 +49,8 @@ ruff format forecost/ tests/
 2. Make the smallest change that proves the behavior, with tests.
 3. Run the checks above; CI also runs Python 3.10–3.13 on Linux, macOS, and Windows.
 4. Explain the data source, identity rule, failure behavior, and privacy impact.
-5. Submit a PR against `main`.
+5. Submit against the maintainer-selected integration branch; do not assume the
+   current legacy `main` is ready for this code.
 
 ## Adding an agent adapter
 
@@ -62,8 +73,17 @@ can agree on identity and provenance first.
 
 ## Product laws
 
-The ledger is local-first and content-free. Hook failures are fail-open. Writes
-are atomic and recoverable. The estimator remains shadow-only until independent
+The ledger is local-first and is intended to satisfy a field-allowlisted,
+content-excluding persistence contract for current-ledger surfaces. The current
+worktree installation-keys cursor/error identities, verifies transcript
+replacement, streams privacy scans, and covers the known default-home state in
+the purge manifest. The unsupported legacy `costs.db` still permits legacy
+project configuration and is not covered by that stronger contract; custom
+state deliberately placed outside `FORECOST_HOME` is not discoverable by
+`purge`. Hook failures are fail-open. Canonical SQLite uses WAL,
+`synchronous=FULL`, verified Backup API migration snapshots, and idempotent
+recovery, but those mechanisms still rely on honest OS/storage behavior and do
+not resist a same-user rewrite. The estimator remains shadow-only until independent
 held-out evidence clears its published gates. A change that weakens one of these
 laws needs an explicit design discussion, not just a passing test.
 

@@ -43,8 +43,15 @@ def test_doctor_json_reports_explicit_readiness(ledger_conn, monkeypatch, tmp_pa
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
+    assert payload["product_state"] == "UNRELEASED EXPERIMENTAL"
+    assert payload["release_hold"] is True
     assert payload["readiness"]["claude_code"] == "NOT OBSERVED"
     assert payload["readiness"]["distributed_enforcement"] == "NOT OBSERVED"
     assert payload["stores"]["canonical"]["path"].endswith("ledger.db")
+    assert payload["stores"]["canonical"]["role"] == "unreleased experimental receipt ledger"
     assert payload["stores"]["legacy"]["path"].endswith("costs.db")
     assert payload["stores"]["legacy"]["role"] == "unsupported v0.2 compatibility"
+    limitations = " ".join(payload["limitations"])
+    assert "legacy SDK can persist project names, paths, and metadata" in limitations
+    assert "configured state outside that root" in limitations
+    assert "same OS user" in limitations

@@ -169,7 +169,7 @@ def reconcile(ctx: click.Context, currency: str, tolerance_pct: float) -> None:
     _print_source_vs_table_report(conn, currency, tolerance_pct)
 
     click.echo(
-        "\nFor independent offline evidence, use `forecost reconcile import` then "
+        "\nFor declared offline economic claims, use `forecost reconcile import` then "
         "`forecost reconcile run`. Live HTTP/API ingestion remains deliberately deferred."
     )
 
@@ -181,7 +181,7 @@ def reconcile(ctx: click.Context, currency: str, tolerance_pct: float) -> None:
 @click.option("--file", "file_path", type=click.Path(exists=True, dir_okay=False), required=True)
 @click.option("--run", "run_id", default=None, help="Attach aggregate evidence to an existing run.")
 def import_export(source: str, file_path: str, run_id: str | None) -> None:
-    """Import a representative local provider/gateway/OTel JSON or CSV export."""
+    """Import a declared local economic claim from JSON or CSV."""
     try:
         imported_run, imported = import_bill_file(
             get_ledger_db(),
@@ -191,7 +191,11 @@ def import_export(source: str, file_path: str, run_id: str | None) -> None:
         )
     except ValueError as error:
         raise click.ClickException(str(error)) from error
-    click.echo(f"Imported {imported} {source} billing record(s) into {imported_run}.")
+    click.echo(
+        f"Imported {imported} user-supplied {source} economic claim record(s); "
+        "source origin is not authenticated."
+    )
+    click.echo(f"Run: {imported_run}")
 
 
 @reconcile.command("run")
@@ -201,7 +205,7 @@ def import_export(source: str, file_path: str, run_id: str | None) -> None:
 @click.option("--tolerance-micros", default=1_000, show_default=True, type=click.IntRange(0))
 @click.option("--json-output", "json_output", is_flag=True)
 def reconcile_evidence(run_id: str | None, tolerance_micros: int, json_output: bool) -> None:
-    """Compare local valuations with provider-billed aggregate evidence."""
+    """Compare local valuations with user-imported aggregate economic claims."""
     try:
         result = reconcile_run(get_ledger_db(), run_id, tolerance_micros=tolerance_micros)
     except ValueError as error:
@@ -213,7 +217,8 @@ def reconcile_evidence(run_id: str | None, tolerance_micros: int, json_output: b
         return
     click.echo(
         f"Reconciliation {result['state']}: local={result['local_total']} micros, "
-        f"provider={result['provider_total']} micros, residual={result['residual']} micros."
+        f"user_imported_claim={result['user_imported_claim_total']} micros, "
+        f"residual={result['residual']} micros."
     )
     click.echo(
         f"Evidence: {result['observed']} of {result['expected']} source roles; "

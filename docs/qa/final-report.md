@@ -1,5 +1,15 @@
 # Forecost 0.3.0 packaged-product QA report
 
+> **Historical and superseded for release decisions.** This report accurately
+> records the 2026-08-09 packaged test pass, but the 2026-08-13
+> [status](../status.md) and
+> [red team](../research/2026-08-13-startup-grade-red-team-v2.md) found new P0
+> defects. The current worktree contains later internal remediations, but this
+> older artifact was not rerun against them and no external review or live
+> validation has occurred. Its “GO WITH KNOWN RISK,” content-free,
+> complete-evidence, critical-path, migration-backup, purge, authority, and
+> integrity conclusions must not be used to justify publication.
+
 **Date:** 2026-08-09  
 **Branch:** `codex/forecost-product-core`  
 **QA target:** founder review of the local, content-free economic-receipt core;

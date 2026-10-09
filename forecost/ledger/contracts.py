@@ -1,4 +1,4 @@
-"""Versioned, content-free contracts for Forecost causal/economic evidence."""
+"""Versioned, field-allowlisted contracts for causal/economic evidence."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-CAUSAL_SCHEMA_VERSION = 1
-RECEIPT_SCHEMA_VERSION = 1
+CAUSAL_SCHEMA_VERSION = 2
+RECEIPT_SCHEMA_VERSION = 2
 
 _SAFE_ATOM = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]*$")
 _TRACE_ID = re.compile(r"^(?!0{32})[0-9a-f]{32}$")
@@ -56,6 +56,7 @@ class Authority(str, Enum):
     BILLED = "billed"
     PROVIDER_ESTIMATE = "provider_estimate"
     GATEWAY_ESTIMATE = "gateway_estimate"
+    USER_IMPORTED_CLAIM = "user_imported_claim"
     LIST_RATE = "list_rate"
     CONTRACT_ALLOCATION = "contract_allocation"
     SUBSCRIPTION_QUOTA = "subscription_quota"
@@ -117,6 +118,18 @@ def normalize_trace_id(value: str) -> str:
 def normalize_span_id(value: str) -> str:
     value = value.lower()
     return value if _SPAN_ID.fullmatch(value) else opaque_id("span", value)
+
+
+def trace_scoped_span_key(trace_id: str, span_id: str) -> str:
+    """Return the internal identity for a span within one trace.
+
+    W3C span identifiers are only unique inside their trace.  Keeping this key
+    separate from the public ``span_id`` makes it difficult for a projection or
+    query to accidentally join two traces that reused the same 64-bit ID.
+    """
+    normalized_trace = normalize_trace_id(trace_id)
+    normalized_span = normalize_span_id(span_id)
+    return opaque_id("span-key", f"{normalized_trace}|{normalized_span}")
 
 
 def canonical_json(value: Any) -> str:
@@ -185,7 +198,7 @@ def _normalise_dimensions(value: object) -> dict[str, object]:
     for key, item in value.items():
         if key not in _REVIEWED_DIMENSION_KEYS:
             raise ValueError("meter dimension is not approved")
-        if isinstance(item, (bool, int)):
+        if isinstance(item, bool | int):
             normalized[key] = item
         elif isinstance(item, str):
             normalized[key] = opaque_id(f"dimension-{key}", item)
@@ -203,7 +216,7 @@ def _normalise_tariff(value: object) -> dict[str, object]:
     for key, item in value.items():
         if key not in {"rate_snapshot", "input_rate_micros", "output_rate_micros", "discount"}:
             raise ValueError("tariff component is not approved")
-        if isinstance(item, (bool, int)):
+        if isinstance(item, bool | int):
             normalized[key] = item
         elif isinstance(item, str):
             normalized[key] = opaque_id(f"tariff-{key}", item)
@@ -212,8 +225,104 @@ def _normalise_tariff(value: object) -> dict[str, object]:
     return normalized
 
 
-def _normalise_span_payload(payload: dict[str, object]) -> dict[str, object]:
+def _timing_timestamp(payload: dict[str, object], key: str) -> str | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{key} must be an ISO-8601 timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError(f"{key} must be an ISO-8601 timestamp") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{key} must include a timezone")
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
+def _timing_duration(payload: dict[str, object]) -> int | None:
+    duration_value = payload.get("duration_micros")
+    if duration_value is None:
+        return None
+    if (
+        isinstance(duration_value, bool)
+        or not isinstance(duration_value, int)
+        or duration_value < 0
+    ):
+        raise ValueError("duration_micros must be a non-negative integer")
+    return duration_value
+
+
+def _timing_is_absent(
+    started_at: str | None, ended_at: str | None, duration_micros: int | None
+) -> bool:
+    return started_at is None and ended_at is None and duration_micros is None
+
+
+def _validate_absent_timing_source(source: object) -> None:
+    if source is not None:
+        raise ValueError("timing_source requires explicit timing evidence")
+
+
+def _validate_interval_timing(source: object, duration_micros: int | None) -> None:
+    if source != "explicit_interval":
+        raise ValueError("start/end timestamps require timing_source=explicit_interval")
+    if duration_micros is not None:
+        raise ValueError("report an explicit interval or a reported duration, not both")
+
+
+def _validate_duration_timing(source: object) -> None:
+    if source != "reported_duration":
+        raise ValueError("duration-only evidence requires timing_source=reported_duration")
+
+
+def _validate_timing_semantics(
+    started_at: str | None,
+    ended_at: str | None,
+    duration_micros: int | None,
+    source: object,
+) -> bool:
+    if _timing_is_absent(started_at, ended_at, duration_micros):
+        _validate_absent_timing_source(source)
+        return False
+    if source not in {"explicit_interval", "reported_duration"}:
+        raise ValueError("timing_source is not an approved timing semantic")
+    has_interval_evidence = started_at is not None or ended_at is not None
+    if has_interval_evidence:
+        _validate_interval_timing(source, duration_micros)
+    else:
+        _validate_duration_timing(source)
+    return True
+
+
+def _validate_interval_order(started_at: str | None, ended_at: str | None) -> None:
+    if started_at is None or ended_at is None:
+        return
+    if datetime.fromisoformat(ended_at) < datetime.fromisoformat(started_at):
+        raise ValueError("ended_at must not precede started_at")
+
+
+def _normalise_span_timing(payload: dict[str, object]) -> dict[str, object]:
+    started_at = _timing_timestamp(payload, "started_at")
+    ended_at = _timing_timestamp(payload, "ended_at")
+    duration_micros = _timing_duration(payload)
+
+    source = payload.get("timing_source")
+    if not _validate_timing_semantics(started_at, ended_at, duration_micros, source):
+        return {}
+    _validate_interval_order(started_at, ended_at)
     return {
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "duration_micros": duration_micros,
+        "timing_source": source,
+    }
+
+
+def _normalise_span_payload(
+    payload: dict[str, object], *, schema_version: int
+) -> dict[str, object]:
+    result: dict[str, object] = {
         "operation_kind": _enum_value(
             "operation_kind", payload.get("operation_kind"), OperationKind
         ),
@@ -233,6 +342,9 @@ def _normalise_span_payload(payload: dict[str, object]) -> dict[str, object]:
         ),
         "stop_reason": _opaque_payload_id("stop-reason", payload.get("stop_reason"), optional=True),
     }
+    if schema_version >= 2:
+        result.update(_normalise_span_timing(payload))
+    return result
 
 
 def _nonnegative_integer(payload: dict[str, object], key: str) -> int:
@@ -293,15 +405,18 @@ def _normalise_outcome_payload(payload: dict[str, object]) -> dict[str, object]:
 
 
 _PAYLOAD_NORMALIZERS = {
-    "span": _normalise_span_payload,
     "meter": _normalise_meter_payload,
     "charge": _normalise_charge_payload,
     "outcome": _normalise_outcome_payload,
 }
 
 
-def normalise_payload(event_kind: str, payload: dict[str, object]) -> dict[str, object]:
+def normalise_payload(
+    event_kind: str, payload: dict[str, object], *, schema_version: int = CAUSAL_SCHEMA_VERSION
+) -> dict[str, object]:
     """Validate every event kind and erase open-ended payload identifiers."""
+    if event_kind == "span":
+        return _normalise_span_payload(payload, schema_version=schema_version)
     normalizer = _PAYLOAD_NORMALIZERS.get(event_kind)
     if normalizer is None:
         raise ValueError("observation event_kind is not supported")
@@ -353,7 +468,7 @@ class CausalIdentity:
 
 @dataclass(frozen=True)
 class Observation:
-    """One append-only, replayable content-free observation."""
+    """One append-only, replayable field-allowlisted observation."""
 
     producer: str
     event_kind: str
@@ -365,7 +480,7 @@ class Observation:
     schema_version: int = CAUSAL_SCHEMA_VERSION
 
     def normalized(self) -> Observation:
-        if self.schema_version != CAUSAL_SCHEMA_VERSION:
+        if self.schema_version not in {1, CAUSAL_SCHEMA_VERSION}:
             raise ValueError(f"unsupported observation schema version: {self.schema_version}")
         if self.event_kind not in {"span", "meter", "charge", "outcome"}:
             raise ValueError("observation event_kind is not supported")
@@ -374,7 +489,9 @@ class Observation:
         causal = self.causal.normalized()
         occurred_at = _as_utc(self.occurred_at)
         observed_at = _as_utc(self.observed_at)
-        normalized_payload = normalise_payload(self.event_kind, self.payload)
+        normalized_payload = normalise_payload(
+            self.event_kind, self.payload, schema_version=self.schema_version
+        )
         payload_json = canonical_json(normalized_payload)
         return Observation(
             producer=opaque_id("producer", self.producer),

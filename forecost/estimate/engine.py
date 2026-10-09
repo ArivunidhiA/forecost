@@ -18,6 +18,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 
+from forecost.adapters.base import content_free_identifier
 from forecost.estimate.types import EstimateRange, TaskContext
 from forecost.ledger import queries as q
 from forecost.ledger.db import ledger_write_lock
@@ -114,6 +115,7 @@ def record_estimate(
     shadow: bool = True,
 ) -> str:
     """Persist an estimate for later reconciliation. Returns the estimate_uid."""
+    normalized_run_id = content_free_identifier("run", run_id) if run_id is not None else None
     estimate_uid = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
     with ledger_write_lock:
@@ -128,7 +130,7 @@ def record_estimate(
                 estimate_uid,
                 session_id,
                 workspace_id,
-                run_id,
+                normalized_run_id,
                 now,
                 estimate.currency,
                 estimate.p10,

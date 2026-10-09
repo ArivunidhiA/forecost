@@ -6,6 +6,7 @@ from pathlib import Path
 import click
 from rich.console import Console
 
+from forecost.core.local_identity import INSTALLATION_KEY_ID_NAME, INSTALLATION_KEY_NAME
 from forecost.core.paths import OWNERSHIP_MARKER, forecost_home
 
 console = Console()
@@ -24,6 +25,8 @@ _OWNED_NAMES = frozenset(
         "costs.db-shm",
         "costs.db-journal",
         "error.log",
+        INSTALLATION_KEY_NAME,
+        INSTALLATION_KEY_ID_NAME,
         "policy.toml",
         "recovery.jsonl",
         "recovery.replayed.jsonl",
@@ -31,6 +34,41 @@ _OWNED_NAMES = frozenset(
         "legacy-recovery.replayed.jsonl",
         OWNERSHIP_MARKER,
     }
+)
+
+# Owned subdirectories are purged one manifest entry at a time.  Unknown files
+# or nested directories are preserved, and no recursive deletion primitive is
+# used.  This covers the durable files emitted by hooks/state.py and the
+# default LiteLLM DurableEventOutbox.
+_OWNED_DIRECTORY_FILES = {
+    "hooks": frozenset(
+        {
+            OWNERSHIP_MARKER,
+            "heartbeat.json",
+            "last-summary.json",
+            "settlement-required.jsonl",
+        }
+    ),
+    "outbox": frozenset(
+        {
+            OWNERSHIP_MARKER,
+            "litellm.jsonl",
+            "litellm.jsonl.lock",
+            "litellm.jsonl.poison.jsonl",
+            "litellm.jsonl.stats.json",
+        }
+    ),
+}
+_OWNED_DIRECTORY_TEMP = {
+    "hooks": re.compile(
+        r"^\.(?:heartbeat\.json|last-summary\.json|settlement-required\.jsonl)"
+        r"\.[A-Za-z0-9_-]{6,}$"
+    ),
+    "outbox": re.compile(r"^\.litellm\.jsonl(?:\.stats\.json)?\.[A-Za-z0-9_-]{6,}$"),
+}
+_OWNED_ROOT_TEMP = re.compile(r"^\.(?:legacy-)?recovery(?:-spill)?-[A-Za-z0-9_.-]+\.tmp$")
+_SCHEMA_BACKUP = re.compile(
+    r"^ledger\.db\.pre-v\d+-\d{8}T\d{12,20}Z\.bak(?:-(?:wal|shm|journal))?$"
 )
 
 
@@ -93,10 +131,48 @@ def _is_owned_entry(path: Path) -> bool:
         r"\.replayed(?:\.\d+)?\.jsonl",
         name,
     )
-    return name in _OWNED_NAMES or spool is not None or replayed is not None
+    return (
+        name in _OWNED_NAMES
+        or spool is not None
+        or replayed is not None
+        or _OWNED_ROOT_TEMP.fullmatch(name) is not None
+        or _SCHEMA_BACKUP.fullmatch(name) is not None
+    )
+
+
+def _is_owned_directory_file(directory: str, name: str) -> bool:
+    return name in _OWNED_DIRECTORY_FILES[directory] or bool(
+        _OWNED_DIRECTORY_TEMP[directory].fullmatch(name)
+    )
+
+
+def _delete_owned_directory(entry: Path, removed: list[str], preserved: list[str]) -> None:
+    if entry.is_symlink():
+        entry.unlink()
+        removed.append(str(entry))
+        return
+    if not entry.is_dir():
+        preserved.append(str(entry))
+        return
+    for child in entry.iterdir():
+        if not _is_owned_directory_file(entry.name, child.name) or (
+            child.is_dir() and not child.is_symlink()
+        ):
+            preserved.append(str(child))
+            continue
+        child.unlink()
+        removed.append(str(child))
+    try:
+        entry.rmdir()
+        removed.append(str(entry))
+    except OSError:
+        pass
 
 
 def _delete_entry(entry: Path, removed: list[str], preserved: list[str]) -> None:
+    if entry.name in _OWNED_DIRECTORY_FILES:
+        _delete_owned_directory(entry, removed, preserved)
+        return
     if not _is_owned_entry(entry) or (entry.is_dir() and not entry.is_symlink()):
         preserved.append(str(entry))
         return
@@ -148,9 +224,16 @@ def _report(removed: list[str], preserved: list[str]) -> None:
         console.print("\n[yellow]Preserved unknown entries:[/yellow]")
         for path in preserved:
             console.print(f"  {path}")
-    console.print(
-        "\n[green]Purge complete.[/green] Run [bold]forecost ingest[/bold] to start fresh."
-    )
+    if preserved:
+        console.print(
+            "\n[yellow]Known-file purge finished, but retained entries remain.[/yellow] "
+            "Review the paths above and docs/data-inventory.md before reusing this home."
+        )
+    else:
+        console.print(
+            "\n[green]Known-file purge finished.[/green] This does not prove that "
+            "integration backups, exports, or other owned state outside this root were erased."
+        )
 
 
 def _confirm_prompt() -> str:

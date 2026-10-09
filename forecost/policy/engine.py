@@ -1,4 +1,4 @@
-"""Policy evaluation: (rules, ledger aggregates) -> Decision. Fail-open by law."""
+"""Policy evaluation with interactive fail-open and explicit CI fail-closed modes."""
 
 from __future__ import annotations
 
@@ -116,8 +116,9 @@ def evaluate(
 ) -> Decision:
     """Evaluate all applicable rules; the strictest matching action wins.
 
-    On ANY internal exception, returns Decision('allow', ...) — fail-open,
-    per BASEMENT.md law L4. This function must never raise.
+    Interactive evaluation fails open. A policy explicitly parsed with both
+    ``mode='ci'`` and ``on_internal_error='deny'`` fails closed. This function
+    never raises and never embeds arbitrary exception text in its result/log.
     """
     try:
         best: Decision | None = None
@@ -128,6 +129,16 @@ def evaluate(
             if best is None or _ACTION_RANK[d.action] > _ACTION_RANK[best.action]:
                 best = d
         return best if best is not None else Decision("allow", None, "no rules configured")
-    except Exception as exc:  # nosec B110 - fail-open is the product law, not a bug
-        log_error("policy.engine", f"evaluate failed, failing open: {exc!r}")
-        return Decision("allow", None, f"forecost internal error (fail-open): {exc!r}"[:200])
+    except Exception as exc:  # nosec B110 - mode-specific containment is intentional
+        fail_closed = (
+            getattr(config, "mode", "interactive") == "ci"
+            and getattr(config, "on_internal_error", "allow") == "deny"
+        )
+        log_error(
+            "policy.engine",
+            "POLICY_EVALUATION_FAILED",
+            fingerprint_source=exc,
+        )
+        if fail_closed:
+            return Decision("deny", None, "forecost internal error (CI fail-closed)")
+        return Decision("allow", None, "forecost internal error (interactive fail-open)")

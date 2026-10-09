@@ -20,7 +20,7 @@ def _lab_path(path: Path | None) -> Path:
 
 @click.group()
 def lab() -> None:
-    """Run deterministic, synthetic, content-free receipt scenarios."""
+    """Run deterministic synthetic scenarios with allowlisted receipt fields."""
 
 
 @lab.command("demo")

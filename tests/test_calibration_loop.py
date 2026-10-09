@@ -173,20 +173,20 @@ def test_reconcile_windows_two_turns_in_one_session(ledger_conn):
     t0 = datetime(2026, 7, 1, 0, 0, 0, tzinfo=timezone.utc)
     t1 = t0 + timedelta(minutes=5)
     # Turn 1 estimate + its event, then turn 2 estimate + its event.
-    record_estimate(
+    first_estimate_uid = record_estimate(
         ledger_conn, _estimate(), sess_id, None, "s-two", shadow=True
     )  # created_at ~ now (earliest)
     ledger_conn.execute(
-        "UPDATE estimates SET created_at = ? WHERE run_id = 's-two' AND created_at = "
-        "(SELECT MAX(created_at) FROM estimates WHERE run_id = 's-two')",
-        (t0.isoformat(),),
+        "UPDATE estimates SET created_at = ? WHERE estimate_uid = ?",
+        (t0.isoformat(), first_estimate_uid),
     )
     _spend_in_session(ledger_conn, "s-two", 0.30, "ev1", ts=t0 + timedelta(minutes=1))
-    record_estimate(ledger_conn, _estimate(p90=0.10), sess_id, None, "s-two", shadow=True)
+    second_estimate_uid = record_estimate(
+        ledger_conn, _estimate(p90=0.10), sess_id, None, "s-two", shadow=True
+    )
     ledger_conn.execute(
-        "UPDATE estimates SET created_at = ? WHERE run_id = 's-two' AND created_at = "
-        "(SELECT MAX(created_at) FROM estimates WHERE run_id = 's-two')",
-        (t1.isoformat(),),
+        "UPDATE estimates SET created_at = ? WHERE estimate_uid = ?",
+        (t1.isoformat(), second_estimate_uid),
     )
     _spend_in_session(ledger_conn, "s-two", 5.0, "ev2", ts=t1 + timedelta(minutes=1))
     ledger_conn.commit()

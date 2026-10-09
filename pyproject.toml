@@ -5,14 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "forecost"
 version = "0.3.0"
-description = "Local, content-free evidence receipts for AI-agent runs with independent meter reconciliation."
+description = "Experimental local, content-minimizing evidence receipts for AI-agent runs with independent meter reconciliation."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [{ name = "Arivunidhi A" }]
 keywords = ["llm", "cost", "ledger", "reconciliation", "claude-code", "agents", "anthropic", "cli"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
@@ -105,14 +105,14 @@ known-first-party = ["forecost"]
 "tests/test_edge_cases.py" = ["PT011"]
 "tests/test_property_based.py" = ["I001"]
 "tests/test_serve_cmd.py" = ["S310"]
+"tests/test_hooks.py" = ["S603"]
+"experiments/calib/*.py" = ["T201"]
 
 [tool.pyright]
 pythonVersion = "3.10"
 typeCheckingMode = "basic"
 reportMissingImports = true
 reportMissingTypeStubs = false
-venvPath = "."
-venv = ".venv312"
 include = ["forecost", "tests", "scripts/check_release.py"]
 exclude = ["scripts/test_real_sdk.py"]
 
@@ -121,8 +121,9 @@ exclude_dirs = ["tests"]
 skips = ["B101"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 ignore_missing_imports = true
+follow_imports = "skip"
 check_untyped_defs = true
 warn_return_any = true
 warn_unused_configs = true

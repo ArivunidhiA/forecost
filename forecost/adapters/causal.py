@@ -1,4 +1,4 @@
-"""Content-free adapter conformance helpers for runtime and OTel-style events."""
+"""Field-allowlisted conformance helpers for runtime and OTel-style events."""
 
 from __future__ import annotations
 
@@ -18,6 +18,83 @@ def _timestamp(value: object) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def _required_text(event: Mapping[str, object], name: str) -> str:
+    value = event.get(name)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"runtime event needs {name}")
+    return value
+
+
+def _runtime_identity(event: Mapping[str, object]) -> CausalIdentity:
+    """Build the structural identity after validating collection-shaped fields."""
+
+    parent_span_id = event.get("parent_span_id")
+    links_value = event.get("links", ())
+    links = (
+        tuple(value for value in links_value if isinstance(value, str))
+        if isinstance(links_value, list | tuple)
+        else ()
+    )
+    source_sequence = event.get("source_sequence", 0)
+    if isinstance(source_sequence, bool) or not isinstance(source_sequence, int):
+        raise ValueError("source_sequence must be a non-negative integer")
+    return CausalIdentity(
+        conversation_id=_required_text(event, "conversation_id"),
+        trace_id=_required_text(event, "trace_id"),
+        run_id=_required_text(event, "run_id"),
+        span_id=_required_text(event, "span_id"),
+        parent_span_id=parent_span_id if isinstance(parent_span_id, str) else None,
+        links=links,
+        source_sequence=source_sequence,
+        idempotency_key=_required_text(event, "idempotency_key"),
+    )
+
+
+def _has_interval_endpoint(started_at: object, ended_at: object) -> bool:
+    return started_at is not None or ended_at is not None
+
+
+def _runtime_timing_source(
+    started_at: object, ended_at: object, duration_micros: object
+) -> str | None:
+    if _has_interval_endpoint(started_at, ended_at):
+        if duration_micros is not None:
+            raise ValueError("runtime span must report an interval or a duration, not both")
+        return "explicit_interval"
+    if duration_micros is not None:
+        return "reported_duration"
+    return None
+
+
+def _runtime_timing_payload(event: Mapping[str, object]) -> dict[str, object]:
+    started_at = event.get("started_at", event.get("start_time"))
+    ended_at = event.get("ended_at", event.get("end_time"))
+    duration_micros = event.get("duration_micros")
+    timing_source = _runtime_timing_source(started_at, ended_at, duration_micros)
+    if timing_source is None:
+        return {}
+    return {
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "duration_micros": duration_micros,
+        "timing_source": timing_source,
+    }
+
+
+def _runtime_span_payload(event: Mapping[str, object]) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "operation_kind": event.get("operation_kind", "custom"),
+        "lifecycle": event.get("lifecycle", "running"),
+        "agent_id": event.get("agent_id"),
+        "workflow_node_id": event.get("workflow_node_id"),
+        "branch_id": event.get("branch_id"),
+        "attempt_of_span_id": event.get("attempt_of_span_id"),
+        "checkpoint_id": event.get("checkpoint_id"),
+    }
+    payload.update(_runtime_timing_payload(event))
+    return payload
+
+
 def runtime_span_observation(event: Mapping[str, object], *, producer: str) -> Observation:
     """Map a generic OpenAI Agents/OTel-style span to the Forecost contract.
 
@@ -25,46 +102,12 @@ def runtime_span_observation(event: Mapping[str, object], *, producer: str) -> O
     messages, inputs, outputs, baggage, and tracestate are neither inspected
     nor retained.
     """
-
-    def required(name: str) -> str:
-        value = event.get(name)
-        if not isinstance(value, str) or not value:
-            raise ValueError(f"runtime event needs {name}")
-        return value
-
-    parent_span_id = event.get("parent_span_id")
-    links_value = event.get("links", ())
-    links = (
-        tuple(value for value in links_value if isinstance(value, str))
-        if isinstance(links_value, (list, tuple))
-        else ()
-    )
-    source_sequence = event.get("source_sequence", 0)
-    if isinstance(source_sequence, bool) or not isinstance(source_sequence, int):
-        raise ValueError("source_sequence must be a non-negative integer")
-    causal = CausalIdentity(
-        conversation_id=required("conversation_id"),
-        trace_id=required("trace_id"),
-        run_id=required("run_id"),
-        span_id=required("span_id"),
-        parent_span_id=parent_span_id if isinstance(parent_span_id, str) else None,
-        links=links,
-        source_sequence=source_sequence,
-        idempotency_key=required("idempotency_key"),
-    )
+    causal = _runtime_identity(event)
     return observation(
         producer=producer,
         event_kind="span",
         causal=causal,
-        payload={
-            "operation_kind": event.get("operation_kind", "custom"),
-            "lifecycle": event.get("lifecycle", "running"),
-            "agent_id": event.get("agent_id"),
-            "workflow_node_id": event.get("workflow_node_id"),
-            "branch_id": event.get("branch_id"),
-            "attempt_of_span_id": event.get("attempt_of_span_id"),
-            "checkpoint_id": event.get("checkpoint_id"),
-        },
+        payload=_runtime_span_payload(event),
         occurred_at=_timestamp(event.get("occurred_at")),
         observed_at=_timestamp(event.get("observed_at", event.get("occurred_at"))),
     )

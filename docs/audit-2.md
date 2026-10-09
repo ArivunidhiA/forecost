@@ -1,5 +1,12 @@
 # Forecost audit 2 — product reality, refactor recovery, and 2026 direction
 
+> **Historical audit; superseded for current release decisions.** The private,
+> ignored local evidence used in this 2026-08-02 reconstruction is not portable
+> to a clone, and its former absolute links have been removed. Use
+> [`status.md`](status.md) and the
+> [2026-08-13 red team](research/2026-08-13-startup-grade-red-team-v2.md) for
+> current truth.
+
 **Date:** 2026-08-02  
 **Branch audited:** `fix/meter-correctness-audit-remediation` at `e4076b32`  
 **Public main:** `f38c96a3`  
@@ -51,34 +58,22 @@ test comes first.
 
 ### Recovered conversation
 
-The original redesign is in the local Claude archive, not primarily in Codex:
-
-- The founder grants latitude to change the idea, market, name, and architecture in
-  [`40978…jsonl`](</Users/ariv07/.claude/projects/-Users-ariv07-Desktop-forecost-update-forecost/40978a44-caf2-4158-83a9-68a5fcb87c1b.jsonl:51>).
-- The research synthesis says “Kill the current product…” at
-  [line 243](</Users/ariv07/.claude/projects/-Users-ariv07-Desktop-forecost-update-forecost/40978a44-caf2-4158-83a9-68a5fcb87c1b.jsonl:243>).
-- The adversarial pass concludes “The basement is poured” at
-  [line 405](</Users/ariv07/.claude/projects/-Users-ariv07-Desktop-forecost-update-forecost/40978a44-caf2-4158-83a9-68a5fcb87c1b.jsonl:405>).
-- The founder requests every phase and end-to-end testing at
-  [line 412](</Users/ariv07/.claude/projects/-Users-ariv07-Desktop-forecost-update-forecost/40978a44-caf2-4158-83a9-68a5fcb87c1b.jsonl:412>).
-- The implementation response later acknowledges that only Phase 0/1 were built at
-  [line 1354](</Users/ariv07/.claude/projects/-Users-ariv07-Desktop-forecost-update-forecost/40978a44-caf2-4158-83a9-68a5fcb87c1b.jsonl:1354>).
-
-The authoritative strategy is in
-[`BASEMENT.md`](</Users/ariv07/Desktop/FORECOST FINAL/forecost/.claude/research/repositioning/BASEMENT.md:28>),
-[`PLAN.md`](</Users/ariv07/Desktop/FORECOST FINAL/forecost/.claude/research/repositioning/PLAN.md:1>),
-[`DECISIONS.md`](</Users/ariv07/Desktop/FORECOST FINAL/forecost/.claude/research/repositioning/DECISIONS.md:7>),
-and [`HANDOFF.md`](</Users/ariv07/Desktop/FORECOST FINAL/forecost/.claude/research/repositioning/HANDOFF.md:473>).
-The accepted product was deliberately narrower than the proposed six-module “preflight
-intelligence platform,” which the research explicitly rejected.
+This historical reconstruction used an ignored local Claude transcript and the
+ignored files `BASEMENT.md`, `PLAN.md`, `DECISIONS.md`, and `HANDOFF.md`. Those
+sources are not committed, cannot be verified from a clone, and must not be
+treated as repository authority. The contemporaneous notes recorded that the
+founder allowed a product/market/architecture change, the old product was
+rejected, a ledger-first foundation was accepted, and the later implementation
+acknowledged that only its first phases had been built. The accepted proposal
+was narrower than a six-module “preflight intelligence platform.”
 
 ### Continuity failure
 
-All four governing documents live under `.claude/`, are ignored by
-[`.gitignore`](</Users/ariv07/Desktop/FORECOST FINAL/forecost/.gitignore:64>), and have never
-been committed. The public repository retained ledger-centric prose and code, not the product
-contract. Later audits therefore optimized the visible foundation as though it were the full
-product.
+All four historical files lived under ignored `.claude/` state and were never
+committed. The public repository retained ledger-centric prose and code, not
+that product contract. Later audits therefore optimized the visible foundation
+as though it were the full product. This continuity failure is why the current
+handoff is committed in [`../AGENTS.md`](../AGENTS.md), `101/`, and `docs/`.
 
 ### Timeline
 

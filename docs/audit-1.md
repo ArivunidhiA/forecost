@@ -1,5 +1,15 @@
 # Forecost production and adoption audit — 2026-08-02
 
+> **Historical snapshot — superseded.** This document records the 2026-08-02
+> branch and its then-available evidence. Its “code-complete release candidate,”
+> resolved-checklist, test-count, schema, CI, merge, and publication statements
+> are not current approval. The later 2026-08-13 red team found additional P0
+> correctness, privacy, durability, authority, and product-validation blockers.
+> Use [`status.md`](status.md) for current release state and the
+> [`2026-08-13 startup-grade red team`](research/2026-08-13-startup-grade-red-team-v2.md)
+> for the controlling audit. This file remains unchanged below as historical
+> evidence; “fixed” means only “reported fixed in that audited revision.”
+
 Scope: current local branch `fix/meter-correctness-audit-remediation` at
 `7ca26adf`, public repository `ArivunidhiA/forecost`, PR #2, the July research
 and handoff corpus, relevant Codex/ChatGPT conversations from the last two

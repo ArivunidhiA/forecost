@@ -96,6 +96,51 @@ def test_pre_call_fails_open_on_internal_error(tmp_path, monkeypatch):
     assert result == data  # fail-open: gateway keeps working
 
 
+def test_pre_call_honors_ci_fail_closed_on_internal_error(tmp_path, monkeypatch):
+    import forecost.adapters.litellm_hook as hook_mod
+
+    def _boom(_path=None):
+        raise RuntimeError("ledger unavailable")
+
+    policy = tmp_path / "policy.toml"
+    policy.write_text('[policy]\nmode="ci"\non_internal_error="deny"\n', encoding="utf-8")
+    monkeypatch.setattr(hook_mod, "get_ledger_db", _boom)
+    logger = ForecostLogger(policy_path=policy)
+
+    result = _run(logger.async_pre_call_hook(None, None, {"model": "x"}, "acompletion"))
+
+    assert result == "forecost budget gate: internal error (CI fail-closed)"
+
+
+def test_constructor_ci_boundary_fails_closed_when_policy_is_corrupt(tmp_path):
+    policy = tmp_path / "policy.toml"
+    policy.write_text("this is not toml = [", encoding="utf-8")
+    logger = ForecostLogger(policy_path=policy, ci_fail_closed=True)
+
+    result = _run(logger.async_pre_call_hook(None, None, {"model": "x"}, "acompletion"))
+
+    assert result == "forecost budget gate: internal error (CI fail-closed)"
+
+
+def test_constructor_ci_boundary_fails_closed_when_policy_is_missing(tmp_path):
+    logger = ForecostLogger(policy_path=tmp_path / "missing.toml", ci_fail_closed=True)
+
+    result = _run(logger.async_pre_call_hook(None, None, {"model": "x"}, "acompletion"))
+
+    assert result == "forecost budget gate: internal error (CI fail-closed)"
+
+
+def test_corrupt_policy_remains_fail_open_without_explicit_ci_boundary(tmp_path):
+    policy = tmp_path / "policy.toml"
+    policy.write_text("this is not toml = [", encoding="utf-8")
+    logger = ForecostLogger(policy_path=policy)
+    data = {"model": "x"}
+
+    result = _run(logger.async_pre_call_hook(None, None, data, "acompletion"))
+
+    assert result == data
+
+
 def test_success_event_lands_in_ledger_with_source_reported_cost(
     ledger_conn, monkeypatch, tmp_path
 ):
@@ -137,7 +182,6 @@ def test_success_event_lands_in_ledger_with_source_reported_cost(
 
 
 def test_success_event_never_raises(ledger_conn, monkeypatch, tmp_path):
-
     def _boom(_path=None):
         raise RuntimeError("boom")
 

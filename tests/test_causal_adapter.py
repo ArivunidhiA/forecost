@@ -48,3 +48,25 @@ def test_runtime_mapper_requires_trace_context_not_payload_text():
             },
             producer="otel",
         )
+
+
+def test_runtime_mapper_retains_only_explicit_timing_semantics():
+    item = runtime_span_observation(
+        {
+            "conversation_id": "c",
+            "trace_id": "1" * 32,
+            "run_id": "r",
+            "span_id": "2" * 16,
+            "idempotency_key": "i",
+            "occurred_at": "2026-01-01T00:00:30Z",
+            "observed_at": "2026-01-01T00:01:00Z",
+            "start_time": "2026-01-01T00:00:00Z",
+            "end_time": "2026-01-01T00:00:05Z",
+        },
+        producer="otel",
+    ).normalized()
+
+    assert item.payload["timing_source"] == "explicit_interval"
+    assert item.payload["started_at"] == "2026-01-01T00:00:00+00:00"
+    assert item.payload["ended_at"] == "2026-01-01T00:00:05+00:00"
+    assert item.payload["duration_micros"] is None

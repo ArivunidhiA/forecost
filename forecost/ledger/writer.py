@@ -208,7 +208,11 @@ class LedgerWriteQueue:
             return False
         if self._worker_error is not None or not self._thread.is_alive():
             self._last_error = self._worker_error or "ledger writer is not running"
-            log_error("ledger.writer", self._last_error)
+            log_error(
+                "ledger.writer",
+                "LEDGER_WRITER_UNAVAILABLE",
+                fingerprint_source=self._last_error,
+            )
             return False
         try:
             self._queue.put_nowait((event, postings))
@@ -217,12 +221,17 @@ class LedgerWriteQueue:
             self._last_error = "ledger write queue is full"
             log_error(
                 "ledger.writer",
-                f"WriteQueue full (10,000 items) — refusing event for model={event.model}",
+                "LEDGER_QUEUE_FULL",
+                fingerprint_source=event.model,
             )
             return False
         except Exception as exc:  # nosec B110 - never block the caller
             self._last_error = f"ledger enqueue failed: {exc!r}"
-            log_error("ledger.writer", self._last_error)
+            log_error(
+                "ledger.writer",
+                "LEDGER_ENQUEUE_FAILED",
+                fingerprint_source=exc,
+            )
             return False
 
     def drain(self, timeout: float = 5.0) -> bool:
@@ -268,7 +277,11 @@ class LedgerWriteQueue:
         except Exception as exc:
             self._worker_error = f"ledger writer startup failed: {exc!r}"
             self._last_error = self._worker_error
-            log_error("ledger.writer", self._worker_error)
+            log_error(
+                "ledger.writer",
+                "LEDGER_STARTUP_FAILED",
+                fingerprint_source=exc,
+            )
             self._ready.set()
             return
         self._ready.set()
@@ -322,14 +335,20 @@ class LedgerWriteQueue:
             _insert_batch(conn, batch)
             return True
         except Exception as e:
-            log_error("ledger.writer", f"flush failed, retrying once: {e!r}")
+            log_error(
+                "ledger.writer",
+                "LEDGER_FLUSH_RETRY",
+                fingerprint_source=e,
+            )
             time.sleep(0.5)
             try:
                 _insert_batch(conn, batch)
                 return True
             except Exception as e2:
                 log_error(
-                    "ledger.writer", f"flush failed after retry, spilling to recovery: {e2!r}"
+                    "ledger.writer",
+                    "LEDGER_SPILL_STARTED",
+                    fingerprint_source=e2,
                 )
                 try:
                     _spill_batch(recovery_path, batch)
@@ -338,7 +357,11 @@ class LedgerWriteQueue:
                     )
                 except OSError as e3:
                     self._last_error = f"ledger database and recovery spill failed: {e3!r}"
-                    log_error("ledger.writer", self._last_error)
+                    log_error(
+                        "ledger.writer",
+                        "LEDGER_DURABILITY_FAILED",
+                        fingerprint_source=e3,
+                    )
                 return False
 
     def close(self) -> None:

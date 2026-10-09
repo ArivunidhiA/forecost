@@ -8,7 +8,13 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from forecost.ledger.contracts import CausalIdentity, Observation, canonical_json, opaque_id
+from forecost.ledger.contracts import (
+    CausalIdentity,
+    Observation,
+    canonical_json,
+    opaque_id,
+    trace_scoped_span_key,
+)
 from forecost.ledger.integrity import advance_chain
 
 
@@ -203,6 +209,8 @@ def rebuild_projections(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM span_links")
     conn.execute("DELETE FROM causal_spans")
     conn.execute("DELETE FROM causal_runs")
+    conn.execute("DELETE FROM causal_span_identities")
+    conn.execute("DELETE FROM causal_run_identities")
     rows = conn.execute(
         """
         SELECT * FROM journal_observations
@@ -216,6 +224,7 @@ def rebuild_projections(conn: sqlite3.Connection) -> None:
 def _project_row(conn: sqlite3.Connection, row: sqlite3.Row) -> None:
     causal = _causal(row)
     payload = _payload(row)
+    _register_identity(conn, causal)
     source_order = f"{row['producer']}:{row['source_sequence']:020d}:{row['idempotency_key']}"
     if row["event_kind"] == "span":
         _project_span(conn, row, causal, payload, source_order)
@@ -229,6 +238,93 @@ def _project_row(conn: sqlite3.Connection, row: sqlite3.Row) -> None:
         raise ValueError(f"unsupported event kind: {row['event_kind']}")
 
 
+def _register_identity(conn: sqlite3.Connection, causal: dict[str, object]) -> None:
+    """Claim run and trace-scoped span ownership before any projection write."""
+    conversation_id = str(causal["conversation_id"])
+    trace_id = str(causal["trace_id"])
+    run_id = str(causal["run_id"])
+    span_id = str(causal["span_id"])
+    span_key = trace_scoped_span_key(trace_id, span_id)
+    conn.execute(
+        "INSERT OR IGNORE INTO causal_run_identities(run_id, conversation_id, trace_id) "
+        "VALUES (?,?,?)",
+        (run_id, conversation_id, trace_id),
+    )
+    run_owner = conn.execute(
+        "SELECT conversation_id, trace_id FROM causal_run_identities WHERE run_id=?", (run_id,)
+    ).fetchone()
+    if run_owner is None or tuple(run_owner) != (conversation_id, trace_id):
+        raise ValueError("run identity already belongs to a different conversation or trace")
+    conn.execute(
+        "INSERT OR IGNORE INTO causal_span_identities("
+        "span_key, span_id, run_id, conversation_id, trace_id) VALUES (?,?,?,?,?)",
+        (span_key, span_id, run_id, conversation_id, trace_id),
+    )
+    span_owner = conn.execute(
+        "SELECT span_id, run_id, conversation_id, trace_id "
+        "FROM causal_span_identities WHERE span_key=?",
+        (span_key,),
+    ).fetchone()
+    if span_owner is None or tuple(span_owner) != (span_id, run_id, conversation_id, trace_id):
+        raise ValueError("trace-scoped span identity already belongs to a different run")
+
+
+def _span_timing(
+    row: sqlite3.Row, payload: Mapping[str, object]
+) -> tuple[str | None, str | None, int | None, str | None, str | None]:
+    semantic = payload.get("timing_source")
+    if semantic is None:
+        return None, None, None, None, None
+    started_at = payload.get("started_at")
+    ended_at = payload.get("ended_at")
+    duration = payload.get("duration_micros")
+    if duration is not None and (isinstance(duration, bool) or not isinstance(duration, int)):
+        raise ValueError("stored duration_micros is not an integer")
+    return (
+        str(started_at) if started_at is not None else None,
+        str(ended_at) if ended_at is not None else None,
+        duration,
+        str(semantic),
+        str(row["producer"]),
+    )
+
+
+def _validate_timing_update(
+    conn: sqlite3.Connection,
+    span_key: str,
+    timing: tuple[str | None, str | None, int | None, str | None, str | None],
+) -> None:
+    existing = conn.execute(
+        "SELECT started_at, ended_at, duration_micros, timing_semantic, timing_producer "
+        "FROM causal_spans WHERE span_key=?",
+        (span_key,),
+    ).fetchone()
+    if existing is None or timing[3] is None:
+        return
+    for old, new in zip(tuple(existing), timing, strict=True):
+        if old is not None and new is not None and old != new:
+            raise ValueError("conflicting explicit timing evidence for trace-scoped span")
+
+
+def _finalize_interval_duration(conn: sqlite3.Connection, span_key: str) -> None:
+    timing = conn.execute(
+        "SELECT started_at, ended_at, timing_semantic FROM causal_spans WHERE span_key=?",
+        (span_key,),
+    ).fetchone()
+    if timing is None or timing[2] != "explicit_interval" or not timing[0] or not timing[1]:
+        return
+    duration = int(
+        (
+            datetime.fromisoformat(timing[1]).astimezone(timezone.utc)
+            - datetime.fromisoformat(timing[0]).astimezone(timezone.utc)
+        ).total_seconds()
+        * 1_000_000
+    )
+    if duration < 0:  # pragma: no cover - normalized interval invariant
+        raise ValueError("explicit span end precedes start")
+    conn.execute("UPDATE causal_spans SET duration_micros=? WHERE span_key=?", (duration, span_key))
+
+
 def _project_span(
     conn: sqlite3.Connection,
     row: sqlite3.Row,
@@ -236,6 +332,21 @@ def _project_span(
     payload: Mapping[str, object],
     source_order: str,
 ) -> None:
+    trace_id = str(causal["trace_id"])
+    span_id = str(causal["span_id"])
+    span_key = trace_scoped_span_key(trace_id, span_id)
+    parent_span_id = causal.get("parent_span_id")
+    parent_span_key = (
+        trace_scoped_span_key(trace_id, str(parent_span_id)) if parent_span_id is not None else None
+    )
+    attempt_of_span_id = payload.get("attempt_of_span_id")
+    attempt_of_span_key = (
+        trace_scoped_span_key(trace_id, str(attempt_of_span_id))
+        if attempt_of_span_id is not None
+        else None
+    )
+    timing = _span_timing(row, payload)
+    _validate_timing_update(conn, span_key, timing)
     conn.execute(
         """
         INSERT INTO causal_runs(run_id, conversation_id, trace_id, lifecycle, created_at,
@@ -262,33 +373,47 @@ def _project_span(
     conn.execute(
         """
         INSERT INTO causal_spans(
-            span_id, run_id, conversation_id, trace_id, parent_span_id, operation_kind,
-            lifecycle, agent_id, workflow_node_id, branch_id, attempt_of_span_id,
-            checkpoint_id, occurred_at, observed_at, source_order
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(span_id) DO UPDATE SET
-            lifecycle=excluded.lifecycle, observed_at=excluded.observed_at,
-            source_order=excluded.source_order
-        WHERE excluded.source_order > causal_spans.source_order
+            span_key, span_id, run_id, conversation_id, trace_id, parent_span_key,
+            parent_span_id, operation_kind, lifecycle, agent_id, workflow_node_id,
+            branch_id, attempt_of_span_key, attempt_of_span_id, checkpoint_id,
+            occurred_at, observed_at, started_at, ended_at, duration_micros,
+            timing_semantic, timing_producer, source_order
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(span_key) DO UPDATE SET
+            lifecycle=CASE WHEN excluded.source_order > causal_spans.source_order
+                           THEN excluded.lifecycle ELSE causal_spans.lifecycle END,
+            observed_at=CASE WHEN excluded.source_order > causal_spans.source_order
+                             THEN excluded.observed_at ELSE causal_spans.observed_at END,
+            source_order=MAX(excluded.source_order, causal_spans.source_order),
+            started_at=COALESCE(causal_spans.started_at, excluded.started_at),
+            ended_at=COALESCE(causal_spans.ended_at, excluded.ended_at),
+            duration_micros=COALESCE(causal_spans.duration_micros, excluded.duration_micros),
+            timing_semantic=COALESCE(causal_spans.timing_semantic, excluded.timing_semantic),
+            timing_producer=COALESCE(causal_spans.timing_producer, excluded.timing_producer)
         """,
         (
-            causal["span_id"],
+            span_key,
+            span_id,
             causal["run_id"],
             causal["conversation_id"],
-            causal["trace_id"],
-            causal.get("parent_span_id"),
+            trace_id,
+            parent_span_key,
+            parent_span_id,
             payload["operation_kind"],
             payload["lifecycle"],
             payload.get("agent_id"),
             payload.get("workflow_node_id"),
             payload.get("branch_id"),
-            payload.get("attempt_of_span_id"),
+            attempt_of_span_key,
+            attempt_of_span_id,
             payload.get("checkpoint_id"),
             row["occurred_at"],
             row["observed_at"],
+            *timing,
             source_order,
         ),
     )
+    _finalize_interval_duration(conn, span_key)
     links = causal.get("links", [])
     if not isinstance(links, list):  # pragma: no cover - causal contract validation
         raise ValueError("causal links must be a list")
@@ -296,9 +421,17 @@ def _project_span(
         if not isinstance(linked_span_id, str):  # pragma: no cover - causal contract validation
             raise ValueError("causal link must be an identifier")
         conn.execute(
-            "INSERT INTO span_links(span_id, linked_span_id, link_type, observation_id) "
-            "VALUES (?,?,?,?)",
-            (causal["span_id"], linked_span_id, "fan_in", row["observation_id"]),
+            "INSERT INTO span_links("
+            "span_key, linked_span_key, span_id, linked_span_id, link_type, observation_id) "
+            "VALUES (?,?,?,?,?,?)",
+            (
+                span_key,
+                trace_scoped_span_key(trace_id, linked_span_id),
+                span_id,
+                linked_span_id,
+                "fan_in",
+                row["observation_id"],
+            ),
         )
 
 
@@ -308,15 +441,17 @@ def _project_meter(
     causal: dict[str, object],
     payload: dict[str, object],
 ) -> None:
+    span_key = trace_scoped_span_key(str(causal["trace_id"]), str(causal["span_id"]))
     conn.execute(
         """
         INSERT INTO meter_facts(
-            fact_id, span_id, meter_name, unit, quantity_micros, aggregation,
+            fact_id, span_key, span_id, meter_name, unit, quantity_micros, aggregation,
             dimensions_json, source, finality, occurred_at, observed_at, observation_id
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             opaque_id("fact", row["observation_id"]),
+            span_key,
             causal["span_id"],
             payload["meter_name"],
             payload["unit"],
@@ -338,17 +473,19 @@ def _project_charge(
     causal: dict[str, object],
     payload: dict[str, object],
 ) -> None:
+    span_key = trace_scoped_span_key(str(causal["trace_id"]), str(causal["span_id"]))
     conn.execute(
         """
         INSERT INTO charges(
-            charge_id, fact_id, span_id, amount_micros, currency, authority, line_item,
+            charge_id, fact_id, span_key, span_id, amount_micros, currency, authority, line_item,
             tariff_json, account_scope, billing_period, finality, occurred_at, observed_at,
             supersedes_charge_id, observation_id
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             opaque_id("charge", row["observation_id"]),
             payload.get("fact_id"),
+            span_key,
             causal["span_id"],
             payload["amount_micros"],
             payload["currency"],

@@ -93,11 +93,11 @@ def _linear_forecast(daily_costs: list[float], horizon: int) -> list[float] | No
     n = len(daily_costs)
     if n < 3:
         return None
-    x = np.arange(n, dtype=float)  # type: ignore[union-attr]
+    x: Any = np.arange(n, dtype=float)  # type: ignore[union-attr]
     y = np.array(daily_costs, dtype=float)  # type: ignore[union-attr]
     coeffs = np.polyfit(x, y, 1)  # type: ignore[union-attr]
     slope, intercept = coeffs[0], coeffs[1]
-    future_x = np.arange(n, n + horizon, dtype=float)  # type: ignore[union-attr]
+    future_x: Any = np.arange(n, n + horizon, dtype=float)  # type: ignore[union-attr]
     fcast = intercept + slope * future_x
     return [max(0.0, v) for v in fcast]
 

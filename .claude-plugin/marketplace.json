@@ -8,7 +8,7 @@
     {
       "name": "forecost",
       "source": "./plugin",
-      "description": "Local, content-free ledger + fail-open budget gates for Claude Code: records what your agents actually cost, reconciles the meters nobody trusts, and holds the budget line you set."
+      "description": "UNRELEASED experimental local Claude observation for content-minimized economic receipts; known P0 release blockers and no provider-side containment."
     }
   ]
 }

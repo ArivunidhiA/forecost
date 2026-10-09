@@ -453,7 +453,7 @@ class WriteQueue:
             _insert_usage_logs_batch(conn, batch)
         except Exception as e:
             _ensure_dir()
-            log_exception("legacy-db", e)
+            log_exception("legacy-db", e, "LEGACY_DB_WRITE_FAILED")
             time.sleep(0.5)
             try:
                 _insert_usage_logs_batch(conn, batch)

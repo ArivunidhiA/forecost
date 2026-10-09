@@ -1,5 +1,5 @@
 {
   "name": "forecost",
   "version": "0.3.0",
-  "description": "Experimental local, fail-open Claude Code observation for Forecost's content-free evidence ledger; no provider-side containment."
+  "description": "UNRELEASED experimental local Claude observation for content-minimized economic receipts; known P0 release blockers and no provider-side containment."
 }

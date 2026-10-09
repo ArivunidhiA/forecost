@@ -3,12 +3,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 if sys.version_info >= (3, 11):
     import tomllib
 else:  # pragma: no cover - Python 3.10
     import tomli as tomllib
 
-from scripts.check_release import check_release, release_versions
+from scripts.check_release import _validate_release_authorization, check_release, release_versions
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -40,6 +42,7 @@ def test_machine_readable_capabilities_match_supported_surfaces():
     assert capabilities["interfaces"]["mcp"]["tools"] == [
         "forecost_list_runs",
         "forecost_get_receipt",
+        "forecost_compare_runs",
     ]
     assert "read-only" in capabilities["interfaces"]["mcp"]["store"]
     protocols = {
@@ -79,3 +82,8 @@ def test_release_check_rejects_unreleased_changelog():
     )
     assert result.returncode != 0
     assert "still marks" in result.stderr
+
+
+def test_release_authorization_rejects_machine_readable_hold():
+    with pytest.raises(ValueError, match="release_hold"):
+        _validate_release_authorization()

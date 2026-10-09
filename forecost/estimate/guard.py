@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from forecost.adapters.base import content_free_identifier
 from forecost.ledger.db import ledger_write_lock
 
 CONSEC_ERROR_THRESHOLD = 3
@@ -161,6 +162,7 @@ def record_guard_flag(
     """Persist one guard flag. Defaults to shadow=1 (computed, never surfaced) —
     the guard stays shadow-only until it can be scored against real user marks
     (the published 'precision' is label-circular; see README)."""
+    normalized_run_id = content_free_identifier("run", run_id) if run_id is not None else None
     with ledger_write_lock:
         conn.execute(
             """
@@ -169,7 +171,7 @@ def record_guard_flag(
             """,
             (
                 session_id,
-                run_id,
+                normalized_run_id,
                 datetime.now(timezone.utc).isoformat(),
                 evidence.rule_id,
                 evidence.fact,

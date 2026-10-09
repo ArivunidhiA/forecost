@@ -6,8 +6,11 @@ test at the only copy of real data.
 
 ## Safe sequence
 
-1. Stop writers and record the installed Forecost version.
-2. Copy the entire Forecost data root to owner-only backup storage.
+1. Stop incompatible writers and record the installed Forecost version.
+2. Copy non-SQLite owned state to owner-only backup storage. For `ledger.db`,
+   use `forecost ledger migrate-schema`: it creates and integrity-checks a
+   transactionally consistent SQLite Backup API snapshot, including committed
+   WAL pages, before applying a schema change.
 3. Run the schema migration in dry-run mode against a copy.
 4. Inspect the proposed schema version, row counts, rejected records, legacy
    labels, and backup destination.
@@ -29,9 +32,15 @@ or complete source coverage.
 ## Rollback
 
 There is no reverse schema migration. Rollback means stopping writers and
-restoring the complete pre-migration backup. Never copy individual SQLite files
-while a writer is active, and never mix a restored database with newer recovery
-spools or hook state.
+restoring the complete pre-migration backup. The migration `.bak` is a
+standalone SQLite image; never combine it with WAL/SHM sidecars from another
+point in time. Do not mix a restored database with newer recovery spools or
+hook state.
+
+The canonical ledger uses WAL plus `synchronous=FULL`. This establishes the
+local SQLite commit boundary; it is not remote replication, protection from a
+lying storage device, or same-user tamper resistance. See
+[ADR 0008](adr/0008-sqlite-durability.md) for the exact boundary.
 
 ## Manual gate
 

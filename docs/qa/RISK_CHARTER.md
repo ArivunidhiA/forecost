@@ -1,5 +1,11 @@
 # Forecost QA risk charter
 
+> **Historical risk charter.** These are hypotheses the 2026-08-09 QA pass
+> tried to test, not current guarantees. The 2026-08-13 red team found P0
+> violations of items 1–4, 6, 8, and 10 in that baseline; the current worktree
+> contains later internal repairs, but not an external release audit. Current truth is in
+> [`../status.md`](../status.md).
+
 **Frozen:** 2026-08-09, before broad packaged-product QA.
 
 ## Highest-risk assumptions

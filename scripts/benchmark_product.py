@@ -78,12 +78,14 @@ def _observations(start: int, stop: int, *, charge_stride: int) -> Iterator:
                 causal=replace(
                     causal,
                     source_sequence=index * 3 + 2,
-                    idempotency_key=f"benchmark-provider-{index}",
+                    idempotency_key=f"benchmark-imported-claim-{index}",
                 ),
                 payload={
                     "amount_micros": 1,
                     "currency": "USD",
-                    "authority": "billed",
+                    # This synthetic lane has no authenticated provider
+                    # profile, so it exercises the arbitrary-import authority.
+                    "authority": "user_imported_claim",
                     "line_item": "model_inference",
                     "finality": "final",
                 },

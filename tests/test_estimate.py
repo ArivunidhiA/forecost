@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from forecost.adapters.base import UsageEvent
+from forecost.adapters.base import UsageEvent, content_free_identifier
 from forecost.estimate.calibration import reconcile_estimates
 from forecost.estimate.engine import estimate_cost, record_estimate
 from forecost.estimate.flags import plan_missing_test_step, scan_prompt
@@ -187,7 +187,25 @@ def test_record_guard_flag_writes_shadow_row(ledger_conn):
 
     ev = GuardEvidence("consec_tool_errors", "3 consecutive")
     record_guard_flag(ledger_conn, None, "run-1", ev, shadow=True)
-    row = ledger_conn.execute("SELECT rule_id, evidence, shadow FROM guard_flags").fetchone()
+    row = ledger_conn.execute(
+        "SELECT run_id, rule_id, evidence, shadow FROM guard_flags"
+    ).fetchone()
+    assert row["run_id"] == content_free_identifier("run", "run-1")
     assert row["rule_id"] == "consec_tool_errors"
     assert row["evidence"] == "3 consecutive"
     assert row["shadow"] == 1
+
+
+def test_record_estimate_pseudonymizes_run_identity(ledger_conn):
+    raw = "/private/workspace/canary-run"
+    estimate = estimate_cost(
+        ledger_conn,
+        TaskContext(prompt_text="test", cwd="/tmp/project"),
+        "novel-category-never-seen",
+    )
+
+    record_estimate(ledger_conn, estimate, None, None, raw, shadow=True)
+
+    stored = ledger_conn.execute("SELECT run_id FROM estimates").fetchone()[0]
+    assert stored == content_free_identifier("run", raw)
+    assert raw not in stored

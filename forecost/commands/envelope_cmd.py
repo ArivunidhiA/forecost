@@ -39,6 +39,7 @@ def envelope() -> None:
             "billed",
             "provider_estimate",
             "gateway_estimate",
+            "user_imported_claim",
             "list_rate",
             "contract_allocation",
             "subscription_quota",

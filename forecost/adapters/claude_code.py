@@ -13,7 +13,9 @@ computed downstream from tokens x pricing (LedgerSink's job), never read here.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import os
 import re
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
@@ -24,10 +26,12 @@ from forecost.adapters.base import (
     LedgerSink,
     PullAdapter,
     UsageEvent,
+    content_free_identifier,
     validate_usage_event,
 )
 from forecost.adapters.causal import runtime_meter_observation
 from forecost.core.errlog import log_error
+from forecost.core.local_identity import installation_key, keyed_fingerprint
 from forecost.ledger.contracts import CausalIdentity, Observation
 from forecost.ledger.evidence import append_observation, observation
 
@@ -219,17 +223,23 @@ def _append_causal_record(record: dict, prompt_id: str | None, conn) -> int:
     except (TypeError, ValueError):
         log_error(
             "adapters.claude_code.causal",
-            "skipped a schema-invalid structural record",
+            "CLAUDE_CAUSAL_RECORD_INVALID",
         )
         return 0
 
 
 def _read_causal_path(
-    path: Path, offset: int, prompt_id: str | None, conn
-) -> tuple[int, int, str | None]:
+    path: Path,
+    cursor: dict,
+    conn,
+    identity_key: bytes,
+) -> tuple[int, str | None]:
     inserted = 0
-    safe_offset = offset
-    with path.open("rb") as stream:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    with os.fdopen(descriptor, "rb") as stream:
+        offset, prompt_id, prefix_digest = _resume_cursor(stream, cursor, identity_key)
+        safe_offset = offset
         stream.seek(offset)
         for raw_line in stream:
             if not raw_line.endswith(b"\n"):
@@ -239,24 +249,36 @@ def _read_causal_path(
                 prompt_id = _updated_prompt_id(record, prompt_id)
                 inserted += _append_causal_record(record, prompt_id, conn)
             safe_offset += len(raw_line)
-    return inserted, safe_offset, prompt_id
-
-
-def _ingest_causal_path(path: Path, state: IngestStateStore, conn, source: str) -> int:
-    cursor = _decode_cursor(state.get(source, str(path)))
-    original_offset = _cursor_offset(cursor)
-    offset = original_offset
-    prompt_id = _cursor_prompt_id(cursor)
-    if path.stat().st_size < offset:
-        offset = 0
-        prompt_id = None
-    inserted, safe_offset, prompt_id = _read_causal_path(path, offset, prompt_id, conn)
-    if safe_offset != original_offset:
-        state.set(
-            source,
-            str(path),
-            json.dumps({"offset": safe_offset, "prompt_id": prompt_id}),
+            prefix_digest.update(raw_line)
+        checkpoint = _verified_processed_checkpoint(
+            stream, safe_offset, identity_key, prefix_digest
         )
+        if checkpoint is None:
+            # Bytes changed after they were processed. Keep the old cursor so
+            # the next poll safely rewinds; observations above are idempotent.
+            return inserted, None
+        file_identity, boundary_identity = checkpoint
+    return inserted, _encode_cursor(
+        safe_offset,
+        prompt_id,
+        file_identity=file_identity,
+        boundary_identity=boundary_identity,
+    )
+
+
+def _ingest_causal_path(
+    path: Path,
+    state: IngestStateStore,
+    conn,
+    source: str,
+    identity_key: bytes,
+) -> int:
+    cursor_key = _cursor_key(source, str(path), identity_key)
+    cursor_raw = state.get(source, cursor_key)
+    cursor = _decode_cursor(cursor_raw)
+    inserted, next_cursor = _read_causal_path(path, cursor, conn, identity_key)
+    if next_cursor is not None and next_cursor != cursor_raw:
+        state.set(source, cursor_key, next_cursor)
     return inserted
 
 
@@ -264,13 +286,20 @@ def ingest_causal_paths(paths: Iterable[Path], state: IngestStateStore, conn) ->
     """Incrementally append causal transcript facts using an independent cursor."""
     inserted = 0
     source = "claude_code_causal"
-    for path in sorted(set(paths)):
-        if not path.is_file():
-            continue
+    eligible = [path for path in sorted(set(paths)) if path.is_file() and not path.is_symlink()]
+    identity_key = installation_key()
+    _migrate_legacy_cursors(state, source, identity_key)
+    if not eligible:
+        return 0
+    for path in eligible:
         try:
-            inserted += _ingest_causal_path(path, state, conn, source)
+            inserted += _ingest_causal_path(path, state, conn, source, identity_key)
         except OSError as error:
-            log_error("adapters.claude_code.causal", f"read failed for {path.name}: {error!r}")
+            log_error(
+                "adapters.claude_code.causal",
+                "CLAUDE_TRANSCRIPT_READ_FAILED",
+                fingerprint_source=(str(path), error),
+            )
     return inserted
 
 
@@ -435,16 +464,211 @@ def _decode_cursor(cursor_raw: str | None) -> dict:
     return cursor if isinstance(cursor, dict) else {}
 
 
+_CURSOR_KEY_PREFIX = "cursor-hmac:v1:"
+_CURSOR_KEY = re.compile(r"^cursor-hmac:v1:[0-9a-f]{64}$")
+_FILE_IDENTITY = re.compile(r"^file-hmac:v1:[0-9a-f]{64}$")
+_BOUNDARY_IDENTITY = re.compile(r"^boundary-hmac:v3:[0-9a-f]{64}$")
+_CURSOR_HASH_CHUNK_BYTES = 64 * 1024
+
+
+def _cursor_key(source: str, path_text: str, identity_key: bytes) -> str:
+    """Bind one exact transcript identity to this installation and source.
+
+    The full path participates in the HMAC, so equal basenames in two Claude
+    workspace directories cannot share a cursor.  The path itself never leaves
+    process memory.
+    """
+    digest = keyed_fingerprint(
+        "claude-transcript-cursor-v1",
+        source,
+        path_text,
+        key=identity_key,
+    )
+    return f"{_CURSOR_KEY_PREFIX}{digest}"
+
+
+def _opaque_prompt_id(value: object) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    return content_free_identifier("run", value)
+
+
+def _new_prefix_digest(identity_key: bytes) -> hmac.HMAC:
+    return hmac.new(
+        identity_key,
+        b"claude-transcript-prefix-v3\0",
+        digestmod=hashlib.sha256,
+    )
+
+
+def _checkpoint_state(stream, offset: int, identity_key: bytes) -> tuple[str, str, hmac.HMAC]:
+    """Read one descriptor's complete prefix and return keyed checkpoint state.
+
+    The HMAC streams in bounded memory. Hashing the whole consumed prefix is
+    intentional: sampling only the beginning and boundary can miss an in-place,
+    same-length rewrite in the middle of a long transcript.
+    """
+    metadata = os.fstat(stream.fileno())
+    original = stream.tell()
+    digest = _new_prefix_digest(identity_key)
+    stream.seek(0)
+    remaining = offset
+    try:
+        while remaining:
+            chunk = stream.read(min(remaining, _CURSOR_HASH_CHUNK_BYTES))
+            if not chunk:
+                raise OSError("transcript became shorter while checkpointing")
+            digest.update(chunk)
+            remaining -= len(chunk)
+    finally:
+        stream.seek(original)
+    file_identity = "file-hmac:v1:" + keyed_fingerprint(
+        "claude-transcript-file-v1", str(metadata.st_dev), str(metadata.st_ino), key=identity_key
+    )
+    return file_identity, "boundary-hmac:v3:" + digest.hexdigest(), digest
+
+
+def _encode_cursor(
+    offset: int,
+    prompt_id: str | None,
+    *,
+    file_identity: str | None = None,
+    boundary_identity: str | None = None,
+) -> str:
+    value: dict[str, object] = {
+        "offset": max(offset, 0),
+        "prompt_id": _opaque_prompt_id(prompt_id),
+    }
+    if file_identity is not None:
+        value["file_identity"] = file_identity
+    if boundary_identity is not None:
+        value["boundary_identity"] = boundary_identity
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _normalized_cursor_value(value: str) -> tuple[int, str | None, str]:
+    decoded = _decode_cursor(value)
+    offset = _cursor_offset(decoded)
+    prompt_id = _opaque_prompt_id(decoded.get("prompt_id"))
+    raw_identity = decoded.get("file_identity")
+    file_identity = (
+        raw_identity
+        if isinstance(raw_identity, str) and _FILE_IDENTITY.fullmatch(raw_identity)
+        else None
+    )
+    raw_boundary = decoded.get("boundary_identity")
+    boundary_identity = (
+        raw_boundary
+        if isinstance(raw_boundary, str) and _BOUNDARY_IDENTITY.fullmatch(raw_boundary)
+        else None
+    )
+    return (
+        offset,
+        prompt_id,
+        _encode_cursor(
+            offset,
+            prompt_id,
+            file_identity=file_identity,
+            boundary_identity=boundary_identity,
+        ),
+    )
+
+
+def _merge_cursor_values(current: str | None, legacy: str) -> str:
+    """Choose the least-advanced valid cursor so migration cannot skip usage."""
+    legacy_offset, legacy_prompt, normalized_legacy = _normalized_cursor_value(legacy)
+    if current is None:
+        return normalized_legacy
+    current_offset, current_prompt, normalized_current = _normalized_cursor_value(current)
+    if current_offset < legacy_offset:
+        return normalized_current
+    if legacy_offset < current_offset:
+        return normalized_legacy
+    # At an equal byte boundary, conflicting prompt identities are discarded;
+    # the next user record reconstructs the association without exposing text.
+    prompt_id = current_prompt if current_prompt == legacy_prompt else None
+    return _encode_cursor(current_offset, prompt_id)
+
+
+def _migrate_legacy_cursors(
+    state: IngestStateStore,
+    source: str,
+    identity_key: bytes,
+) -> None:
+    migration = getattr(state, "migrate_legacy_keys", None)
+    if not callable(migration):
+        return
+
+    def target(old_key: str) -> str:
+        if _CURSOR_KEY.fullmatch(old_key) is not None:
+            return old_key
+        return _cursor_key(source, old_key, identity_key)
+
+    migration(source, target, _merge_cursor_values)
+
+
 def _cursor_offset(cursor: dict) -> int:
     raw_offset = cursor.get("offset", 0)
-    if isinstance(raw_offset, int) and raw_offset >= 0:
+    if not isinstance(raw_offset, bool) and isinstance(raw_offset, int) and raw_offset >= 0:
         return raw_offset
     return 0
 
 
 def _cursor_prompt_id(cursor: dict) -> str | None:
-    raw_prompt_id = cursor.get("prompt_id")
-    return raw_prompt_id if isinstance(raw_prompt_id, str) else None
+    return _opaque_prompt_id(cursor.get("prompt_id"))
+
+
+def _stored_checkpoint(cursor: dict) -> tuple[str, str] | None:
+    stored_file = cursor.get("file_identity")
+    stored_boundary = cursor.get("boundary_identity")
+    if not (
+        isinstance(stored_file, str)
+        and _FILE_IDENTITY.fullmatch(stored_file)
+        and isinstance(stored_boundary, str)
+        and _BOUNDARY_IDENTITY.fullmatch(stored_boundary)
+    ):
+        return None
+    return stored_file, stored_boundary
+
+
+def _resume_cursor(stream, cursor: dict, identity_key: bytes) -> tuple[int, str | None, hmac.HMAC]:
+    """Validate and bind a cursor to the descriptor that will be consumed."""
+    offset = _cursor_offset(cursor)
+    stored = _stored_checkpoint(cursor)
+    if stored is None:
+        return 0, None, _new_prefix_digest(identity_key)
+    try:
+        if os.fstat(stream.fileno()).st_size < offset:
+            return 0, None, _new_prefix_digest(identity_key)
+        current_file, current_boundary, digest = _checkpoint_state(stream, offset, identity_key)
+    except OSError:
+        return 0, None, _new_prefix_digest(identity_key)
+    if hmac.compare_digest(stored[0], current_file) and hmac.compare_digest(
+        stored[1], current_boundary
+    ):
+        return offset, _cursor_prompt_id(cursor), digest
+    return 0, None, _new_prefix_digest(identity_key)
+
+
+def _verified_processed_checkpoint(
+    stream,
+    offset: int,
+    identity_key: bytes,
+    processed_digest: hmac.HMAC,
+) -> tuple[str, str] | None:
+    """Publish only when rereading yields the exact bytes already processed."""
+    try:
+        file_identity, current_boundary, _digest = _checkpoint_state(stream, offset, identity_key)
+    except OSError:
+        return None
+    processed_boundary = "boundary-hmac:v3:" + processed_digest.hexdigest()
+    if not hmac.compare_digest(processed_boundary, current_boundary):
+        return None
+    return file_identity, processed_boundary
 
 
 def _parse_record(line: str) -> dict | None:
@@ -467,10 +691,14 @@ def _emit_event(event: UsageEvent, sink: LedgerSink) -> tuple[bool, bool]:
         return sink.emit(event) is not False, True
     except ValueError:
         # Complete but permanently invalid source data must not pin the cursor.
-        log_error("adapters.claude_code", "skipped a schema-invalid usage record")
+        log_error("adapters.claude_code", "CLAUDE_RECORD_INVALID")
         return False, True
     except Exception as exc:  # nosec B110 - transient failure must not advance the cursor
-        log_error("adapters.claude_code", f"emit failed, will retry next poll: {exc!r}")
+        log_error(
+            "adapters.claude_code",
+            "SINK_EMIT_FAILED",
+            fingerprint_source=exc,
+        )
         return False, False
 
 
@@ -494,6 +722,7 @@ class ClaudeCodeAdapter(PullAdapter):
 
     def poll(self, state: IngestStateStore, sink: LedgerSink) -> int:
         if not self.claude_dir.is_dir():
+            _migrate_legacy_cursors(state, self.name, installation_key())
             return 0
         return self.poll_paths(self.claude_dir.rglob("*.jsonl"), state, sink)
 
@@ -503,22 +732,22 @@ class ClaudeCodeAdapter(PullAdapter):
         Hook events know the triggering session path and use this method to
         avoid rescanning a user's lifetime transcript tree on every Stop.
         """
-        return sum(
-            self._poll_file(path, state, sink) for path in sorted(set(paths)) if path.is_file()
-        )
+        eligible = [path for path in sorted(set(paths)) if path.is_file() and not path.is_symlink()]
+        identity_key = installation_key()
+        _migrate_legacy_cursors(state, self.name, identity_key)
+        if not eligible:
+            return 0
+        return sum(self._poll_file(path, state, sink, identity_key) for path in eligible)
 
-    def _read_cursor(self, path: Path, state: IngestStateStore) -> tuple[int, str | None]:
-        cursor_raw = state.get(self.name, str(path))
-        cursor = _decode_cursor(cursor_raw)
-        start_offset = _cursor_offset(cursor)
-        prompt_id = _cursor_prompt_id(cursor)
-        try:
-            size = path.stat().st_size
-        except OSError:
-            return -1, None  # sentinel: file vanished/unreadable, caller returns 0
-        if size < start_offset:
-            return 0, None
-        return start_offset, prompt_id
+    def _read_cursor(
+        self,
+        path: Path,
+        state: IngestStateStore,
+        identity_key: bytes,
+    ) -> tuple[str, str | None, dict]:
+        cursor_key = _cursor_key(self.name, str(path), identity_key)
+        cursor_raw = state.get(self.name, cursor_key)
+        return cursor_key, cursor_raw, _decode_cursor(cursor_raw)
 
     @staticmethod
     def _process_line(
@@ -545,7 +774,7 @@ class ClaudeCodeAdapter(PullAdapter):
         try:
             event = _record_to_event(rec, ClaudeCodeAdapter.name, current_prompt_id)
         except (TypeError, ValueError):
-            log_error("adapters.claude_code", "skipped a schema-invalid assistant record")
+            log_error("adapters.claude_code", "CLAUDE_RECORD_INVALID")
             return current_prompt_id, False, True
         if event is None:
             return current_prompt_id, False, True
@@ -556,14 +785,19 @@ class ClaudeCodeAdapter(PullAdapter):
     def _consume_file(
         self,
         path: Path,
-        start_offset: int,
-        current_prompt_id: str | None,
+        cursor: dict,
         sink: LedgerSink,
-    ) -> tuple[int, int, str | None]:
+        identity_key: bytes,
+    ) -> tuple[int, str | None]:
         count = 0
-        safe_offset = start_offset
         try:
-            with open(path, "rb") as file_obj:
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(path, flags)
+            with os.fdopen(descriptor, "rb") as file_obj:
+                start_offset, current_prompt_id, prefix_digest = _resume_cursor(
+                    file_obj, cursor, identity_key
+                )
+                safe_offset = start_offset
                 file_obj.seek(start_offset)
                 for raw_line in file_obj:
                     current_prompt_id, inserted, accepted = _consume_raw_line(
@@ -573,27 +807,44 @@ class ClaudeCodeAdapter(PullAdapter):
                         break
                     count += int(inserted)
                     safe_offset += len(raw_line)
+                    prefix_digest.update(raw_line)
+                checkpoint = _verified_processed_checkpoint(
+                    file_obj, safe_offset, identity_key, prefix_digest
+                )
+                if checkpoint is None:
+                    # Do not publish a cursor over bytes that changed after
+                    # processing. The next poll rewinds and deduplicates.
+                    return count, None
+                file_identity, boundary_identity = checkpoint
         except OSError as exc:
-            log_error("adapters.claude_code", f"read failed for {path.name}: {exc!r}")
-        return count, safe_offset, current_prompt_id
+            log_error(
+                "adapters.claude_code",
+                "CLAUDE_TRANSCRIPT_READ_FAILED",
+                fingerprint_source=(str(path), exc),
+            )
+            return count, None
+        return count, _encode_cursor(
+            safe_offset,
+            current_prompt_id,
+            file_identity=file_identity,
+            boundary_identity=boundary_identity,
+        )
 
-    def _poll_file(self, path: Path, state: IngestStateStore, sink: LedgerSink) -> int:
-        start_offset, current_prompt_id = self._read_cursor(path, state)
-        if start_offset < 0:
-            return 0
+    def _poll_file(
+        self,
+        path: Path,
+        state: IngestStateStore,
+        sink: LedgerSink,
+        identity_key: bytes,
+    ) -> int:
+        cursor_key, cursor_raw, cursor = self._read_cursor(path, state, identity_key)
 
         # Advance the cursor only past newline-terminated, successfully-accepted
         # lines. A partial final line (the writer is still appending it) or a
         # transient emit failure leaves the cursor before that record so the
         # next poll retries it — no silent undercount, no torn-line loss.
-        count, safe_offset, current_prompt_id = self._consume_file(
-            path, start_offset, current_prompt_id, sink
-        )
+        count, next_cursor = self._consume_file(path, cursor, sink, identity_key)
 
-        if safe_offset != start_offset:  # skip a no-op write when nothing new was consumed
-            state.set(
-                self.name,
-                str(path),
-                json.dumps({"offset": safe_offset, "prompt_id": current_prompt_id}),
-            )
+        if next_cursor is not None and next_cursor != cursor_raw:
+            state.set(self.name, cursor_key, next_cursor)
         return count

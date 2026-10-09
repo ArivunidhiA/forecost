@@ -1,16 +1,81 @@
-import shutil
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
 import click
 
+from forecost.core.paths import chmod_private
 from forecost.ledger import queries as q
-from forecost.ledger.db import LEDGER_PATH, _ensure_dir, get_ledger_db
+from forecost.ledger.db import (
+    LEDGER_PATH,
+    _apply_pragmas,
+    _ensure_dir,
+    create_verified_snapshot,
+    get_ledger_db,
+)
 from forecost.ledger.schema import SCHEMA_VERSION, apply_schema
 
 _BASIS_CHOICE = click.Choice(["canonical", "pricing_table", "source_reported"])
 _ALL_TIME = "1970-01-01T00:00:00+00:00"
+
+
+def _verified_integrity(conn: sqlite3.Connection, *, label: str) -> None:
+    """Reject a SQLite image unless a full page/index integrity check passes."""
+    findings = [str(row[0]) for row in conn.execute("PRAGMA integrity_check")]
+    if findings != ["ok"]:
+        detail = "; ".join(findings[:3]) or "no result"
+        raise sqlite3.DatabaseError(f"{label} failed SQLite integrity_check: {detail}")
+
+
+def _discard_backup_files(path: Path) -> None:
+    """Remove only the exact failed backup and its SQLite sidecars."""
+    for candidate in (
+        path,
+        Path(f"{path}-journal"),
+        Path(f"{path}-wal"),
+        Path(f"{path}-shm"),
+    ):
+        candidate.unlink(missing_ok=True)
+
+
+def _create_verified_backup(
+    source: sqlite3.Connection,
+    backup_path: Path,
+    *,
+    connect: Callable[[str], sqlite3.Connection] = sqlite3.connect,
+) -> None:
+    """Create a transactionally consistent, standalone SQLite backup.
+
+    ``Connection.backup`` reads the logical database, including committed WAL
+    pages.  Copying only the main file can silently omit those pages.  The
+    destination uses FULL synchronous mode, is checked before migration starts,
+    and is deleted if backup or verification fails.
+    """
+    if backup_path.exists() or backup_path.is_symlink():
+        raise FileExistsError(f"refusing to overwrite migration backup: {backup_path}")
+    destination: sqlite3.Connection | None = None
+    try:
+        if connect is sqlite3.connect:
+            create_verified_snapshot(source, backup_path)
+        else:
+            # Dependency seam used only to exercise cleanup after a partial
+            # backup failure; production goes through create_verified_snapshot.
+            destination = connect(str(backup_path))
+            destination.execute("PRAGMA synchronous=FULL")
+            source.backup(destination)
+            _verified_integrity(destination, label="migration backup")
+            destination.commit()
+    except BaseException:
+        if destination is not None:
+            destination.close()
+            destination = None
+        _discard_backup_files(backup_path)
+        raise
+    finally:
+        if destination is not None:
+            destination.close()
+    chmod_private(backup_path)
 
 
 @click.group()
@@ -93,7 +158,7 @@ def ledger_by_workspace(currency, basis):
 @click.option("--ledger-path", type=click.Path(path_type=Path), default=None)
 @click.option("--dry-run", is_flag=True, help="Report pending migration without changing files.")
 def migrate_schema(ledger_path: Path | None, dry_run: bool) -> None:
-    """Apply forward-only ledger migrations with a timestamped backup."""
+    """Apply forward-only migrations after a verified SQLite snapshot."""
     path = (ledger_path or LEDGER_PATH).expanduser().resolve()
     if dry_run:
         if not path.exists():
@@ -108,13 +173,20 @@ def migrate_schema(ledger_path: Path | None, dry_run: bool) -> None:
         return
     backup: Path | None = None
     _ensure_dir(path)
-    if path.exists():
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        backup = path.with_name(f"{path.name}.pre-v{SCHEMA_VERSION}-{stamp}.bak")
-        shutil.copy2(path, backup)
-    conn = sqlite3.connect(path)
+    existed = path.exists()
+    conn = sqlite3.connect(str(path))
     try:
+        _apply_pragmas(conn)
+        if existed:
+            # Microseconds avoid overwriting two backups produced in one second.
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            backup = path.with_name(f"{path.name}.pre-v{SCHEMA_VERSION}-{stamp}.bak")
+            _create_verified_backup(conn, backup)
         apply_schema(conn)
+        _verified_integrity(conn, label="migrated ledger")
+    except (OSError, RuntimeError, sqlite3.Error) as error:
+        retained = f" Verified backup retained at {backup}." if backup and backup.exists() else ""
+        raise click.ClickException(f"Ledger migration failed: {error}.{retained}") from error
     finally:
         conn.close()
     if backup is None:

@@ -2,6 +2,12 @@
 
 Publication is intentionally the last and only external step.
 
+> **2026-08-13 hold:** `docs/status.md` records unresolved P0 defects. A
+> historical `GO WITH KNOWN RISK` verdict and founder acceptance are not enough
+> while that hold remains. The master product/launch checklist and a new
+> independent audit must explicitly clear every P0 before this process can
+> publish.
+
 ## Build and verify
 
 1. Start from a clean, reviewed commit and an empty `dist/` directory.
@@ -40,7 +46,7 @@ remain founder-controlled external actions.
 
 ## Abort conditions
 
-Abort for a dirty or mismatched source commit, version disagreement, untracked
+Abort for an active status/release hold, dirty or mismatched source commit, version disagreement, untracked
 artifact input, failed base-wheel entry point, external network use, content
 leak, integrity/conservation failure, unsupported claim, or a QA verdict other
-than `GO`/`GO WITH KNOWN RISK` accepted by the founder.
+than a new P0-clearing `GO` explicitly accepted by the founder.

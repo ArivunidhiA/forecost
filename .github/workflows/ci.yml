@@ -26,6 +26,7 @@ jobs:
       - run: ruff check forecost/ tests/
       - run: ruff format --check forecost/ tests/
       - run: pyright
+      - run: mypy forecost/
       - run: xenon forecost/ -b B -m A -a A
 
   security:
