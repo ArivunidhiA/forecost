@@ -114,6 +114,41 @@ FALLBACK_PRICING: dict[str, dict[str, float]] = {
         "cache_write": 1.25,
     },
     "claude-haiku-4-5": {"input": 1.00, "output": 5.00, "cache_read": 0.10, "cache_write": 1.25},
+    # Earlier 4.x / 3.7 releases, added 2026-10-09 from published list rates and not
+    # re-verified against live docs (standard list rates; cache read 0.1x, write 1.25x input).
+    "claude-sonnet-4-5": {"input": 3.00, "output": 15.00, "cache_read": 0.30, "cache_write": 3.75},
+    "claude-sonnet-4-5-20250929": {
+        "input": 3.00,
+        "output": 15.00,
+        "cache_read": 0.30,
+        "cache_write": 3.75,
+    },
+    "claude-opus-4-5": {"input": 5.00, "output": 25.00, "cache_read": 0.50, "cache_write": 6.25},
+    "claude-opus-4-5-20251101": {
+        "input": 5.00,
+        "output": 25.00,
+        "cache_read": 0.50,
+        "cache_write": 6.25,
+    },
+    "claude-opus-4-1": {"input": 15.00, "output": 75.00, "cache_read": 1.50, "cache_write": 18.75},
+    "claude-opus-4-1-20250805": {
+        "input": 15.00,
+        "output": 75.00,
+        "cache_read": 1.50,
+        "cache_write": 18.75,
+    },
+    "claude-3-7-sonnet-20250219": {
+        "input": 3.00,
+        "output": 15.00,
+        "cache_read": 0.30,
+        "cache_write": 3.75,
+    },
+    "claude-3-7-sonnet-latest": {
+        "input": 3.00,
+        "output": 15.00,
+        "cache_read": 0.30,
+        "cache_write": 3.75,
+    },
     # Anthropic - Claude 5 family + current Opus/Sonnet tiers.
     # Verified 2026-07-17 against the authoritative Anthropic models/pricing table
     # (claude-api reference, cached 2026-06-24). These correct three wrong rows

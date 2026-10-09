@@ -33,6 +33,11 @@ def _parse_ts(raw: object) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _workspace_path(stored: str | None) -> str | None:
+    """Return a raw legacy path, or None for a pseudonymized value."""
+    return stored if stored and not stored.startswith("p:") else None
+
+
 def _legacy_rows(costs_db: Path) -> tuple[list[sqlite3.Row], dict[int, str]]:
     conn = sqlite3.connect(str(costs_db))
     conn.row_factory = sqlite3.Row
@@ -67,7 +72,7 @@ def migrate() -> None:
         return
 
     sink = SyncLedgerSink()  # re-prices at event time; event_uid dedups
-    migrated = duplicate = invalid_timestamp = 0
+    migrated = duplicate = invalid_timestamp = invalid_row = 0
     for r in rows:
         timestamp = _parse_ts(r["timestamp"])
         if timestamp is None:
@@ -79,12 +84,17 @@ def migrate() -> None:
             source="legacy-costs-db",
             model=r["model"],
             provider=r["provider"],
-            workspace_path=projects.get(r["project_id"]),
+            workspace_path=_workspace_path(projects.get(r["project_id"])),
             tokens_in=int(r["tokens_in"] or 0),
             tokens_out=int(r["tokens_out"] or 0),
             metadata={"migrated_from": "costs.db"},
         )
-        if sink.emit(event):
+        try:
+            accepted = sink.emit(event)
+        except ValueError:
+            invalid_row += 1
+            continue
+        if accepted:
             migrated += 1
         else:
             duplicate += 1
@@ -92,7 +102,8 @@ def migrate() -> None:
 
     click.echo(
         f"Migrated {migrated} legacy usage row(s) into the ledger "
-        f"({duplicate} already present, {invalid_timestamp} skipped: invalid timestamp). "
+        f"({duplicate} already present, {invalid_timestamp} skipped: invalid timestamp, "
+        f"{invalid_row} skipped: invalid row). "
         "Legacy costs.db left untouched; re-priced with the event-effective table "
         "(run `forecost ledger status` to see the result)."
     )

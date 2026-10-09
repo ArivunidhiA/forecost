@@ -1,4 +1,6 @@
-from forecost.pricing import DEFAULT_COST, calculate_cost, get_provider
+import pytest
+
+from forecost.pricing import DEFAULT_COST, calculate_cost, get_provider, is_priced
 
 
 def test_calculate_cost_gpt4o():
@@ -93,3 +95,22 @@ def test_calculate_cost_cache_fallback_ratio_for_models_without_explicit_rates()
 
 def test_calculate_cost_negative_cache_tokens_clamped():
     assert calculate_cost("gpt-4o", 100, 100, cache_read_tokens=-5, cache_write_tokens=-5) >= 0
+
+
+@pytest.mark.parametrize(
+    ("model", "input_rate", "output_rate"),
+    [
+        ("claude-sonnet-4-5", 3.0, 15.0),
+        ("claude-sonnet-4-5-20250929", 3.0, 15.0),
+        ("claude-opus-4-5", 5.0, 25.0),
+        ("claude-opus-4-1-20250805", 15.0, 75.0),
+        ("claude-3-7-sonnet-20250219", 3.0, 15.0),
+    ],
+)
+def test_mainstream_claude_models_are_priced_not_guessed(model, input_rate, output_rate):
+    assert is_priced(model)
+    assert calculate_cost(model, 1_000_000, 1_000_000) == pytest.approx(input_rate + output_rate)
+
+
+def test_unknown_future_model_is_not_silently_priced_by_family_prefix():
+    assert not is_priced("claude-opus-4-99")

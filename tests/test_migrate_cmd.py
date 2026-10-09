@@ -149,3 +149,21 @@ def test_migrate_reports_empty_usage_table(tmp_path, monkeypatch):
 
     assert result.exit_code == 0
     assert "has no usage rows" in result.output
+
+
+def test_migrate_handles_pseudonymized_and_malformed_paths(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORECOST_HOME", str(tmp_path))
+    from forecost.ledger import db as ledger_db
+
+    monkeypatch.setattr(ledger_db, "LEDGER_PATH", tmp_path / "ledger.db")
+    ledger_db.reset_connection_for_tests()
+    _make_legacy_db(tmp_path / "costs.db")
+    conn = sqlite3.connect(str(tmp_path / "costs.db"))
+    conn.execute("UPDATE projects SET path = 'p:' || hex(randomblob(16)) WHERE id = 1")
+    conn.commit()
+    conn.close()
+
+    result = CliRunner().invoke(main, ["migrate"])
+    assert result.exit_code == 0, result.output
+    assert "Migrated 2 legacy usage row(s)" in result.output
+    ledger_db.reset_connection_for_tests()
