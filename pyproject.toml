@@ -24,8 +24,8 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
-    "click>=8.0",
-    "rich>=13.0",
+    "click>=8.5.0",
+    "rich>=15.0.0",
     "httpx>=0.25.0",
     "tomli>=2.0.0; python_version < \"3.11\"",
 ]
