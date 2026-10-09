@@ -43,7 +43,11 @@ jobs:
           body="Automated weekly refresh of forecost/data/pricing.json. Full test suite passed in the refresh job."
           if [ -n "$held" ]; then body="$body"$'\n\nRates held back for human review (>4x change):\n'"$held"; fi
           gh pr create --base main --head "$branch" --title "chore(pricing): scheduled refresh" --body "$body" || true
-          if [ -z "$held" ]; then gh pr merge "$branch" --auto --squash || true; fi
+          if [ -z "$held" ]; then
+            # Auto-merge needs branch protection; the full suite already passed above, so
+            # fall back to merging directly when it is unavailable.
+            gh pr merge "$branch" --auto --squash || gh pr merge "$branch" --squash || true
+          fi
 
   freshness:
     runs-on: ubuntu-latest
