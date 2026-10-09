@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import sqlite3
 from pathlib import Path
 
 import click
@@ -135,8 +136,29 @@ def _echo_recovery(home) -> None:
         click.echo(
             "  legacy costs.db: present (unsupported v0.2 store; never queried by receipts/MCP)"
         )
+        raw = _legacy_raw_rows(legacy)
+        if raw:
+            click.echo(
+                f"  ⚠ legacy costs.db has {raw} row(s) with raw paths/names/metadata — "
+                "run `forecost legacy scrub`"
+            )
     else:
         click.echo("  legacy costs.db: absent")
+
+
+def _legacy_raw_rows(path: Path) -> int:
+    from forecost.db import count_unscrubbed_legacy_rows
+
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return 0
+    try:
+        return count_unscrubbed_legacy_rows(conn)
+    except sqlite3.Error:
+        return 0
+    finally:
+        conn.close()
 
 
 def _echo_limitations() -> None:

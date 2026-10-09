@@ -15,8 +15,9 @@ __all__ = [
     "get_pricing_period",
 ]
 
-# Anthropic rows verified 2026-07-17 against the authoritative models/pricing
-# table; OpenAI/Gemini/others last verified March 2026 and NOT re-verified — any
+# Anthropic rows re-verified 2026-10-09 (Haiku 5.5's context-tiered rate is not
+# representable here and is deliberately left unpriced).
+# OpenAI/Gemini/others last verified March 2026 and NOT re-verified — any
 # model absent from FALLBACK_PRICING is priced with DEFAULT_COST, a guess. Call
 # is_priced() to tell a real rate from a guess; `forecost pricing-audit` reports
 # which models in the ledger were priced by guess.
@@ -186,14 +187,21 @@ FALLBACK_PRICING: dict[str, dict[str, float]] = {
         "cache_read": 0.50,
         "cache_write": 6.25,
     },
-    # Sonnet 5's standard rate. `calculate_cost` replaces this with the
-    # effective introductory rate for events on or before 2026-08-31.
-    "claude-sonnet-5": {
-        "input": 3.00,
-        "output": 15.00,
-        "cache_read": 0.30,
-        "cache_write": 3.75,
+    # Sonnet 5: the $2/$10 introductory price became the permanent standard price
+    # (Anthropic pricing page, verified 2026-10-09); the planned 2026-09-01 increase
+    # to $3/$15 did not occur.
+    "claude-sonnet-5": {"input": 2.00, "output": 10.00, "cache_read": 0.20, "cache_write": 2.50},
+    # Added 2026-10-09 from the Anthropic pricing page (verified live that day).
+    "claude-fable-5-1": {"input": 10.00, "output": 50.00, "cache_read": 0.25, "cache_write": 12.50},
+    "claude-mythos-5-1": {
+        "input": 10.00,
+        "output": 50.00,
+        "cache_read": 0.25,
+        "cache_write": 12.50,
     },
+    "claude-opus-5": {"input": 5.00, "output": 25.00, "cache_read": 0.50, "cache_write": 6.25},
+    "claude-opus-5-5": {"input": 4.00, "output": 20.00, "cache_read": 0.20, "cache_write": 5.00},
+    "claude-sonnet-5-5": {"input": 2.00, "output": 10.00, "cache_read": 0.10, "cache_write": 2.50},
     "claude-sonnet-4-6": {
         "input": 3.00,
         "output": 15.00,
@@ -225,12 +233,6 @@ DEFAULT_COST = {"input": 5.0, "output": 15.0}
 
 _SONNET_5_MODEL = "claude-sonnet-5"
 _SONNET_5_INTRO_END = date(2026, 8, 31)
-_SONNET_5_INTRO_PRICING = {
-    "input": 2.00,
-    "output": 10.00,
-    "cache_read": 0.20,
-    "cache_write": 2.50,
-}
 
 MODEL_TIERS: dict[str, list[str]] = {
     "Tier 1 (Heavy)": [
@@ -376,8 +378,6 @@ def _effective_pricing(
     key = _resolve_model_key(model)
     if key is None:
         return None
-    if key == _SONNET_5_MODEL and _as_utc_date(as_of) <= _SONNET_5_INTRO_END:
-        return _SONNET_5_INTRO_PRICING
     return FALLBACK_PRICING[key]
 
 

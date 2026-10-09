@@ -174,6 +174,58 @@ def _safe_project_name(name: str) -> str:
     return base[:_MAX_NAME] or "project"
 
 
+def _row_needs_scrub(name: str, path: str, metadata: str | None) -> bool:
+    return (
+        not path.startswith("p:")
+        or _safe_project_name(name) != name
+        or _scrub_metadata_text(metadata) != metadata
+    )
+
+
+def _scrub_metadata_text(metadata: str | None) -> str | None:
+    if metadata is None:
+        return None
+    try:
+        decoded = json.loads(metadata)
+    except (TypeError, ValueError):
+        return None
+    return sanitize_metadata(decoded)
+
+
+def count_unscrubbed_legacy_rows(conn: sqlite3.Connection) -> int:
+    """Count legacy project/usage rows still holding raw paths, names, or free-form metadata."""
+    total = 0
+    for name, path, meta in conn.execute("SELECT name, path, metadata FROM projects"):
+        total += _row_needs_scrub(name, path, meta)
+    for (meta,) in conn.execute("SELECT metadata FROM usage_logs WHERE metadata IS NOT NULL"):
+        total += _scrub_metadata_text(meta) != meta
+    return total
+
+
+def scrub_legacy_rows(conn: sqlite3.Connection) -> int:
+    """Rewrite pre-hardening legacy rows in place; return the number of rows changed."""
+    changed = 0
+    with conn:
+        for pid, name, path, meta in conn.execute(
+            "SELECT id, name, path, metadata FROM projects"
+        ).fetchall():
+            if _row_needs_scrub(name, path, meta):
+                new_path = path if path.startswith("p:") else project_path_key(path)
+                conn.execute(
+                    "UPDATE projects SET name = ?, path = ?, metadata = ? WHERE id = ?",
+                    (_safe_project_name(name), new_path, _scrub_metadata_text(meta), pid),
+                )
+                changed += 1
+        for lid, meta in conn.execute(
+            "SELECT id, metadata FROM usage_logs WHERE metadata IS NOT NULL"
+        ).fetchall():
+            cleaned = _scrub_metadata_text(meta)
+            if cleaned != meta:
+                conn.execute("UPDATE usage_logs SET metadata = ? WHERE id = ?", (cleaned, lid))
+                changed += 1
+    return changed
+
+
 def create_project(
     name: str,
     path: str,

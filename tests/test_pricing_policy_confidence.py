@@ -59,7 +59,7 @@ def test_sonnet_5_intro_rate_applies_through_august_31_utc():
 def test_sonnet_5_standard_rate_starts_september_1_utc():
     after_boundary = datetime(2026, 9, 1, tzinfo=timezone.utc)
 
-    assert calculate_cost("claude-sonnet-5", 1_000_000, 1_000_000, as_of=after_boundary) == 18.0
+    assert calculate_cost("claude-sonnet-5", 1_000_000, 1_000_000, as_of=after_boundary) == 12.0
     assert get_pricing_period("claude-sonnet-5", after_boundary) == (
         "sonnet5-standard-from-2026-09-01"
     )
@@ -69,7 +69,7 @@ def test_sonnet_5_effective_date_normalizes_aware_timestamp_to_utc():
     central = timezone(-timedelta(hours=5))
     local_august = datetime(2026, 8, 31, 20, 0, tzinfo=central)
 
-    assert calculate_cost("claude-sonnet-5", 1_000_000, 1_000_000, as_of=local_august) == 18.0
+    assert calculate_cost("claude-sonnet-5", 1_000_000, 1_000_000, as_of=local_august) == 12.0
 
 
 def test_sonnet_5_family_suffix_uses_effective_dated_rate():
@@ -162,7 +162,7 @@ def test_sink_prices_sonnet_5_by_event_timestamp_and_records_period(ledger_conn)
     intro = rows[content_free_identifier("event", "sonnet-intro")]
     standard = rows[content_free_identifier("event", "sonnet-standard")]
     assert intro["amount"] == 2.0
-    assert standard["amount"] == 3.0
+    assert standard["amount"] == 2.0
     assert intro["pricing_version"].endswith("/sonnet5-intro-through-2026-08-31")
     assert standard["pricing_version"].endswith("/sonnet5-standard-from-2026-09-01")
 

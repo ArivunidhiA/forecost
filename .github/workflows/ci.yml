@@ -1,7 +1,7 @@
 name: CI
 on:
   push:
-    branches: [main]
+    branches: [main, "recovery/**", "fix/**", "feat/**"]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -101,6 +101,9 @@ jobs:
       - run: forecost doctor
         working-directory: ${{ runner.temp }}
       - run: forecost ledger status
+        working-directory: ${{ runner.temp }}
+      - run: python "$GITHUB_WORKSPACE/scripts/e2e_wheel_smoke.py"
+        shell: bash
         working-directory: ${{ runner.temp }}
       - run: sh -n plugin/scripts/bootstrap.sh plugin/scripts/run-hook.sh
       - run: test -x plugin/scripts/bootstrap.sh && test -x plugin/scripts/run-hook.sh

@@ -205,6 +205,12 @@ _LEGACY_COMMANDS: dict[str, _LazyCommand] = {
         "Browse bundled legacy model pricing.",
         "no persistent store",
     ),
+    "scrub": (
+        "forecost.commands.scrub_cmd",
+        "scrub",
+        "Pseudonymize raw paths and metadata already stored by the retired product.",
+        "legacy costs.db",
+    ),
     "reset": (
         "forecost.commands.reset_cmd",
         "reset",

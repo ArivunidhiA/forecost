@@ -28,7 +28,7 @@ def pricing_audit(currency: str) -> None:
     conn = get_ledger_db()
     click.echo(f"Pricing table: {PRICING_SNAPSHOT_VERSION}")
     click.echo(
-        "  Anthropic rows verified 2026-07-17; OpenAI/Gemini/others last verified "
+        "  Anthropic rows verified 2026-10-09; OpenAI/Gemini/others last verified "
         "March 2026 (not re-verified)."
     )
     click.echo(

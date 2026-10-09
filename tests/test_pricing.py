@@ -114,3 +114,23 @@ def test_mainstream_claude_models_are_priced_not_guessed(model, input_rate, outp
 
 def test_unknown_future_model_is_not_silently_priced_by_family_prefix():
     assert not is_priced("claude-opus-4-99")
+
+
+@pytest.mark.parametrize(
+    ("model", "input_rate", "output_rate"),
+    [
+        ("claude-fable-5-1", 10.0, 50.0),
+        ("claude-opus-5", 5.0, 25.0),
+        ("claude-opus-5-5", 4.0, 20.0),
+        ("claude-sonnet-5-5", 2.0, 10.0),
+        ("claude-sonnet-5", 2.0, 10.0),
+        ("claude-fable-5", 10.0, 50.0),
+        ("claude-opus-4-8", 5.0, 25.0),
+    ],
+)
+def test_rates_match_provider_pricing_page_2026_10_09(model, input_rate, output_rate):
+    assert calculate_cost(model, 1_000_000, 1_000_000) == pytest.approx(input_rate + output_rate)
+
+
+def test_haiku_5_5_stays_unpriced_until_tiered_rates_are_modeled():
+    assert not is_priced("claude-haiku-5-5")

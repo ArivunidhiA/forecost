@@ -267,3 +267,45 @@ def test_sanitize_metadata_bounds_items():
     bounded = sanitize_metadata(big)
     assert bounded is not None
     assert len(json.loads(bounded)) == 16
+
+
+def _insert_raw_legacy_rows(conn):
+    conn.execute(
+        "INSERT INTO projects (name, path, baseline_daily_cost, baseline_total_days,"
+        " baseline_total_cost, metadata, created_at) VALUES"
+        " ('/Users/x/secret-client/app', '/Users/x/secret-client/app', 1, 1, 1,"
+        ' \'{"prompt": "private words here", "n": 1}\', \'x\')'
+    )
+    pid = conn.execute("SELECT id FROM projects").fetchone()[0]
+    conn.execute(
+        "INSERT INTO usage_logs (project_id, timestamp, model, provider, tokens_in, tokens_out,"
+        " cost_usd, metadata) VALUES (?, 'x', 'gpt-4o', 'openai', 1, 1, 0.1,"
+        ' \'{"note": "private words here"}\')',
+        (pid,),
+    )
+    conn.commit()
+
+
+def test_scrub_rewrites_existing_raw_rows_and_leaves_no_canary(db_path):
+    from click.testing import CliRunner
+
+    from forecost.cli import main
+    from forecost.db import count_unscrubbed_legacy_rows
+
+    conn = get_or_create_db()
+    _insert_raw_legacy_rows(conn)
+    assert count_unscrubbed_legacy_rows(conn) == 2
+
+    checked = CliRunner().invoke(main, ["legacy", "scrub", "--check", "--yes"])
+    assert "2 legacy row(s)" in checked.output
+    result = CliRunner().invoke(main, ["legacy", "scrub", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "Scrubbed 2" in result.output
+    assert count_unscrubbed_legacy_rows(conn) == 0
+
+    dump = "\n".join(conn.iterdump())
+    for canary in ("secret-client", "private words", "/Users/x"):
+        assert canary not in dump
+    assert get_project_by_path("/Users/x/secret-client/app") is not None
+    again = CliRunner().invoke(main, ["legacy", "scrub", "--yes"])
+    assert "0 legacy row(s)" in again.output
