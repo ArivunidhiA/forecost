@@ -17,6 +17,7 @@ from forecost.db import (
     create_project,
     get_or_create_db,
     get_project_by_path,
+    project_path_key,
 )
 from forecost.interceptor import log_stream_usage, set_project_id
 
@@ -39,7 +40,9 @@ def _init_project(cli_runner, tmp_path, db_path, monkeypatch):
 
 def _insert_test_data(tmp_path, db_path):
     conn = get_or_create_db()
-    proj = conn.execute("SELECT id FROM projects WHERE path = ?", (str(tmp_path),)).fetchone()
+    proj = conn.execute(
+        "SELECT id FROM projects WHERE path = ?", (project_path_key(str(tmp_path)),)
+    ).fetchone()
     project_id = proj["id"]
     base = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
     items = [
@@ -107,7 +110,9 @@ def test_forecast_exit_code_over_budget(cli_runner, tmp_path, db_path, monkeypat
     result = cli_runner.invoke(main, ["legacy", "init", "--budget", "1"])
     assert result.exit_code == 0
     conn = get_or_create_db()
-    proj = conn.execute("SELECT id FROM projects WHERE path = ?", (str(tmp_path),)).fetchone()
+    proj = conn.execute(
+        "SELECT id FROM projects WHERE path = ?", (project_path_key(str(tmp_path)),)
+    ).fetchone()
     project_id = proj["id"]
     base = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
     items = [

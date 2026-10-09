@@ -86,8 +86,9 @@ These are implementation changes and internal test/audit evidence, **not an
 independent external review or publication approval**. The 2026-08-13 NO-GO
 remains because:
 
-- the exported legacy SDK and `costs.db` paths can still retain arbitrary raw
-  project name, path, and metadata;
+- the exported legacy SDK and `costs.db` paths now pseudonymize new project paths
+  and bound metadata, but rows written by earlier versions can still hold raw
+  project name, path, and metadata until purged;
 - user-configured ledger/outbox or other state paths outside `FORECOST_HOME`
   cannot be exhaustively discovered or purged;
 - no authenticated provider profile or live provider/runtime validation exists;

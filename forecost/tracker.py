@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import functools
 import inspect
-import json
 import os
 import sys
 import threading
@@ -15,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from forecost import interceptor
-from forecost.db import get_project_by_path
+from forecost.db import get_project_by_path, sanitize_metadata
 from forecost.pricing import calculate_cost, get_provider
 
 if TYPE_CHECKING:
@@ -228,7 +227,7 @@ def track():
             proj = _find_project()
             if proj:
                 ts = datetime.now(timezone.utc).isoformat()
-                meta_str = json.dumps(metadata) if metadata else None
+                meta_str = sanitize_metadata(metadata)
                 _get_queue().put(
                     proj["id"],
                     ts,
@@ -264,7 +263,7 @@ def log_call(
     proj = _find_project()
     if proj:
         ts = datetime.now(timezone.utc).isoformat()
-        meta_str = json.dumps(metadata) if metadata else None
+        meta_str = sanitize_metadata(metadata)
         _get_queue().put(
             proj["id"], ts, model, get_provider(model), tokens_in, tokens_out, cost, meta_str
         )

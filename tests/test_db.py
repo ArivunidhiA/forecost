@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 import pytest
@@ -27,7 +28,8 @@ def test_create_project_and_get_project_by_path(db_path):
     proj = get_project_by_path("/tmp/foo")
     assert proj is not None
     assert proj["name"] == "foo"
-    assert proj["path"] == "/tmp/foo"
+    assert proj["path"] != "/tmp/foo"
+    assert "/tmp/foo" not in str(proj)
     assert proj["baseline_daily_cost"] == 5.0
     assert proj["baseline_total_days"] == 14
     assert proj["baseline_total_cost"] == 70.0
@@ -216,3 +218,47 @@ def test_source_column_default(db_path):
     conn.commit()
     row = conn.execute("SELECT source FROM usage_logs WHERE project_id = ?", (pid,)).fetchone()
     assert row["source"] == "api"
+
+
+def test_legacy_project_row_with_raw_path_is_still_found(db_path):
+    conn = get_or_create_db()
+    conn.execute(
+        "INSERT INTO projects (name, path, baseline_daily_cost, baseline_total_days,"
+        " baseline_total_cost, created_at) VALUES ('old', '/tmp/old', 1, 1, 1, 'x')"
+    )
+    conn.commit()
+    assert get_project_by_path("/tmp/old")["name"] == "old"
+
+
+def test_project_name_and_metadata_are_content_minimized(db_path):
+    create_project(
+        name="/Users/someone/secret-client/app",
+        path="/Users/someone/secret-client/app",
+        baseline_daily_cost=1.0,
+        baseline_total_days=1,
+        baseline_total_cost=1.0,
+        metadata={
+            "ok": "tier-1",
+            "n": 3,
+            "prompt": "please refactor my private auth code now",
+            "nested": {"a": 1},
+            "bad key!": 1,
+        },
+    )
+    proj = get_project_by_path("/Users/someone/secret-client/app")
+    assert proj["name"] == "app"
+    assert proj["metadata"] == {"n": 3, "ok": "tier-1"}
+    raw = "".join(
+        str(v) for row in get_or_create_db().execute("SELECT * FROM projects") for v in row
+    )
+    assert "secret-client" not in raw
+    assert "refactor" not in raw
+
+
+def test_sanitize_metadata_bounds_items():
+    from forecost.db import sanitize_metadata
+
+    assert sanitize_metadata(None) is None
+    assert sanitize_metadata({"x": "has spaces"}) is None
+    big = {f"k{i}": i for i in range(40)}
+    assert len(json.loads(sanitize_metadata(big))) == 16

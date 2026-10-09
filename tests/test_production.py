@@ -9,6 +9,7 @@ from forecost.db import (
     _insert_usage_logs_batch,
     create_project,
     get_or_create_db,
+    project_path_key,
 )
 from forecost.pricing import FALLBACK_PRICING
 from forecost.scope import analyze_heuristic
@@ -99,7 +100,9 @@ def test_forecast_json_schema_complete(cli_runner, tmp_path, db_path, monkeypatc
     assert result.exit_code == 0
 
     conn = get_or_create_db()
-    proj = conn.execute("SELECT id FROM projects WHERE path = ?", (str(tmp_path),)).fetchone()
+    proj = conn.execute(
+        "SELECT id FROM projects WHERE path = ?", (project_path_key(str(tmp_path)),)
+    ).fetchone()
     project_id = proj["id"]
     from datetime import datetime, timezone
 
@@ -132,7 +135,9 @@ def test_status_does_not_save_forecast(cli_runner, tmp_path, db_path, monkeypatc
     assert result.exit_code == 0
 
     conn = get_or_create_db()
-    proj = conn.execute("SELECT id FROM projects WHERE path = ?", (str(tmp_path),)).fetchone()
+    proj = conn.execute(
+        "SELECT id FROM projects WHERE path = ?", (project_path_key(str(tmp_path)),)
+    ).fetchone()
     project_id = proj["id"]
     from datetime import datetime, timezone
 
@@ -226,7 +231,9 @@ def test_forecast_json_includes_total_tokens(cli_runner, tmp_path, db_path, monk
     result = cli_runner.invoke(main, ["legacy", "init"])
     assert result.exit_code == 0
     conn = get_or_create_db()
-    proj = conn.execute("SELECT id FROM projects WHERE path = ?", (str(tmp_path),)).fetchone()
+    proj = conn.execute(
+        "SELECT id FROM projects WHERE path = ?", (project_path_key(str(tmp_path)),)
+    ).fetchone()
     from datetime import datetime, timezone
 
     base = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
@@ -252,7 +259,9 @@ def test_status_shows_tokens(cli_runner, tmp_path, db_path, monkeypatch):
     result = cli_runner.invoke(main, ["legacy", "init"])
     assert result.exit_code == 0
     conn = get_or_create_db()
-    proj = conn.execute("SELECT id FROM projects WHERE path = ?", (str(tmp_path),)).fetchone()
+    proj = conn.execute(
+        "SELECT id FROM projects WHERE path = ?", (project_path_key(str(tmp_path)),)
+    ).fetchone()
     from datetime import datetime, timezone
 
     base = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)

@@ -5,6 +5,7 @@ Zero-maintenance SQLite database module for forecost cost tracking.
 import atexit
 import json
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -13,6 +14,7 @@ from pathlib import Path
 from queue import Empty, Full, Queue
 
 from forecost.core.errlog import log_exception
+from forecost.core.local_identity import keyed_fingerprint
 from forecost.core.paths import chmod_private, ensure_private_dir, forecost_home
 from forecost.core.spool import write_immutable_spool
 
@@ -129,6 +131,47 @@ def get_or_create_db() -> sqlite3.Connection:
         return _conn
 
 
+_META_KEY = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
+_META_TEXT = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+_MAX_META_ITEMS = 16
+_MAX_NAME = 80
+
+
+def sanitize_metadata(metadata: dict | None) -> str | None:
+    """Return bounded JSON for legacy metadata, dropping free-form content.
+
+    Keeps at most 16 items whose keys are short identifiers and whose values are
+    numbers, booleans, or short token-like strings. Anything else (prompts,
+    paths, nested objects, long text) is discarded so the legacy store cannot
+    persist arbitrary caller content.
+    """
+    if not isinstance(metadata, dict):
+        return None
+    kept: dict[str, object] = {}
+    for key, value in metadata.items():
+        if len(kept) >= _MAX_META_ITEMS:
+            break
+        if not isinstance(key, str) or not _META_KEY.match(key):
+            continue
+        if (
+            isinstance(value, bool)
+            or (isinstance(value, (int, float)) and value == value)
+            or (isinstance(value, str) and _META_TEXT.match(value))
+        ):
+            kept[key] = value
+    return json.dumps(kept, sort_keys=True) if kept else None
+
+
+def project_path_key(path: str) -> str:
+    """Installation-keyed pseudonym stored instead of a raw project path."""
+    return "p:" + keyed_fingerprint("legacy-project-path", path)
+
+
+def _safe_project_name(name: str) -> str:
+    base = name.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    return base[:_MAX_NAME] or "project"
+
+
 def create_project(
     name: str,
     path: str,
@@ -141,7 +184,7 @@ def create_project(
 
     Args:
         name: Project display name.
-        path: Absolute project path.
+        path: Absolute project path (stored only as a keyed pseudonym).
         baseline_daily_cost: Expected daily cost baseline.
         baseline_total_days: Planned total duration in days.
         baseline_total_cost: Planned total cost baseline.
@@ -152,14 +195,22 @@ def create_project(
     """
     conn = get_or_create_db()
     now = datetime.now(timezone.utc).isoformat()
-    meta_json = json.dumps(metadata) if metadata is not None else None
+    meta_json = sanitize_metadata(metadata)
     cur = conn.execute(
         """
         INSERT INTO projects (name, path, baseline_daily_cost,
             baseline_total_days, baseline_total_cost, metadata, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (name, path, baseline_daily_cost, baseline_total_days, baseline_total_cost, meta_json, now),
+        (
+            _safe_project_name(name),
+            project_path_key(path),
+            baseline_daily_cost,
+            baseline_total_days,
+            baseline_total_cost,
+            meta_json,
+            now,
+        ),
     )
     conn.commit()
     return cur.lastrowid or 0
@@ -175,7 +226,11 @@ def get_project_by_path(path: str) -> dict | None:
         dict | None: Project row as a dictionary, or None when not found.
     """
     conn = get_or_create_db()
-    row = conn.execute("SELECT * FROM projects WHERE path = ?", (path,)).fetchone()
+    row = conn.execute(
+        "SELECT * FROM projects WHERE path = ?", (project_path_key(path),)
+    ).fetchone()
+    if row is None:  # rows written before path pseudonymization
+        row = conn.execute("SELECT * FROM projects WHERE path = ?", (path,)).fetchone()
     if row is None:
         return None
     d = dict(row)

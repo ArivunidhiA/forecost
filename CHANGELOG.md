@@ -19,6 +19,12 @@ visible. Claude controls are fail-open and do not claim provider-side or
 distributed containment. The retired calendar-spend forecaster remains only
 under the explicit `forecost legacy` compatibility namespace.
 
+### Changed
+- Legacy SDK/`costs.db` now stores an installation-keyed pseudonym instead of the raw project
+  path, reduces project names to a basename, and keeps only bounded scalar metadata
+  (identifier-like keys; numbers, booleans, short token strings). Rows written by
+  earlier versions keep their raw values until the user purges them.
+
 ### Added
 - **`forecost ingest`** — pull Claude Code JSONL transcripts into the ledger
   (idempotent and resumable; cursor identities are installation-keyed and
