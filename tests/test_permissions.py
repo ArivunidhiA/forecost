@@ -2,6 +2,7 @@
 
 import os
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -116,6 +117,7 @@ def test_ledger_refuses_symlink_file_without_touching_target(tmp_path):
     assert target.read_text() == "must survive"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX mode bits")
 def test_chmod_private_does_not_follow_symlink(tmp_path):
     target = tmp_path / "target"
     target.write_text("x")

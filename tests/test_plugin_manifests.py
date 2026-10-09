@@ -3,7 +3,10 @@
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -75,6 +78,7 @@ def _run_launcher(data_dir: Path, hook_name: str = "session-start", *, path: str
     )
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX sh hook launcher")
 def test_launcher_uses_only_exact_owned_plugin_environment(tmp_path):
     data = tmp_path / "data"
     hook = data / "venv" / "bin" / "forecost-hook"
@@ -87,6 +91,7 @@ def test_launcher_uses_only_exact_owned_plugin_environment(tmp_path):
     assert marker.read_text(encoding="utf-8") == "session-start"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX sh hook launcher")
 def test_launcher_never_falls_back_to_path(tmp_path):
     data = tmp_path / "data"
     data.mkdir()
@@ -101,6 +106,7 @@ def test_launcher_never_falls_back_to_path(tmp_path):
     assert not marker.exists()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX sh hook launcher")
 def test_launcher_rejects_symlinked_or_group_writable_environment(tmp_path):
     actual = tmp_path / "actual-venv"
     marker = tmp_path / "unsafe-called"
@@ -121,6 +127,7 @@ def test_launcher_rejects_symlinked_or_group_writable_environment(tmp_path):
     assert not marker.exists()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX sh hook launcher")
 def test_launcher_rejects_symlinked_data_parent(tmp_path):
     actual_parent = tmp_path / "actual-parent"
     marker = tmp_path / "unsafe-parent-called"
