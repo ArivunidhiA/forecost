@@ -23,7 +23,7 @@
 2. Live provider/runtime samples (authenticated billing, real Claude/LiteLLM traffic).
 3. Matched-run demand gate (`docs/status.md`, "Product-validation gates").
 4. Pre-hardening artifacts outside `FORECOST_HOME` (old backups) stay raw.
-5. Haiku 5.5 and Gemini 2.5 Pro >200k are context-tiered and not modeled (flagged/under-counted).
+5. Pricing covers context tiers, but not batch/priority/flex service tiers, audio modalities, or regional uplifts.
 
 ## Releasing (when 1-3 are satisfied)
 Do NOT paste a token into chat. Preferred: PyPI Trusted Publishing for this GitHub repo

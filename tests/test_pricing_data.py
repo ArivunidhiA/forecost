@@ -47,9 +47,36 @@ def test_validate_rejects_malformed_documents(mutate):
         pricing_data.validate(document)
 
 
+@pytest.mark.parametrize(
+    "tiers",
+    [
+        {"m-1": []},
+        {"m-1": [{"input": 1, "output": 1}]},
+        {"m-1": [{"above": 0, "input": 1, "output": 1}]},
+        {"m-1": [{"above": 5, "input": 1, "output": 1}, {"above": 5, "input": 2, "output": 2}]},
+        {"m-1": [{"above": 9, "input": 1, "output": 1}, {"above": 5, "input": 2, "output": 2}]},
+        {"m-1": [{"above": 5, "input": 1}]},
+        {"bad id": [{"above": 5, "input": 1, "output": 1}]},
+        {"m-1": "nope"},
+    ],
+)
+def test_validate_rejects_malformed_tiers(tiers):
+    document = _doc()
+    document["tiers"] = tiers
+    with pytest.raises(pricing_data.PricingDataError):
+        pricing_data.validate(document)
+
+
+def test_validate_accepts_tiers():
+    document = _doc()
+    document["tiers"] = {"m-1": [{"above": 200000, "input": 2.0, "output": 3.0}]}
+    assert pricing_data.validate(document)["tiers"]["m-1"][0]["above"] == 200000
+
+
 def test_validate_accepts_and_normalizes():
     clean = pricing_data.validate(_doc())
     assert clean["models"] == {"m-1": {"input": 1.0, "output": 2.0}}
+    assert clean["tiers"] == {}
 
 
 def test_read_file_is_fail_safe(tmp_path):
@@ -131,6 +158,7 @@ def _feed():
         "input_cost_per_token": 1e-6,
         "output_cost_per_token": 2e-6,
         "input_cost_per_token_above_200k_tokens": 2e-6,
+        "output_cost_per_token_above_200k_tokens": 3e-6,
     }
     feed["azure-thing"] = {
         "mode": "chat",
@@ -149,7 +177,10 @@ def _feed():
 def test_updater_extracts_only_simple_chat_models_in_per_mtok():
     rows = _updater().extract(_feed())
     assert rows["gemini-test-flash"] == {"input": 0.3, "output": 2.5, "cache_read": 0.03}
-    assert "tiered-model" not in rows
+    assert rows["tiered-model"] == {"input": 1.0, "output": 2.0}
+    assert _updater().extract_tiers(_feed()) == {
+        "tiered-model": [{"above": 200000, "input": 2.0, "output": 3.0}]
+    }
     assert "azure-thing" not in rows
     assert "some-embedding" not in rows
 
@@ -233,3 +264,11 @@ def test_refresh_workflow_exists_and_is_scheduled():
     assert "schedule:" in text
     assert "scripts/update_pricing.py" in text
     assert "freshness:" in text
+
+
+def test_data_provenance_tag_survives_pricing_version_normalization():
+    from forecost.adapters.base import _normalize_pricing_version
+
+    readable = "bundled-2026-08/data-2026-10-09/sonnet5-standard-from-2026-09-01"
+    assert _normalize_pricing_version(readable) == readable
+    assert _normalize_pricing_version("bundled-2026-08/data-bogus").startswith("pricing:")

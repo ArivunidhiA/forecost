@@ -266,16 +266,36 @@ FALLBACK_PRICING: dict[str, dict[str, float]] = {
 DEFAULT_COST = {"input": 5.0, "output": 15.0}
 
 
+# Context-tiered rates: when a request's prompt (input + cache tokens) exceeds ``above``, the whole
+# request is billed at that tier's rates. Hand-verified baseline; the refreshed data may extend it.
+TIERED_PRICING: dict[str, list[dict[str, float]]] = {
+    # Gemini 2.5 Pro: >200k-token prompts (ai.google.dev, 2026-10-09).
+    "gemini-2.5-pro": [{"above": 200_000, "input": 2.50, "output": 15.00, "cache_read": 0.25}],
+    # Claude Haiku 5.5: prompts over 100k tokens (Anthropic pricing page, 2026-10-09).
+    "claude-haiku-5-5": [
+        {"above": 100_000, "input": 0.50, "output": 2.50, "cache_read": 0.05, "cache_write": 0.625}
+    ],
+}
+FALLBACK_PRICING["claude-haiku-5-5"] = {
+    "input": 0.10,
+    "output": 0.50,
+    "cache_read": 0.01,
+    "cache_write": 0.125,
+}
+
+
 def _apply_live_overlay() -> tuple[frozenset[str], str | None]:
     """Layer the machine-refreshed data over the hand-verified baseline (fail-safe)."""
     try:
-        from forecost.pricing_data import load_effective
+        from forecost.pricing_data import load_effective_full
 
-        rows, stamp = load_effective()
+        rows, tiers, stamp = load_effective_full()
     except Exception:  # nosec B110 - a bad data file must never break pricing
         return frozenset(), None
     for model, rates in rows.items():
         FALLBACK_PRICING[model] = rates
+        TIERED_PRICING.pop(model, None)  # refreshed base rates replace stale tiers for the model
+    TIERED_PRICING.update(tiers)
     return frozenset(rows), stamp
 
 
@@ -482,6 +502,7 @@ def calculate_cost(
     if cost is None:
         _log_unknown_model(model)
         cost = DEFAULT_COST
+    cost = _tiered_rates(model, cost, tokens_in + cache_read_tokens + cache_write_tokens)
     input_rate = cost["input"]
     # Anthropic's standard published ratios when a model has no explicit cache rate:
     # cache reads ~10% of input price, cache writes ~125% of input price.
@@ -492,6 +513,22 @@ def calculate_cost(
     cache_read_cost = (cache_read_tokens / 1_000_000) * cache_read_rate
     cache_write_cost = (cache_write_tokens / 1_000_000) * cache_write_rate
     return input_cost + output_cost + cache_read_cost + cache_write_cost
+
+
+def _tiered_rates(model: str, base: dict[str, float], prompt_tokens: int) -> dict[str, float]:
+    """Return the rates for the highest context tier the prompt exceeds (else ``base``)."""
+    key = _resolve_model_key(model)
+    chosen = None
+    for tier in TIERED_PRICING.get(key or "", []):
+        if prompt_tokens > tier["above"]:
+            chosen = tier
+    if chosen is None:
+        return base
+    # Tier rows are complete for the keys they set; drop stale base cache rates the tier omits so
+    # the standard cache ratios derive from the tier's input price.
+    merged = {k: v for k, v in base.items() if k not in ("cache_read", "cache_write")}
+    merged.update({k: v for k, v in chosen.items() if k != "above"})
+    return merged
 
 
 def get_tier(model: str) -> str:

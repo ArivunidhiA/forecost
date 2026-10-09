@@ -113,7 +113,7 @@ def test_calculate_cost_negative_cache_tokens_clamped():
 )
 def test_mainstream_claude_models_are_priced_not_guessed(model, input_rate, output_rate):
     assert is_priced(model)
-    assert calculate_cost(model, 1_000_000, 1_000_000) == pytest.approx(input_rate + output_rate)
+    assert calculate_cost(model, 100_000, 100_000) == pytest.approx((input_rate + output_rate) / 10)
 
 
 def test_unknown_future_model_is_not_silently_priced_by_family_prefix():
@@ -133,25 +133,40 @@ def test_unknown_future_model_is_not_silently_priced_by_family_prefix():
     ],
 )
 def test_rates_match_provider_pricing_page_2026_10_09(model, input_rate, output_rate):
-    assert calculate_cost(model, 1_000_000, 1_000_000) == pytest.approx(input_rate + output_rate)
-
-
-def test_haiku_5_5_stays_unpriced_until_tiered_rates_are_modeled():
-    assert not is_priced("claude-haiku-5-5")
+    assert calculate_cost(model, 100_000, 100_000) == pytest.approx((input_rate + output_rate) / 10)
 
 
 @pytest.mark.parametrize(
-    ("model", "input_rate", "output_rate"),
+    ("model", "prompt_tokens", "expected_in", "expected_out"),
     [
-        ("o3", 2.0, 8.0),
-        ("o4-mini", 1.10, 4.40),
-        ("gpt-5", 1.25, 10.0),
-        ("gpt-5.4", 2.5, 15.0),
-        ("gpt-4.1", 2.0, 8.0),
-        ("gemini-2.5-flash", 0.30, 2.50),
-        ("gemini-2.5-flash-lite", 0.10, 0.40),
-        ("gemini-3.5-flash", 1.5, 9.0),
+        ("claude-haiku-5-5", 100_000, 0.10, 0.50),  # at the boundary: base tier
+        ("claude-haiku-5-5", 100_001, 0.50, 2.50),
+        ("gemini-2.5-pro", 200_000, 1.25, 10.0),
+        ("gemini-2.5-pro", 200_001, 2.50, 15.0),
+        ("gpt-5.4", 272_000, 2.50, 15.0),
+        ("gpt-5.4", 272_001, 5.00, 22.5),
     ],
 )
-def test_openai_and_gemini_rates_match_provider_pages_2026_10_09(model, input_rate, output_rate):
-    assert calculate_cost(model, 1_000_000, 1_000_000) == pytest.approx(input_rate + output_rate)
+def test_context_tiered_models_switch_rates_above_the_threshold(
+    model, prompt_tokens, expected_in, expected_out
+):
+    assert is_priced(model)
+    cost = calculate_cost(model, prompt_tokens, 1_000_000)
+    assert cost == pytest.approx(prompt_tokens / 1e6 * expected_in + expected_out)
+
+
+def test_tier_threshold_counts_cached_prompt_tokens_too():
+    below = calculate_cost("claude-haiku-5-5", 50_000, 0, cache_read_tokens=50_000)
+    above = calculate_cost("claude-haiku-5-5", 50_000, 0, cache_read_tokens=50_001)
+    assert above > below * 4  # whole request moves to the higher tier
+
+
+def test_tier_without_cache_rates_derives_them_from_tier_input(monkeypatch):
+    from forecost.pricing import FALLBACK_PRICING, TIERED_PRICING
+
+    monkeypatch.setitem(
+        FALLBACK_PRICING, "zz-tier", {"input": 1.0, "output": 2.0, "cache_read": 0.5}
+    )
+    monkeypatch.setitem(TIERED_PRICING, "zz-tier", [{"above": 10, "input": 4.0, "output": 8.0}])
+    cost = calculate_cost("zz-tier", 0, 0, cache_read_tokens=1_000_000)
+    assert cost == pytest.approx(0.4)  # tier input 4.0 * 10% default ratio, not stale 0.5
