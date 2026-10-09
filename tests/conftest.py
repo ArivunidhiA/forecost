@@ -10,7 +10,7 @@ def _block_external_network(monkeypatch):
     original_create_connection = socket.create_connection
 
     def guarded_connect(sock, address):
-        if sock.family == socket.AF_UNIX:
+        if sock.family == getattr(socket, "AF_UNIX", None):
             return original_connect(sock, address)
         host = address[0] if isinstance(address, tuple) and address else None
         if host not in {"127.0.0.1", "::1", "localhost"}:
