@@ -72,7 +72,7 @@ def _publish_exact(path: Path, value: bytes) -> None:
                 raise OSError("installation identity file write made no progress")
             written += count
         os.fsync(descriptor)
-        with suppress(OSError):
+        with suppress(OSError, AttributeError):
             os.fchmod(descriptor, 0o600)
     finally:
         os.close(descriptor)

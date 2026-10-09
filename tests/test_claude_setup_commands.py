@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import sys
+import traceback
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from forecost.commands.self_test_cmd import self_test
@@ -39,12 +42,14 @@ def test_claude_setup_check_does_not_claim_install_readiness(tmp_path):
     assert "release hold" in result.output
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX sh hook launcher")
 def test_claude_self_test_reports_observed_boundary():
     result = CliRunner().invoke(
         self_test, ["claude", "--plugin-root", str(_plugin_root()), "--json"]
     )
 
-    assert result.exit_code == 0
+    detail = traceback.format_exception(*result.exc_info) if result.exc_info else result.output
+    assert result.exit_code == 0, detail
     payload = json.loads(result.output)
     assert payload["readiness"] == "OBSERVED"
     assert payload["simulation_passed"] is True

@@ -56,6 +56,8 @@ def _simulate_launcher(root: Path) -> tuple[bool, list[str]]:
             )
             if result.returncode != 0:
                 return False, []
+        if not log_path.exists():
+            return False, []
         observed = log_path.read_text(encoding="utf-8").splitlines()
         return observed == commands, observed
 

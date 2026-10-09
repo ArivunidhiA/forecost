@@ -214,7 +214,7 @@ def _append_line(line: str) -> None:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
             return
-        with suppress(OSError):
+        with suppress(OSError, AttributeError):
             os.fchmod(descriptor, 0o600)
         existing = b""
         if metadata.st_size <= _MAX_LOG_BYTES:

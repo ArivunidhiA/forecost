@@ -104,7 +104,7 @@ def _lock_owned_data_root(path: Path) -> None:
     flags |= getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(marker, flags, 0o600)
     try:
-        with contextlib.suppress(OSError):
+        with contextlib.suppress(OSError, AttributeError):
             os.fchmod(descriptor, 0o600)
     finally:
         os.close(descriptor)
@@ -186,7 +186,7 @@ def open_private_file_descriptor(path: Path, flags: int, mode: int = 0o600) -> i
             raise UnsafeDataPathError(f"Forecost path is not a regular file: {path}")
         if hasattr(os, "getuid") and metadata.st_uid != os.getuid():
             raise UnsafeDataPathError(f"Forecost path is owned by a different OS user: {path}")
-        with contextlib.suppress(OSError):
+        with contextlib.suppress(OSError, AttributeError):
             os.fchmod(descriptor, 0o600)
         return descriptor
     except BaseException:

@@ -19,12 +19,13 @@ case "$DATA_DIR" in
   *) exit 0 ;;
 esac
 
+# GNU stat first: on GNU, `stat -f` means filesystem status and prints garbage.
 path_owner() {
-  stat -f '%u' "$1" 2>/dev/null || stat -c '%u' "$1" 2>/dev/null
+  stat -c '%u' "$1" 2>/dev/null || stat -f '%u' "$1" 2>/dev/null
 }
 
 path_mode() {
-  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null
 }
 
 safe_owned_path() {
