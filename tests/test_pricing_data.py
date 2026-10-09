@@ -271,4 +271,6 @@ def test_data_provenance_tag_survives_pricing_version_normalization():
 
     readable = "bundled-2026-08/data-2026-10-09/sonnet5-standard-from-2026-09-01"
     assert _normalize_pricing_version(readable) == readable
-    assert _normalize_pricing_version("bundled-2026-08/data-bogus").startswith("pricing:")
+    hashed = _normalize_pricing_version("bundled-2026-08/data-bogus")
+    assert hashed is not None
+    assert hashed.startswith("pricing:")
