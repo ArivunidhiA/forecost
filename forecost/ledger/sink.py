@@ -45,12 +45,12 @@ def _price_event(event: UsageEvent) -> list[PostingSpec]:
         as_of=event.ts,
     )
     pricing_version = PRICING_SNAPSHOT_VERSION
+    data_tag = pricing_data_tag(event.model)
+    if data_tag:
+        pricing_version += f"/{data_tag}"
     period = get_pricing_period(event.model, event.ts)
     if period:
         pricing_version += f"/{period}"
-    data_tag = pricing_data_tag(event.model)
-    if data_tag:
-        pricing_version += f"+{data_tag}"
     if not is_priced(event.model):
         pricing_version += UNPRICED_SUFFIX  # cost is a DEFAULT_COST guess, flag it
     postings.append(

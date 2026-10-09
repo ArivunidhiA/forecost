@@ -33,8 +33,10 @@ under the explicit `forecost legacy` compatibility namespace.
   older than 45 days). `forecost pricing-update` is an opt-in, https-only, schema-validated
   refresh into `FORECOST_HOME`; the runtime never uses the network. Postings record
   `+data-YYYY-MM-DD` provenance, and `doctor`/`pricing-audit` warn when data is older than 60
-  days. Context-tiered models (e.g. Gemini 2.5 Pro >200k) are kept at their hand-verified
-  baseline and are not auto-updated.
+  days. Context-tiered models are priced per request: when a prompt (input + cache
+  tokens) exceeds a model's threshold (Gemini 2.5 Pro >200k, Haiku 5.5 >100k, GPT-5.x >272k,
+  Sonnet 4.5 >200k, ...) the whole request uses the tier's rates; tiers are refreshed with the
+  rest of the data.
 - **`forecost ingest`** — pull Claude Code JSONL transcripts into the ledger
   (idempotent and resumable; cursor identities are installation-keyed and
   replacement-aware, while transcript content is opened locally but excluded

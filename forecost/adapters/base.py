@@ -324,6 +324,7 @@ def _normalize_pricing_version(value: str | None) -> str | None:
     # Only versions emitted by the bundled pricing engine remain readable.
     if re.fullmatch(
         r"bundled-[0-9]{4}-[0-9]{2}"
+        r"(?:/data-[0-9]{4}-[0-9]{2}-[0-9]{2})?"
         r"(?:/sonnet5-(?:intro-through-2026-08-31|standard-from-2026-09-01))?"
         r"(?:/unpriced-guess)?",
         value,

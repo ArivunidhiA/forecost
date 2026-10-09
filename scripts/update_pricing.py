@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import urllib.request
 from datetime import date
@@ -28,7 +29,13 @@ DEFAULT_SOURCE = (
 )
 MAX_CHANGE_FACTOR = 4.0
 PROVIDERS = {"anthropic", "openai", "gemini"}
-TIER_MARKER = "_above_"  # e.g. input_cost_per_token_above_200k_tokens
+_TIER_FIELDS = {
+    "input_cost_per_token_above_{n}k_tokens": "input",
+    "output_cost_per_token_above_{n}k_tokens": "output",
+    "cache_read_input_token_cost_above_{n}k_tokens": "cache_read",
+    "cache_creation_input_token_cost_above_{n}k_tokens": "cache_write",
+}
+_TIER_KEY = re.compile(r"^(?:input_cost_per_token|output_cost_per_token)_above_(\d+)k_tokens$")
 
 
 def load_source(source: str) -> dict[str, dict]:
@@ -60,8 +67,6 @@ def extract(source: dict[str, dict]) -> dict[str, dict[str, float]]:
         model = raw_id.removeprefix("gemini/")
         if "/" in model or model.startswith("ft:") or not pricing_data._MODEL_ID.match(model):
             continue
-        if any(TIER_MARKER in key and entry[key] for key in entry):
-            continue  # context/service-tiered: not representable, keep baseline
         rates = {
             "input": _per_mtok(entry.get("input_cost_per_token")),
             "output": _per_mtok(entry.get("output_cost_per_token")),
@@ -72,6 +77,34 @@ def extract(source: dict[str, dict]) -> dict[str, dict[str, float]]:
             continue
         rows[model] = {k: v for k, v in rates.items() if v is not None}
     return rows
+
+
+def extract_tiers(source: dict[str, dict]) -> dict[str, list[dict[str, float]]]:
+    """Context-length tiers (plain keys only; batch/priority/flex variants are ignored)."""
+    tiers: dict[str, list[dict[str, float]]] = {}
+    for raw_id, entry in source.items():
+        if not isinstance(entry, dict) or entry.get("mode") != "chat":
+            continue
+        if entry.get("litellm_provider") not in PROVIDERS:
+            continue
+        model = raw_id.removeprefix("gemini/")
+        if "/" in model or model.startswith("ft:"):
+            continue
+        thresholds = sorted(
+            {int(m.group(1)) for key in entry if (m := _TIER_KEY.match(key)) and entry[key]}
+        )
+        rows = []
+        for n in thresholds:
+            row = {"above": n * 1000}
+            for template, name in _TIER_FIELDS.items():
+                value = _per_mtok(entry.get(template.format(n=n)))
+                if value is not None:
+                    row[name] = value
+            if "input" in row and "output" in row:
+                rows.append(row)
+        if rows:
+            tiers[model] = rows
+    return tiers
 
 
 def gate(
@@ -109,7 +142,8 @@ def main() -> int:
     previous = pricing_data.read_file(Path(args.out))
     if previous:
         known.update(previous["models"])
-    accepted, held = gate(extract(load_source(args.source)), known)
+    raw_feed = load_source(args.source)
+    accepted, held = gate(extract(raw_feed), known)
     if len(accepted) < 50:
         raise SystemExit(f"only {len(accepted)} usable models extracted; refusing to update")
     document = {
@@ -117,6 +151,7 @@ def main() -> int:
         "generated_at": args.today,
         "source": args.source if args.source.startswith("http") else "local-file",
         "models": accepted,
+        "tiers": {m: t for m, t in sorted(extract_tiers(raw_feed).items()) if m in accepted},
     }
     pricing_data.validate(document)
     out = Path(args.out)

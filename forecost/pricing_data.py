@@ -19,6 +19,8 @@ from typing import TypedDict
 SCHEMA = 1
 MAX_BYTES = 2_000_000
 MAX_MODELS = 5_000
+MAX_TIERS = 4
+MAX_TIER_THRESHOLD = 10_000_000
 MAX_RATE_PER_MTOK = 10_000.0
 STALE_AFTER_DAYS = 60
 BUNDLED_PATH = Path(__file__).parent / "data" / "pricing.json"
@@ -36,6 +38,7 @@ class PricingDoc(TypedDict):
     generated_at: str
     source: str
     models: dict[str, dict[str, float]]
+    tiers: dict[str, list[dict[str, float]]]
 
 
 def _validate_rate(key: object, value: object) -> float:
@@ -57,8 +60,37 @@ def _validate_model(model: object, rates: object) -> dict[str, float]:
     return row
 
 
-def validate(raw: object) -> PricingDoc:
-    """Return a normalized copy of ``raw`` or raise :class:`PricingDataError`."""
+def _validate_tier(model: str, tier: object) -> dict[str, float]:
+    if not isinstance(tier, dict) or "above" not in tier:
+        raise PricingDataError("tier needs an 'above' threshold")
+    above = tier["above"]
+    if isinstance(above, bool) or not isinstance(above, int):
+        raise PricingDataError("tier threshold must be an integer")
+    if not 0 < above <= MAX_TIER_THRESHOLD:
+        raise PricingDataError("tier threshold out of range")
+    row = _validate_model(model, {k: v for k, v in tier.items() if k != "above"})
+    return {"above": float(above), **row}
+
+
+def _validate_tiers(model: object, tiers: object) -> list[dict[str, float]]:
+    if not isinstance(model, str) or not _MODEL_ID.match(model):
+        raise PricingDataError("invalid tier model")
+    if not isinstance(tiers, list) or not 0 < len(tiers) <= MAX_TIERS:
+        raise PricingDataError("tiers must be a short list")
+    out = [_validate_tier(model, tier) for tier in tiers]
+    thresholds = [t["above"] for t in out]
+    if thresholds != sorted(set(thresholds)):
+        raise PricingDataError("tier thresholds must be strictly ascending")
+    return out
+
+
+def _bounded_object(value: object, name: str) -> dict[str, object]:
+    if not isinstance(value, dict) or len(value) > MAX_MODELS:
+        raise PricingDataError(f"{name} must be a bounded object")
+    return value
+
+
+def _validate_header(raw: object) -> str:
     if not isinstance(raw, dict) or raw.get("schema") != SCHEMA:
         raise PricingDataError("unsupported pricing data schema")
     generated = str(raw.get("generated_at"))
@@ -66,14 +98,21 @@ def validate(raw: object) -> PricingDoc:
         date.fromisoformat(generated)
     except ValueError as error:
         raise PricingDataError("generated_at must be an ISO date") from error
-    models = raw.get("models")
-    if not isinstance(models, dict) or len(models) > MAX_MODELS:
-        raise PricingDataError("models must be a bounded object")
+    return generated
+
+
+def validate(raw: object) -> PricingDoc:
+    """Return a normalized copy of ``raw`` or raise :class:`PricingDataError`."""
+    generated = _validate_header(raw)
+    assert isinstance(raw, dict)  # noqa: S101 - narrowed by _validate_header
+    models = _bounded_object(raw.get("models"), "models")
+    tiers = _bounded_object(raw.get("tiers", {}), "tiers")
     return {
         "schema": SCHEMA,
         "generated_at": generated,
         "source": str(raw.get("source", ""))[:200],
         "models": {model: _validate_model(model, rates) for model, rates in models.items()},
+        "tiers": {model: _validate_tiers(model, rows) for model, rows in tiers.items()},
     }
 
 
@@ -87,10 +126,13 @@ def read_file(path: Path) -> PricingDoc | None:
         return None
 
 
-def load_effective() -> tuple[dict[str, dict[str, float]], str | None]:
-    """Return (model -> rates, newest generated_at) from bundled data plus a newer local copy."""
+def load_effective_full() -> tuple[
+    dict[str, dict[str, float]], dict[str, list[dict[str, float]]], str | None
+]:
+    """Return (rates, context tiers, newest generated_at): bundled data plus a newer local copy."""
     bundled = read_file(BUNDLED_PATH)
-    merged: dict[str, dict[str, float]] = dict(bundled["models"]) if bundled else {}
+    rates: dict[str, dict[str, float]] = dict(bundled["models"]) if bundled else {}
+    tiers: dict[str, list[dict[str, float]]] = dict(bundled["tiers"]) if bundled else {}
     stamp = bundled["generated_at"] if bundled else None
     try:
         from forecost.core.paths import forecost_home
@@ -99,9 +141,16 @@ def load_effective() -> tuple[dict[str, dict[str, float]], str | None]:
     except OSError:
         local = None
     if local and (stamp is None or local["generated_at"] >= stamp):
-        merged.update(local["models"])
+        rates.update(local["models"])
+        tiers.update(local["tiers"])
         stamp = local["generated_at"]
-    return merged, stamp
+    return rates, tiers, stamp
+
+
+def load_effective() -> tuple[dict[str, dict[str, float]], str | None]:
+    """Return (model -> rates, newest generated_at)."""
+    rates, _, stamp = load_effective_full()
+    return rates, stamp
 
 
 def age_days(stamp: str | None, today: date | None = None) -> int | None:
