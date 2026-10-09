@@ -1,152 +1,135 @@
-# forecost Development Guide
+# Forecost development guide
 
-## What This Project Is
-forecost is a local-first Python CLI/SDK that tracks and forecasts LLM API costs.
-It uses an ensemble of three statistical methods (SES + Damped Trend + Linear Regression)
-on daily spend data to predict total project cost, with anomaly detection and budget enforcement.
-PyPI package, ~22 modules, 10+ test files, zero infrastructure dependencies.
+## Read this first
 
-## Architecture Rules
-- All source code lives in forecost/ (flat layout, not src/)
-- CLI commands are in forecost/commands/ — each is a thin wrapper calling core logic
-- Core modules: db.py (SQLite + WriteQueue), pricing.py (80+ model prices),
-  forecaster.py (ensemble engine), interceptor.py (httpx monkey-patching),
-  tracker.py (public API), scope.py (heuristic analyzer), tui.py (optional Textual dashboard)
-- Tests live in tests/ and tests/benchmarks/
-- pyproject.toml uses hatchling build backend
-- Entry point: `forecost = "forecost.cli:main"`
+Forecost 0.3 is an unreleased local economic-receipt system for AI-agent runs
+with a content-minimizing intended contract. It is not primarily the old
+calendar-spend forecaster. A 2026-08-13 red team found raw-path/log, receipt,
+authority, and durability P0 defects. The current worktree contains internal
+remediations for those current-ledger paths, but release remains held for the
+remaining legacy, live-validation, external-review, and distribution gates in
+`docs/status.md`.
+Start with:
 
-## Iron Rules (Never Violate These)
-1. The interceptor must NEVER break the host application's HTTP requests.
-   All tracking logic is wrapped in try/except. Real errors propagate, tracking errors are swallowed and logged to ~/.forecost/error.log.
-2. calculate_forecast(save=False) is the default. Only the rich terminal `forecast` command
-   (no --json, --brief, --output, or --exit-code) saves forecast rows.
-3. No network calls for pricing data. All prices are hardcoded in FALLBACK_PRICING dict.
-4. The WriteQueue worker thread has its OWN SQLite connection. Never share connections across threads.
-5. .forecost.toml uses relative paths (path = "."). Never write absolute paths to config files.
-6. Never use `except Exception: pass` — always log errors to ~/.forecost/error.log.
-7. All cost calculations must handle edge cases: zero tokens, missing pricing data,
-   unknown models, negative values, rate limit responses.
+1. `AGENTS.md` for repository tool instructions;
+2. `101/README.md` for the complete onboarding path;
+3. `docs/status.md` and `docs/capabilities.json` for current claim boundaries;
+4. `docs/product-contract.md` for intended product laws;
+5. the relevant ADR and tests before changing a subsystem.
 
-## Code Conventions
-- Python 3.10+ compatibility. Type hints on all public APIs.
-- Line length: 100 characters. Formatter/linter: ruff.
-- Google-style docstrings on all public functions.
-- Error messages must be actionable ("Expected API key in OPENAI_API_KEY env var" not "Key error").
-- Follow existing code patterns before introducing new ones.
-- No bare except clauses. Narrow to specific exception types.
-- Rich library for terminal output. Click for CLI framework.
+The forecast-era code remains only for compatibility under `forecost legacy`
+and uses the separate `costs.db`. Current receipt code uses `ledger.db`.
 
-## Testing Rules
-- Run `pytest tests/ -v --tb=short -m "not benchmark"` after every change
-- The forecaster is the most important module — test accuracy with synthetic data
-- The interceptor is the most dangerous module — test that it never breaks httpx
-- Mock all HTTP calls in tests. Never make real API calls.
-- Benchmarks in tests/benchmarks/ can be slower but must pass
-- Property-based tests use Hypothesis (tests/test_property.py)
-- Edge case tests in tests/test_edge_cases.py
-- Use `tmp_path` and `monkeypatch` for test isolation
-- Tests must be deterministic — no time.sleep() unless waiting for WriteQueue flush
+## Current architecture
 
-## Module Dependency Order (no circular imports)
-```
-pricing.py       → (standalone, no internal imports)
-db.py            → (standalone, sqlite3 only)
-interceptor.py   → pricing, db
-tracker.py       → pricing, db, interceptor
-forecaster.py    → db (optionally statsmodels)
-scope.py         → pricing
-cli.py           → all of the above via commands/
-tui.py           → db, forecaster (optional: textual, plotext)
-```
+The Python package lives in `forecost/` and supports Python 3.10–3.13 in CI.
+Click commands are lazy-loaded from `forecost/commands/` through
+`forecost/cli.py`.
 
-## What NOT To Do
-- Don't add a web dashboard or frontend
-- Don't add database migrations (schema-less metadata JSON column handles extensibility)
-- Don't add authentication or multi-user support
-- Don't add real-time pricing fetches from the internet
-- Don't add heavy ML dependencies (statsmodels is the ceiling)
-- Don't import heavy optional deps (statsmodels, textual, plotext, numpy) at module level — lazy-import them inside the functions that need them
+`ledger.db` contains two related but not fully unified evidence lanes:
 
-## Key Commands
+- operational usage: `usage_events`, separate valuation `postings`, policy,
+  calibration, and operational summaries;
+- causal receipt kernel: append-only journal observations projected into runs,
+  spans, links, meter facts, charges, outcomes, receipts, and reconciliation.
+
+Claude Stop/lifecycle hooks can feed both. Manual Claude ingestion and LiteLLM
+feed operational usage; offline OTel-style import feeds the receipt journal.
+Never imply an adapter produces a complete graph unless its end-to-end tests
+prove that path.
+
+Primary modules:
+
+- `forecost/ledger/`: contracts, schema, writes, journal, projections,
+  receipts, queries, integrity;
+- `forecost/adapters/`: Claude, LiteLLM, OTel, framework mappings, conformance;
+- `forecost/hooks/` and `forecost/policy/`: local fail-open Claude lifecycle and
+  policy behavior;
+- `forecost/estimate/`: shadow-only estimator/calibration;
+- `forecost/reconciliation.py`: offline independent evidence comparison;
+- `forecost/resources.py`: experimental single-host envelopes;
+- `forecost/mcp/`: optional read-only two-tool MCP interface;
+- `forecost/db.py`, `tracker.py`, `interceptor.py`, `forecaster.py`, `scope.py`,
+  and `tui.py`: primarily legacy compatibility.
+
+## Product laws
+
+1. Evidence before advice.
+2. Prompts, completions, tool payloads, source code, credentials, and raw paths
+   are forbidden from current-ledger persistent state; add all-artifact privacy
+   tests with every relevant change. The unsupported legacy `costs.db` can hold
+   project names, paths, and legacy metadata and is outside this stronger
+   contract until it is removed or migrated.
+3. Preserve causal identity before aggregation.
+4. Quantities and valuations are different facts.
+5. Provider-billed, gateway, list-rate, quota, and unknown authorities remain
+   explicit; competing values are not summed.
+6. Local controls make only local, fail-open claims and cannot promise
+   provider-side or distributed containment.
+7. Late evidence supersedes; it does not rewrite the historical journal.
+8. Text, JSON, Markdown, and MCP output must agree semantically.
+
+## Engineering rules
+
+- All public APIs use type hints; keep Python 3.10 compatibility and 100-column
+  formatting.
+- Optional/heavy SDKs must stay off the base startup import path.
+- Use bounded typed fields at adapter boundaries; never persist arbitrary source
+  dictionaries or error strings.
+- Identity, cursor advancement, replay, partial input, late evidence, finality,
+  failure, and recovery require explicit tests.
+- SQLite writes sharing a process connection must use the repository transaction
+  discipline. Schema changes use the forward-only migration ladder and need
+  upgrade tests.
+- Hooks and interceptors must not break the host application. Log bounded errors
+  instead of swallowing them silently.
+- Repository-local policy is untrusted unless the user explicitly sets
+  `FORECOST_TRUST_PROJECT_POLICY=1`.
+- Do not add hosted infrastructure, live pricing/provider ingestion, hard
+  distributed-control claims, or user-facing prediction without changing the
+  product contract and satisfying its evidence gates.
+- Preserve unrelated worktree changes and use synthetic fixtures, never private
+  transcripts or databases.
+
+## Development commands
+
 ```bash
-pip install -e ".[dev]"                    # Install for development
-pytest tests/ -v -m "not benchmark"        # Run all tests (skip benchmarks)
-pytest tests/test_benchmarks.py --benchmark-only  # Run benchmarks only
-pytest tests/ --cov=forecost --cov-report=term-missing  # Coverage
-ruff check forecost/ tests/                # Lint
-ruff format --check forecost/ tests/       # Format check
-pyright forecost/                          # Type check
-bandit -r forecost/ -ll                    # Security scan
-xenon forecost/ -b B -m A -a A            # Complexity gate
-forecost demo                             # See it working with sample data
+python3.12 -m venv .venv-review
+source .venv-review/bin/activate
+python -m pip install -e ".[dev,forecast,llm]"
+
+pytest tests/ -v --tb=short
+ruff check forecost/ tests/
+ruff format --check forecost/ tests/
+pyright
+xenon forecost/ -b B -m A -a A
+bandit -r forecost/ -c pyproject.toml
+pip-audit
 ```
 
-## CI Pipeline
-- Lint: ruff check + format, pyright, bandit, xenon
-- Test: pytest with coverage (3.10-3.13 × ubuntu/mac/win matrix)
-- Coverage gate: diff-cover --fail-under=85 on PRs
-- Security: bandit + pip-audit + vulture
-- Smoke: install from wheel, run --version, --help, demo
+Install `.[mcp]` before MCP tests or launch the optional server with
+`python -m forecost.mcp_launcher`. Use the installed `forecost` console script;
+`python -m forecost.cli` is not the product launcher.
 
-<!-- code-review-graph MCP tools -->
-## MCP Tools: code-review-graph
+Safe first workflows:
 
-**IMPORTANT: This project has a knowledge graph. ALWAYS use the
-code-review-graph MCP tools BEFORE using Grep/Glob/Read to explore
-the codebase.** The graph is faster, cheaper (fewer tokens), and gives
-you structural context (callers, dependents, test coverage) that file
-scanning cannot.
+```bash
+forecost lab demo
+forecost lab chaos
+forecost doctor
+```
 
-### When to use graph tools FIRST
+Use an absolute temporary `FORECOST_HOME` or explicit Run Lab ledger when
+strictly isolating local developer data.
 
-- **Exploring code**: `semantic_search_nodes` or `query_graph` instead of Grep
-- **Understanding impact**: `get_impact_radius` instead of manually tracing imports
-- **Code review**: `detect_changes` + `get_review_context` instead of reading entire files
-- **Finding relationships**: `query_graph` with callers_of/callees_of/imports_of/tests_for
-- **Architecture questions**: `get_architecture_overview` + `list_communities`
+## Legacy rules
 
-Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
+Legacy HTTPX interception must remain fail-open, use its own `costs.db` write
+discipline, and never become a hidden dependency of current commands. The old
+forecast, TUI, server, scope, pricing, and tracker behavior is unsupported
+compatibility—not the roadmap.
 
-### Key Tools
-
-| Tool | Use when |
-|------|----------|
-| `detect_changes` | Reviewing code changes — gives risk-scored analysis |
-| `get_review_context` | Need source snippets for review — token-efficient |
-| `get_impact_radius` | Understanding blast radius of a change |
-| `get_affected_flows` | Finding which execution paths are impacted |
-| `query_graph` | Tracing callers, callees, imports, tests, dependencies |
-| `semantic_search_nodes` | Finding functions/classes by name or keyword |
-| `get_architecture_overview` | Understanding high-level codebase structure |
-| `refactor_tool` | Planning renames, finding dead code |
-
-### Workflow
-
-1. The graph auto-updates on file changes (via hooks).
-2. Use `detect_changes` for code review.
-3. Use `get_affected_flows` to understand impact.
-4. Use `query_graph` pattern="tests_for" to check coverage.
-
-## Multi-Agent Engineering Pipeline
-
-This project uses a systematic fix pipeline with research → implement → verify phases.
-
-### Agents
-- **researcher**: Investigates complex issues, produces research reports in `.claude/research/`
-- **fixer**: Implements fixes with tests, follows research reports
-- **verifier**: Reviews fixes for correctness and completeness
-
-### Progress tracking
-All state is in `.claude/PROGRESS.md`. Always read it first when starting a session.
-
-### Resume protocol
-1. Read `.claude/PROGRESS.md`
-2. Pick highest-priority 🔴 or 🟡 issue
-3. If 🔴: research first, then fix. If 🟡: research done, go straight to fix.
-4. Fix → verify → update PROGRESS.md → next issue
-5. Before session ends: update PROGRESS.md with current state
-
-### Reference documents
-- `gaps/phase-1-audit-report.md` — Full codebase audit (1000+ lines)
-- `gaps/Phase 1 audit, list.md` — Prioritized issue list with context and research
+The old unauthenticated loopback server and removed `init --smart` upload path
+must not be re-registered. Legacy observations can be copied only through the
+explicit migration command and must not gain stronger identity, authority, or
+finality.

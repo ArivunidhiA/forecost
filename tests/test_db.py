@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 import pytest
@@ -27,7 +28,8 @@ def test_create_project_and_get_project_by_path(db_path):
     proj = get_project_by_path("/tmp/foo")
     assert proj is not None
     assert proj["name"] == "foo"
-    assert proj["path"] == "/tmp/foo"
+    assert proj["path"] != "/tmp/foo"
+    assert "/tmp/foo" not in str(proj)
     assert proj["baseline_daily_cost"] == 5.0
     assert proj["baseline_total_days"] == 14
     assert proj["baseline_total_cost"] == 70.0
@@ -146,9 +148,16 @@ def test_create_project_duplicate_path_raises(db_path):
 
 
 def test_write_queue_on_exit_handles_full_queue(db_path):
-    """_on_exit doesn't raise even if the internal queue is at capacity."""
+    """_on_exit durably drains even if the internal queue is at capacity."""
+    pid = create_project(
+        name="exit-drain",
+        path="/tmp/exit-drain",
+        baseline_daily_cost=1.0,
+        baseline_total_days=1,
+        baseline_total_cost=1.0,
+    )
     q = WriteQueue()
-    dummy = (1, "2026-01-01T00:00:00Z", "m", "p", 0, 0, 0.0, None)
+    dummy = (pid, "2026-01-01T00:00:00Z", "m", "p", 0, 0, 0.0, None)
     for _ in range(10_000):
         try:
             q._queue.put_nowait(dummy)
@@ -209,3 +218,114 @@ def test_source_column_default(db_path):
     conn.commit()
     row = conn.execute("SELECT source FROM usage_logs WHERE project_id = ?", (pid,)).fetchone()
     assert row["source"] == "api"
+
+
+def test_legacy_project_row_with_raw_path_is_still_found(db_path):
+    conn = get_or_create_db()
+    conn.execute(
+        "INSERT INTO projects (name, path, baseline_daily_cost, baseline_total_days,"
+        " baseline_total_cost, created_at) VALUES ('old', '/tmp/old', 1, 1, 1, 'x')"
+    )
+    conn.commit()
+    legacy = get_project_by_path("/tmp/old")
+    assert legacy is not None
+    assert legacy["name"] == "old"
+
+
+def test_project_name_and_metadata_are_content_minimized(db_path):
+    create_project(
+        name="/Users/someone/secret-client/app",
+        path="/Users/someone/secret-client/app",
+        baseline_daily_cost=1.0,
+        baseline_total_days=1,
+        baseline_total_cost=1.0,
+        metadata={
+            "ok": "tier-1",
+            "n": 3,
+            "prompt": "please refactor my private auth code now",
+            "nested": {"a": 1},
+            "bad key!": 1,
+        },
+    )
+    proj = get_project_by_path("/Users/someone/secret-client/app")
+    assert proj is not None
+    assert proj["name"] == "app"
+    assert proj["metadata"] == {"n": 3, "ok": "tier-1"}
+    raw = "".join(
+        str(v) for row in get_or_create_db().execute("SELECT * FROM projects") for v in row
+    )
+    assert "secret-client" not in raw
+    assert "refactor" not in raw
+
+
+def test_sanitize_metadata_bounds_items():
+    from forecost.db import sanitize_metadata
+
+    assert sanitize_metadata(None) is None
+    assert sanitize_metadata({"x": "has spaces"}) is None
+    big = {f"k{i}": i for i in range(40)}
+    bounded = sanitize_metadata(big)
+    assert bounded is not None
+    assert len(json.loads(bounded)) == 16
+
+
+def _insert_raw_legacy_rows(conn):
+    conn.execute(
+        "INSERT INTO projects (name, path, baseline_daily_cost, baseline_total_days,"
+        " baseline_total_cost, metadata, created_at) VALUES"
+        " ('/Users/x/secret-client/app', '/Users/x/secret-client/app', 1, 1, 1,"
+        ' \'{"prompt": "private words here", "n": 1}\', \'x\')'
+    )
+    pid = conn.execute("SELECT id FROM projects").fetchone()[0]
+    conn.execute(
+        "INSERT INTO usage_logs (project_id, timestamp, model, provider, tokens_in, tokens_out,"
+        " cost_usd, metadata) VALUES (?, 'x', 'gpt-4o', 'openai', 1, 1, 0.1,"
+        ' \'{"note": "private words here"}\')',
+        (pid,),
+    )
+    conn.commit()
+
+
+def test_scrub_rewrites_existing_raw_rows_and_leaves_no_canary(db_path):
+    from click.testing import CliRunner
+
+    from forecost.cli import main
+    from forecost.db import count_unscrubbed_legacy_rows
+
+    conn = get_or_create_db()
+    _insert_raw_legacy_rows(conn)
+    assert count_unscrubbed_legacy_rows(conn) == 2
+
+    checked = CliRunner().invoke(main, ["legacy", "scrub", "--check", "--yes"])
+    assert "2 legacy row(s)" in checked.output
+    result = CliRunner().invoke(main, ["legacy", "scrub", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "Scrubbed 2" in result.output
+    assert count_unscrubbed_legacy_rows(conn) == 0
+
+    dump = "\n".join(conn.iterdump())
+    for canary in ("secret-client", "private words", "/Users/x"):
+        assert canary not in dump
+    assert get_project_by_path("/Users/x/secret-client/app") is not None
+    again = CliRunner().invoke(main, ["legacy", "scrub", "--yes"])
+    assert "0 legacy row(s)" in again.output
+
+
+def test_opening_a_pre_hardening_database_scrubs_it_automatically(tmp_path, monkeypatch):
+    import sqlite3 as _sqlite3
+
+    import forecost.db as legacy_db
+
+    monkeypatch.setenv("FORECOST_HOME", str(tmp_path))
+    monkeypatch.setattr(legacy_db, "_conn", None)
+    monkeypatch.setattr(legacy_db, "_writer", None, raising=False)
+    first = legacy_db.get_or_create_db()
+    _insert_raw_legacy_rows(first)
+    first.close()
+    monkeypatch.setattr(legacy_db, "_conn", None)
+
+    reopened = legacy_db.get_or_create_db()
+    assert legacy_db.count_unscrubbed_legacy_rows(reopened) == 0
+    dump = "\n".join(_sqlite3.connect(tmp_path / "costs.db").iterdump())
+    assert "secret-client" not in dump
+    assert "private words" not in dump

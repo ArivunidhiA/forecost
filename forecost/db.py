@@ -5,13 +5,18 @@ Zero-maintenance SQLite database module for forecost cost tracking.
 import atexit
 import json
 import logging
-import os
+import re
 import sqlite3
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from queue import Empty, Full, Queue
+
+from forecost.core.errlog import log_exception
+from forecost.core.local_identity import keyed_fingerprint
+from forecost.core.paths import chmod_private, ensure_private_dir, forecost_home
+from forecost.core.spool import write_immutable_spool
 
 logger = logging.getLogger(__name__)
 
@@ -28,17 +33,29 @@ __all__ = [
     "WriteQueue",
 ]
 
-_DB_PATH = Path.home() / ".forecost" / "costs.db"
+_INITIAL_DB_PATH = forecost_home() / "costs.db"
+_DB_PATH = _INITIAL_DB_PATH
 _BATCH_SIZE = 100
 _FLUSH_INTERVAL = 2.0
-_EXIT_TIMEOUT = 1.0
 
 _conn: sqlite3.Connection | None = None
 _conn_lock = threading.Lock()
 
 
+def _active_db_path() -> Path:
+    """Honor late FORECOST_HOME overrides while preserving test injection."""
+    if _DB_PATH == _INITIAL_DB_PATH:
+        return forecost_home() / "costs.db"
+    return _DB_PATH
+
+
 def _ensure_dir() -> None:
-    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(_active_db_path().parent)
+
+
+def _lock_down_db_files(path: Path) -> None:
+    for candidate in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
+        chmod_private(candidate)
 
 
 def _apply_pragmas(conn: sqlite3.Connection) -> None:
@@ -90,6 +107,15 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _scrub_on_open(conn: sqlite3.Connection) -> None:
+    """Pseudonymize pre-hardening rows once, so no raw path/metadata outlives an upgrade."""
+    try:
+        if count_unscrubbed_legacy_rows(conn):
+            scrub_legacy_rows(conn)
+    except sqlite3.Error as exc:  # never block the host application
+        logger.warning("forecost: legacy scrub skipped (%s)", type(exc).__name__)
+
+
 def get_or_create_db() -> sqlite3.Connection:
     """Return the process-wide SQLite connection, creating it if needed.
 
@@ -101,7 +127,8 @@ def get_or_create_db() -> sqlite3.Connection:
         if _conn is not None:
             return _conn
         _ensure_dir()
-        _conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
+        db_path = _active_db_path()
+        _conn = sqlite3.connect(str(db_path), check_same_thread=False)
         _conn.row_factory = sqlite3.Row
         _apply_pragmas(_conn)
         _init_schema(_conn)
@@ -109,7 +136,104 @@ def get_or_create_db() -> sqlite3.Connection:
         if "source" not in cols:
             _conn.execute("ALTER TABLE usage_logs ADD COLUMN source TEXT DEFAULT 'api'")
             _conn.commit()
+        _scrub_on_open(_conn)
+        _lock_down_db_files(db_path)
         return _conn
+
+
+_META_KEY = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
+_META_TEXT = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+_MAX_META_ITEMS = 16
+_MAX_NAME = 80
+
+
+def _meta_item_ok(key: object, value: object) -> bool:
+    if not isinstance(key, str) or not _META_KEY.match(key):
+        return False
+    if isinstance(value, str):
+        return bool(_META_TEXT.match(value))
+    return isinstance(value, (bool, int, float)) and value == value
+
+
+def sanitize_metadata(metadata: dict | None) -> str | None:
+    """Return bounded JSON for legacy metadata, dropping free-form content.
+
+    Keeps at most 16 items whose keys are short identifiers and whose values are
+    numbers, booleans, or short token-like strings. Anything else (prompts,
+    paths, nested objects, long text) is discarded so the legacy store cannot
+    persist arbitrary caller content.
+    """
+    if not isinstance(metadata, dict):
+        return None
+    kept: dict[str, object] = {}
+    for key, value in metadata.items():
+        if len(kept) >= _MAX_META_ITEMS:
+            break
+        if _meta_item_ok(key, value):
+            kept[key] = value
+    return json.dumps(kept, sort_keys=True) if kept else None
+
+
+def project_path_key(path: str) -> str:
+    """Installation-keyed pseudonym stored instead of a raw project path."""
+    return "p:" + keyed_fingerprint("legacy-project-path", path)
+
+
+def _safe_project_name(name: str) -> str:
+    base = name.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    return base[:_MAX_NAME] or "project"
+
+
+def _row_needs_scrub(name: str, path: str, metadata: str | None) -> bool:
+    return (
+        not path.startswith("p:")
+        or _safe_project_name(name) != name
+        or _scrub_metadata_text(metadata) != metadata
+    )
+
+
+def _scrub_metadata_text(metadata: str | None) -> str | None:
+    if metadata is None:
+        return None
+    try:
+        decoded = json.loads(metadata)
+    except (TypeError, ValueError):
+        return None
+    return sanitize_metadata(decoded)
+
+
+def count_unscrubbed_legacy_rows(conn: sqlite3.Connection) -> int:
+    """Count legacy project/usage rows still holding raw paths, names, or free-form metadata."""
+    total = 0
+    for name, path, meta in conn.execute("SELECT name, path, metadata FROM projects"):
+        total += _row_needs_scrub(name, path, meta)
+    for (meta,) in conn.execute("SELECT metadata FROM usage_logs WHERE metadata IS NOT NULL"):
+        total += _scrub_metadata_text(meta) != meta
+    return total
+
+
+def scrub_legacy_rows(conn: sqlite3.Connection) -> int:
+    """Rewrite pre-hardening legacy rows in place; return the number of rows changed."""
+    changed = 0
+    with conn:
+        for pid, name, path, meta in conn.execute(
+            "SELECT id, name, path, metadata FROM projects"
+        ).fetchall():
+            if _row_needs_scrub(name, path, meta):
+                new_path = path if path.startswith("p:") else project_path_key(path)
+                conn.execute(
+                    "UPDATE projects SET name = ?, path = ?, metadata = ? WHERE id = ?",
+                    (_safe_project_name(name), new_path, _scrub_metadata_text(meta), pid),
+                )
+                changed += 1
+        for lid, meta in conn.execute(
+            "SELECT id, metadata FROM usage_logs WHERE metadata IS NOT NULL"
+        ).fetchall():
+            cleaned = _scrub_metadata_text(meta)
+            if cleaned != meta:
+                conn.execute("UPDATE usage_logs SET metadata = ? WHERE id = ?", (cleaned, lid))
+                changed += 1
+    return changed
 
 
 def create_project(
@@ -124,7 +248,7 @@ def create_project(
 
     Args:
         name: Project display name.
-        path: Absolute project path.
+        path: Absolute project path (stored only as a keyed pseudonym).
         baseline_daily_cost: Expected daily cost baseline.
         baseline_total_days: Planned total duration in days.
         baseline_total_cost: Planned total cost baseline.
@@ -135,14 +259,22 @@ def create_project(
     """
     conn = get_or_create_db()
     now = datetime.now(timezone.utc).isoformat()
-    meta_json = json.dumps(metadata) if metadata is not None else None
+    meta_json = sanitize_metadata(metadata)
     cur = conn.execute(
         """
         INSERT INTO projects (name, path, baseline_daily_cost,
             baseline_total_days, baseline_total_cost, metadata, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (name, path, baseline_daily_cost, baseline_total_days, baseline_total_cost, meta_json, now),
+        (
+            _safe_project_name(name),
+            project_path_key(path),
+            baseline_daily_cost,
+            baseline_total_days,
+            baseline_total_cost,
+            meta_json,
+            now,
+        ),
     )
     conn.commit()
     return cur.lastrowid or 0
@@ -158,7 +290,11 @@ def get_project_by_path(path: str) -> dict | None:
         dict | None: Project row as a dictionary, or None when not found.
     """
     conn = get_or_create_db()
-    row = conn.execute("SELECT * FROM projects WHERE path = ?", (path,)).fetchone()
+    row = conn.execute(
+        "SELECT * FROM projects WHERE path = ?", (project_path_key(path),)
+    ).fetchone()
+    if row is None:  # rows written before path pseudonymization
+        row = conn.execute("SELECT * FROM projects WHERE path = ?", (path,)).fetchone()
     if row is None:
         return None
     d = dict(row)
@@ -401,8 +537,10 @@ class WriteQueue:
 
     def _worker(self) -> None:
         _ensure_dir()
-        writer_conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
+        db_path = _active_db_path()
+        writer_conn = sqlite3.connect(str(db_path), check_same_thread=False)
         _apply_pragmas(writer_conn)
+        _lock_down_db_files(db_path)
         batch: list[tuple] = []
         last_flush = time.monotonic()
         while True:
@@ -429,50 +567,38 @@ class WriteQueue:
     def _flush(self, batch: list[tuple], conn: sqlite3.Connection) -> None:
         if not batch:
             return
-        log_path = Path.home() / ".forecost" / "error.log"
-        recovery_path = Path.home() / ".forecost" / "recovery.jsonl"
+        recovery_path = _active_db_path().parent / "legacy-recovery.jsonl"
         try:
             _insert_usage_logs_batch(conn, batch)
         except Exception as e:
             _ensure_dir()
-            try:
-                with open(log_path, "a", encoding="utf-8") as f:
-                    f.write(f"[db] {e!r}\n")
-            except OSError:
-                pass
+            log_exception("legacy-db", e, "LEGACY_DB_WRITE_FAILED")
             time.sleep(0.5)
             try:
                 _insert_usage_logs_batch(conn, batch)
             except Exception:
                 try:
-                    try:
-                        if os.path.getsize(recovery_path) > 1_000_000:
-                            with open(recovery_path, "r", encoding="utf-8") as rf:
-                                lines = rf.readlines()[-100:]
-                            with open(recovery_path, "w", encoding="utf-8") as wf:
-                                wf.writelines(lines)
-                    except OSError:
-                        pass
-                    with open(recovery_path, "a", encoding="utf-8") as f:
-                        for item in batch:
-                            d = {
-                                "project_id": item[0],
-                                "timestamp": item[1],
-                                "model": item[2],
-                                "provider": item[3],
-                                "tokens_in": item[4],
-                                "tokens_out": item[5],
-                                "cost_usd": item[6],
-                                "metadata": item[7],
-                                "source": item[8] if len(item) > 8 else "api",
-                            }
-                            f.write(json.dumps(d) + "\n")
+                    rows = [
+                        {
+                            "project_id": item[0],
+                            "timestamp": item[1],
+                            "model": item[2],
+                            "provider": item[3],
+                            "tokens_in": item[4],
+                            "tokens_out": item[5],
+                            "cost_usd": item[6],
+                            "metadata": item[7],
+                            "source": item[8] if len(item) > 8 else "api",
+                        }
+                        for item in batch
+                    ]
+                    write_immutable_spool(recovery_path, rows)
                 except OSError:
                     pass
 
     def _on_exit(self) -> None:
-        try:
-            self._queue.put(None, timeout=_EXIT_TIMEOUT)
-        except Exception:
-            return
-        self._thread.join(timeout=_EXIT_TIMEOUT)
+        # Sentinel ordering plus an unbounded normal-exit join prevents records
+        # already accepted into memory from being terminated before DB/spool.
+        if self._thread.is_alive():
+            self._queue.put(None)
+            self._thread.join()

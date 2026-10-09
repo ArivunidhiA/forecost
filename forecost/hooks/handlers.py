@@ -8,28 +8,58 @@ caller enforce fail-open, keeping this module's logic legible and testable.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
-from forecost.adapters.claude_code import ClaudeCodeAdapter
+from forecost.adapters.claude_code import ClaudeCodeAdapter, ingest_causal_paths
+from forecost.core.errlog import log_error
 from forecost.estimate.engine import estimate_cost, record_estimate
 from forecost.estimate.flags import scan_prompt
 from forecost.estimate.taxonomy import classify
 from forecost.estimate.types import TaskContext
 from forecost.ledger.db import get_ledger_db
-from forecost.ledger.sink import DefaultLedgerSink, _get_or_create_session, _get_or_create_workspace
+from forecost.ledger.sink import SyncLedgerSink, _get_or_create_session, _get_or_create_workspace
 from forecost.ledger.state_store import LedgerIngestStateStore
 from forecost.policy.engine import evaluate
 from forecost.policy.rules import load_policy_file
 
 
+def _record_hook(event: str) -> None:
+    from forecost.hooks.state import record_heartbeat
+
+    record_heartbeat(event)
+
+
 def _policy_path(cwd: str | None) -> Path:
-    if cwd:
-        candidate = Path(cwd) / ".forecost.toml"
-        if candidate.exists():
-            return candidate
+    """Resolve which policy file governs enforcement for this hook.
+
+    A repo-local ``<cwd>/.forecost.toml`` runs against whatever code you point the
+    agent at — including untrusted clones — so it is NOT trusted for enforcement
+    by default: a hostile repo could ship a rule that blocks your whole session,
+    or quietly loosen the budget you set. The home policy always governs; opt in
+    per-machine with ``FORECOST_TRUST_PROJECT_POLICY=1`` to honor project files.
+    """
     from forecost.core.paths import forecost_home
 
-    return forecost_home() / "policy.toml"
+    home_policy = forecost_home() / "policy.toml"
+    if not cwd:
+        return home_policy
+    candidate = Path(cwd) / ".forecost.toml"
+    if not candidate.exists():
+        return home_policy
+    trust = os.environ.get("FORECOST_TRUST_PROJECT_POLICY", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if trust:
+        return candidate
+    log_error(
+        "hooks.policy",
+        "HOOK_POLICY_IGNORED",
+        fingerprint_source=cwd,
+    )
+    return home_policy
 
 
 def _resolve_ids(conn, cwd: str, session_id_raw: str | None) -> tuple[int | None, int | None]:
@@ -51,10 +81,22 @@ def _evaluate_policy(conn, cwd: str, workspace_id, session_db_id):
 
 
 def handle_session_start(payload: dict) -> dict:
+    from forecost.hooks.state import clear_settlements, snapshot_settlements
+
     conn = get_ledger_db()
     cwd = payload.get("cwd", "")
     session_id_raw = payload.get("session_id")
     _resolve_ids(conn, cwd, session_id_raw)
+    settlement_snapshot = snapshot_settlements()
+    if settlement_snapshot.pending:
+        # Recovery is intentionally deferred from SessionEnd.  SessionStart is
+        # allowed to do the heavier content-free transcript delta scan.
+        adapter = ClaudeCodeAdapter()
+        sink = SyncLedgerSink()
+        adapter.poll(LedgerIngestStateStore(conn), sink)
+        sink.flush()
+        clear_settlements(settlement_snapshot)
+    _record_hook("SessionStart")
     return {}
 
 
@@ -96,10 +138,15 @@ def handle_preflight(payload: dict) -> dict:
     estimate = estimate_cost(conn, task, category)
 
     workspace_id, session_db_id = _resolve_ids(conn, cwd, session_id_raw)
+    # The estimate is associated with its run at reconcile time by session + time
+    # window (calibration.py), not by run_id — the UserPromptSubmit payload has no
+    # promptId to match the transcript's events. session_id is the real join key;
+    # run_id is stored only as a human-readable reference.
     run_id = payload.get("prompt_id") or session_id_raw
     record_estimate(conn, estimate, session_db_id, workspace_id, run_id, shadow=True)
 
     decision = _evaluate_policy(conn, cwd, workspace_id, session_db_id)
+    _record_hook("UserPromptSubmit")
     if decision.action == "deny":
         return {"decision": "block", "reason": decision.reason}
 
@@ -113,6 +160,7 @@ def handle_gate(payload: dict) -> dict:
     conn = get_ledger_db()
     workspace_id, session_db_id = _resolve_ids(conn, cwd, session_id_raw)
     decision = _evaluate_policy(conn, cwd, workspace_id, session_db_id)
+    _record_hook("PreToolUse")
 
     if decision.action in ("deny", "ask"):
         return {
@@ -134,15 +182,95 @@ def handle_reconcile(payload: dict) -> dict:
     from forecost.estimate.calibration import reconcile_estimates
 
     transcript_path = payload.get("transcript_path")
-    claude_dir = Path(transcript_path).parent.parent if transcript_path else None
-    adapter = ClaudeCodeAdapter(claude_dir=claude_dir) if claude_dir else ClaudeCodeAdapter()
+    adapter = ClaudeCodeAdapter()
     conn = get_ledger_db()
     state = LedgerIngestStateStore(conn)
-    sink = DefaultLedgerSink()
-    n = adapter.poll(state, sink)
-    sink.flush(timeout=1.0)
+    # Synchronous sink: it shares this connection and commits each event before we
+    # read it back, so reconcile_estimates below sees the just-ingested actuals.
+    # (The hook is marked async in hooks.json, so the extra latency is irrelevant.)
+    # This replaces the old async DefaultLedgerSink + sleep-based flush race.
+    sink = SyncLedgerSink()
+    if transcript_path:
+        transcript_paths = _session_transcript_paths(Path(transcript_path))
+        n = adapter.poll_paths(transcript_paths, state, sink)
+        causal = ingest_causal_paths(transcript_paths, state, conn)
+    else:
+        n = adapter.poll(state, sink)
+        causal = ingest_causal_paths(adapter.claude_dir.rglob("*.jsonl"), state, conn)
+    sink.flush()
     scored = reconcile_estimates(conn)
-    return {"ingested": n, "estimates_reconciled": scored}
+    _shadow_guard_scan(conn, payload, transcript_path)
+    from forecost.hooks.state import write_summary
+
+    write_summary(ingested=n, reconciled=scored)
+    _record_hook("Stop")
+    return {
+        "ingested": n,
+        "causal_observations": causal,
+        "estimates_reconciled": scored,
+        "systemMessage": (
+            f"forecost: {n} usage event(s), {scored} estimate(s) reconciled; "
+            "run `forecost runs list` for receipts"
+        ),
+    }
+
+
+def handle_session_end(payload: dict) -> dict:
+    """Fsync only a tiny settlement marker; never race a lagging transcript."""
+    from forecost.hooks.state import append_settlement_marker
+
+    append_settlement_marker(payload)
+    _record_hook("SessionEnd")
+    return {}
+
+
+def handle_lifecycle(payload: dict) -> dict:
+    """Record supported Claude lifecycle visibility without retaining payload."""
+    from forecost.adapters.claude_code import claude_lifecycle_observation
+    from forecost.ledger.evidence import append_observation
+
+    event_name = payload.get("hook_event_name")
+    if not isinstance(event_name, str):
+        raise ValueError("hook lifecycle payload needs hook_event_name")
+    tool_name = payload.get("tool_name")
+    mapped_event = event_name
+    if event_name == "PostToolUse" and tool_name in {"ExitPlanMode", "Agent"}:
+        mapped_event = str(tool_name)
+    append_observation(get_ledger_db(), claude_lifecycle_observation(payload, mapped_event))
+    _record_hook(event_name)
+    return {}
+
+
+def _session_transcript_paths(primary: Path) -> list[Path]:
+    """Return one session transcript plus only its own subagent transcripts."""
+    paths = [primary]
+    subagents = primary.with_suffix("") / "subagents"
+    if subagents.is_dir():
+        paths.extend(subagents.rglob("*.jsonl"))
+    return paths
+
+
+def _shadow_guard_scan(conn, payload: dict, transcript_path) -> None:
+    """Compute the mid-run guard from the transcript tail and log a shadow flag
+    if the backtested rule fires. Shadow-only (never surfaced) and best-effort —
+    a guard failure must never affect the ingest/reconcile result."""
+    if not transcript_path:
+        return
+    try:
+        from forecost.estimate.guard import record_guard_flag, scan_transcript_errors
+
+        evidence = scan_transcript_errors(str(transcript_path))
+        if evidence is None:
+            return
+        session_id_raw = payload.get("session_id")
+        _, session_db_id = _resolve_ids(conn, payload.get("cwd", ""), session_id_raw)
+        record_guard_flag(conn, session_db_id, session_id_raw, evidence, shadow=True)
+    except Exception as exc:  # nosec B110 - guard is telemetry; never break reconcile
+        log_error(
+            "hooks.guard",
+            "HOOK_SHADOW_GUARD_FAILED",
+            fingerprint_source=exc,
+        )
 
 
 def _now_iso() -> str:

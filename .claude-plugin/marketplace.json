@@ -1,0 +1,14 @@
+{
+  "name": "forecost",
+  "owner": {
+    "name": "Arivunidhi A",
+    "url": "https://github.com/ArivunidhiA"
+  },
+  "plugins": [
+    {
+      "name": "forecost",
+      "source": "./plugin",
+      "description": "UNRELEASED experimental local Claude observation for content-minimized economic receipts; known P0 release blockers and no provider-side containment."
+    }
+  ]
+}

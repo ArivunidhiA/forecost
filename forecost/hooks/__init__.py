@@ -1,4 +1,4 @@
-"""Claude Code hook handlers. Fast, fail-open, content-free.
+"""Claude Code hook handlers. Fast, fail-open, and field-allowlisted by intent.
 
 Contract (verified against Claude Code's documented hooks interface): each
 handler reads a JSON payload from stdin and writes a JSON response to stdout.

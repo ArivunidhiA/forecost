@@ -4,15 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "forecost"
-version = "0.2.0"
-description = "Know exactly what your AI project will cost. Local-first LLM cost forecasting that learns from your usage."
+version = "0.3.0"
+description = "Experimental local, content-minimizing evidence receipts for AI-agent runs with independent meter reconciliation."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [{ name = "Arivunidhi A" }]
-keywords = ["llm", "cost", "forecast", "openai", "anthropic", "cli"]
+keywords = ["llm", "cost", "ledger", "reconciliation", "claude-code", "agents", "anthropic", "cli"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
@@ -20,6 +20,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
@@ -32,10 +33,15 @@ dependencies = [
 [project.optional-dependencies]
 forecast = ["statsmodels>=0.14", "numpy>=1.24"]
 tui = ["textual>=0.50", "plotext>=5.0"]
-llm = ["litellm>=1.0"]
-mcp = ["mcp[cli]>=1.0"]
+# 1.91+ stopped shipping a compatible macOS/Python 3.12 wheel and newer
+# releases currently require a Rust toolchain newer than common CI runners.
+llm = ["litellm>=1.80,<1.91"]
+# MCP 2.x removed ``mcp.server.fastmcp``, the public API used by this server.
+# Keep fresh installs on the compatible major until the server is migrated.
+mcp = ["mcp[cli]>=1.0,<2"]
 all = ["forecost[forecast,tui,llm,mcp]"]
 dev = [
+    "build>=1.2",
     "pytest>=7.0",
     "pytest-cov",
     "pytest-asyncio>=0.23",
@@ -52,12 +58,11 @@ dev = [
     "mypy",
     "statsmodels>=0.14",
     "numpy>=1.24",
-    "mcp[cli]>=1.0",
+    "mcp[cli]>=1.0,<2",
 ]
 
 [project.scripts]
 forecost = "forecost.cli:main"
-forecost-mcp = "forecost.mcp.server:main"
 forecost-hook = "forecost.hooks.fastpath:main"
 
 [project.entry-points.pytest11]
@@ -99,14 +104,16 @@ known-first-party = ["forecost"]
 "tests/test_commands.py" = ["PT018"]
 "tests/test_edge_cases.py" = ["PT011"]
 "tests/test_property_based.py" = ["I001"]
+"tests/test_serve_cmd.py" = ["S310"]
+"tests/test_hooks.py" = ["S603"]
+"experiments/calib/*.py" = ["T201"]
 
 [tool.pyright]
 pythonVersion = "3.10"
 typeCheckingMode = "basic"
 reportMissingImports = true
 reportMissingTypeStubs = false
-venvPath = "."
-venv = ".venv312"
+include = ["forecost", "tests", "scripts/check_release.py"]
 exclude = ["scripts/test_real_sdk.py"]
 
 [tool.bandit]
@@ -114,7 +121,10 @@ exclude_dirs = ["tests"]
 skips = ["B101"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
+ignore_missing_imports = true
+follow_imports = "skip"
+check_untyped_defs = true
 warn_return_any = true
 warn_unused_configs = true
 
@@ -127,12 +137,24 @@ markers = [
 ]
 
 [tool.mutmut]
-paths_to_mutate = ["forecost/pricing.py", "forecost/forecaster.py", "forecost/tracker.py"]
-tests_dir = ["tests"]
-runner = ".venv312/bin/pytest tests/ -q"
+paths_to_mutate = [
+    "forecost/policy/engine.py",
+    "forecost/ledger/integrity.py",
+    "forecost/ledger/state_store.py",
+]
+also_copy = ["forecost"]
+tests_dir = [
+    "tests/test_policy.py",
+    "tests/test_pricing_policy_confidence.py",
+    "tests/test_journal_integrity.py",
+    "tests/test_ledger.py",
+    "tests/test_adapters_claude_code.py",
+]
+pytest_add_cli_args = ["-p", "no:randomly", "-p", "no:random-order"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["forecost"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "forecost/py.typed" = "forecost/py.typed"
+"plugin" = "forecost/plugin"

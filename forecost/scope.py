@@ -3,6 +3,7 @@
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 from forecost.pricing import calculate_cost
 
@@ -282,7 +283,10 @@ Project content:
         if api_key:
             kwargs["api_key"] = api_key
 
-        resp = litellm.completion(**kwargs)
+        # LiteLLM's return annotation varies by supported patch release and may
+        # include a streaming wrapper even though this call is non-streaming.
+        # Keep the quarantined legacy analyzer tolerant of that stub drift.
+        resp: Any = litellm.completion(**kwargs)
         content = resp.choices[0].message.content
         if not content:
             return analyze_heuristic(project_path)

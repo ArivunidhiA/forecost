@@ -8,7 +8,7 @@ import pytest
 
 litellm = pytest.importorskip("litellm")
 
-from forecost.adapters.litellm_hook import ForecostLogger  # noqa: E402
+from forecost.adapters.litellm_hook import ForecostLogger, _kwargs_to_event  # noqa: E402
 
 
 def _run(coro):
@@ -24,6 +24,28 @@ def test_pre_call_allows_when_no_policy(tmp_path, ledger_conn, monkeypatch):
     data = {"model": "gpt-4o", "messages": []}
     result = _run(logger.async_pre_call_hook(None, None, data, "acompletion"))
     assert result == data  # allowed, data passed through unchanged
+
+
+def test_pre_call_reuses_one_custom_ledger_connection(tmp_path, ledger_conn, monkeypatch):
+    import forecost.adapters.litellm_hook as hook_mod
+
+    calls = 0
+
+    def connection(_path=None):
+        nonlocal calls
+        calls += 1
+        return ledger_conn
+
+    monkeypatch.setattr(hook_mod, "get_ledger_db", connection)
+    logger = ForecostLogger(
+        policy_path=tmp_path / "nonexistent.toml", ledger_path=tmp_path / "x.db"
+    )
+    data = {"model": "gpt-4o", "messages": []}
+
+    _run(logger.async_pre_call_hook(None, None, data, "acompletion"))
+    _run(logger.async_pre_call_hook(None, None, data, "acompletion"))
+
+    assert calls == 1
 
 
 def test_pre_call_denies_over_budget(tmp_path, ledger_conn, monkeypatch):
@@ -74,13 +96,60 @@ def test_pre_call_fails_open_on_internal_error(tmp_path, monkeypatch):
     assert result == data  # fail-open: gateway keeps working
 
 
-def test_success_event_lands_in_ledger_with_source_reported_cost(ledger_conn, monkeypatch):
+def test_pre_call_honors_ci_fail_closed_on_internal_error(tmp_path, monkeypatch):
+    import forecost.adapters.litellm_hook as hook_mod
+
+    def _boom(_path=None):
+        raise RuntimeError("ledger unavailable")
+
+    policy = tmp_path / "policy.toml"
+    policy.write_text('[policy]\nmode="ci"\non_internal_error="deny"\n', encoding="utf-8")
+    monkeypatch.setattr(hook_mod, "get_ledger_db", _boom)
+    logger = ForecostLogger(policy_path=policy)
+
+    result = _run(logger.async_pre_call_hook(None, None, {"model": "x"}, "acompletion"))
+
+    assert result == "forecost budget gate: internal error (CI fail-closed)"
+
+
+def test_constructor_ci_boundary_fails_closed_when_policy_is_corrupt(tmp_path):
+    policy = tmp_path / "policy.toml"
+    policy.write_text("this is not toml = [", encoding="utf-8")
+    logger = ForecostLogger(policy_path=policy, ci_fail_closed=True)
+
+    result = _run(logger.async_pre_call_hook(None, None, {"model": "x"}, "acompletion"))
+
+    assert result == "forecost budget gate: internal error (CI fail-closed)"
+
+
+def test_constructor_ci_boundary_fails_closed_when_policy_is_missing(tmp_path):
+    logger = ForecostLogger(policy_path=tmp_path / "missing.toml", ci_fail_closed=True)
+
+    result = _run(logger.async_pre_call_hook(None, None, {"model": "x"}, "acompletion"))
+
+    assert result == "forecost budget gate: internal error (CI fail-closed)"
+
+
+def test_corrupt_policy_remains_fail_open_without_explicit_ci_boundary(tmp_path):
+    policy = tmp_path / "policy.toml"
+    policy.write_text("this is not toml = [", encoding="utf-8")
+    logger = ForecostLogger(policy_path=policy)
+    data = {"model": "x"}
+
+    result = _run(logger.async_pre_call_hook(None, None, data, "acompletion"))
+
+    assert result == data
+
+
+def test_success_event_lands_in_ledger_with_source_reported_cost(
+    ledger_conn, monkeypatch, tmp_path
+):
     import forecost.adapters.litellm_hook as hook_mod
 
     monkeypatch.setattr(hook_mod, "get_ledger_db", lambda _path=None: ledger_conn)
     from forecost.ledger.sink import SyncLedgerSink
 
-    logger = ForecostLogger()
+    logger = ForecostLogger(outbox_path=tmp_path / "litellm.jsonl")
     sink = SyncLedgerSink(ledger_path=None)
     sink._conn = ledger_conn
     logger._sink = sink
@@ -95,6 +164,7 @@ def test_success_event_lands_in_ledger_with_source_reported_cost(ledger_conn, mo
     }
     response_obj = SimpleNamespace(usage=SimpleNamespace(prompt_tokens=100, completion_tokens=50))
     _run(logger.async_log_success_event(kwargs, response_obj, None, None))
+    logger._outbox.drain(sink.emit)
 
     ev = ledger_conn.execute("SELECT * FROM usage_events WHERE source='litellm'").fetchone()
     assert ev is not None
@@ -111,12 +181,88 @@ def test_success_event_lands_in_ledger_with_source_reported_cost(ledger_conn, mo
     assert ("USD", "source_reported") in currencies
 
 
-def test_success_event_never_raises(ledger_conn, monkeypatch):
-
+def test_success_event_never_raises(ledger_conn, monkeypatch, tmp_path):
     def _boom(_path=None):
         raise RuntimeError("boom")
 
-    logger = ForecostLogger()
+    logger = ForecostLogger(outbox_path=tmp_path / "litellm.jsonl")
     monkeypatch.setattr(logger, "_get_sink", _boom)
     # Malformed everything; must not raise (gateway safety)
     _run(logger.async_log_success_event({}, None, None, None))
+
+
+def test_event_sanitizes_content_shaped_gateway_identity():
+    response = SimpleNamespace(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=2))
+    event = _kwargs_to_event(
+        {
+            "litellm_call_id": "secret prompt-shaped call id",
+            "model": "secret prompt-shaped model",
+            "custom_llm_provider": "provider with spaces",
+            "call_type": "call type with content",
+            "litellm_params": {"metadata": {"user_api_key_user_id": "private-user"}},
+        },
+        response,
+    )
+
+    assert event.event_uid.startswith("litellm:anon-")
+    assert event.model == "unknown"
+    assert event.provider is None
+    assert event.session_uid is None
+    assert event.metadata == {"call_type": None}
+
+
+def test_event_uses_only_explicit_stable_gateway_session_identity():
+    response = SimpleNamespace(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=2))
+    event = _kwargs_to_event(
+        {
+            "litellm_call_id": "call-1",
+            "forecost_session_id": "team-session-1",
+            "model": "gpt-4o",
+        },
+        response,
+    )
+
+    assert event.session_uid == "team-session-1"
+    assert event.run_id is None
+
+
+def test_real_litellm_completion_records_event_and_no_content(tmp_path, monkeypatch):
+    """Drive the callback through LiteLLM's own completion path (mock_response, no network)."""
+    import sqlite3
+
+    monkeypatch.setenv("FORECOST_HOME", str(tmp_path))
+    canary = "LITELLM-CANARY-DO-NOT-PERSIST"
+    ledger = tmp_path / "ledger.db"
+    logger = ForecostLogger(
+        policy_path=tmp_path / "none.toml",
+        ledger_path=ledger,
+        outbox_path=tmp_path / "outbox" / "l.jsonl",
+    )
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+
+    async def call() -> None:
+        await litellm.acompletion(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": f"hello {canary}"}],
+            mock_response=f"reply {canary}",
+        )
+        for _ in range(50):  # success callbacks are dispatched asynchronously
+            await asyncio.sleep(0.1)
+            if (
+                ledger.exists()
+                and sqlite3.connect(ledger)
+                .execute("SELECT COUNT(*) FROM usage_events")
+                .fetchone()[0]
+            ):
+                return
+
+    _run(call())
+    logger.close()
+
+    conn = sqlite3.connect(ledger)
+    events = conn.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0]
+    assert events == 1
+    assert conn.execute("SELECT COUNT(*) FROM postings").fetchone()[0] >= 1
+    for path in tmp_path.rglob("*"):
+        if path.is_file():
+            assert canary.encode() not in path.read_bytes(), path.name

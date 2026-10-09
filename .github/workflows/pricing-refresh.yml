@@ -1,0 +1,67 @@
+name: Pricing refresh
+# Keeps forecost/data/pricing.json current with no human in the loop: refresh weekly, run the
+# full test suite, open a PR and arm auto-merge. A second job fails loudly if the data ever
+# goes stale (e.g. the upstream feed or this pipeline broke), so staleness cannot go unnoticed.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev,forecast]"
+      - name: Fetch and gate upstream prices
+        run: python scripts/update_pricing.py | tee refresh.log
+      - name: Full test suite on refreshed data
+        run: pytest tests/ -q --benchmark-disable
+      - name: Open PR and arm auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if git diff --quiet -- forecost/data/pricing.json; then
+            echo "pricing unchanged"; exit 0
+          fi
+          branch="bot/pricing-refresh-$(date -u +%Y%m%d)"
+          git config user.name "forecost-bot"
+          git config user.email "forecost-bot@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add forecost/data/pricing.json
+          git commit -m "chore(pricing): scheduled refresh"
+          git push --force origin "$branch"
+          held=$(grep '^HELD FOR REVIEW' refresh.log || true)
+          body="Automated weekly refresh of forecost/data/pricing.json. Full test suite passed in the refresh job."
+          if [ -n "$held" ]; then body="$body"$'\n\nRates held back for human review (>4x change):\n'"$held"; fi
+          gh pr create --base main --head "$branch" --title "chore(pricing): scheduled refresh" --body "$body" || true
+          if [ -z "$held" ]; then
+            # Auto-merge needs branch protection; the full suite already passed above, so
+            # fall back to merging directly when it is unavailable.
+            gh pr merge "$branch" --auto --squash || gh pr merge "$branch" --squash || true
+          fi
+
+  freshness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Fail if bundled pricing data is older than 45 days
+        run: |
+          python - <<'PY'
+          import json, datetime, sys
+          stamp = json.load(open("forecost/data/pricing.json"))["generated_at"]
+          age = (datetime.date.today() - datetime.date.fromisoformat(stamp)).days
+          print(f"bundled pricing data generated {stamp} ({age} days old)")
+          sys.exit(1 if age > 45 else 0)
+          PY

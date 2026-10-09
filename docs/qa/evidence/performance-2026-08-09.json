@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "environment": {
+    "cpu": "Apple M3 Pro",
+    "os": "Darwin 25.5.0 arm64",
+    "python": "3.12.7",
+    "sqlite": "3.45.3"
+  },
+  "history_matrix": [
+    {
+      "spans": 40000,
+      "observations": 40800,
+      "ingest_seconds": 9.828258,
+      "reconciliation_seconds": 0.143425,
+      "receipt_seconds": 0.369366,
+      "admission_operations": 200,
+      "admission_seconds": 0.027205,
+      "database_bytes": 115183616
+    },
+    {
+      "spans": 100000,
+      "observations": 102000,
+      "ingest_seconds": 22.010594,
+      "reconciliation_seconds": 0.875609,
+      "receipt_seconds": 1.050354,
+      "admission_operations": 500,
+      "admission_seconds": 0.071277,
+      "database_bytes": 287682560
+    },
+    {
+      "spans": 250000,
+      "new_observations_after_100k": 153000,
+      "incremental_ingest_seconds": 44.535105,
+      "reconciliation_seconds": 5.4836,
+      "receipt_seconds": 3.510392,
+      "admission_operations": 500,
+      "admission_seconds": 0.075491,
+      "database_bytes": 719941632
+    },
+    {
+      "spans": 1000000,
+      "observations": 1020000,
+      "ingest_seconds": 330.324597,
+      "reconciliation_seconds_before_missing_index_fix": 162.532654,
+      "full_receipt_intentionally_not_run": true,
+      "admission_operations": 500,
+      "admission_seconds": 0.068673,
+      "database_bytes": 2873040896
+    }
+  ],
+  "reconciliation_regression_probe": {
+    "shape": "10000 spans with one local and one billed charge per span",
+    "charge_rows": 20000,
+    "before_seconds": 157.361277,
+    "after_seconds": 0.297988,
+    "fix": "indexed supersession lookup plus set-based key joins",
+    "state": "reconciled"
+  },
+  "support_boundary": {
+    "full_graph_receipt_proven_through_spans": 250000,
+    "million_span_ingest_exercised": true,
+    "million_span_full_graph_receipt_supported": false,
+    "reason": "a portable million-node receipt needs a bounded summary/export interface"
+  }
+}

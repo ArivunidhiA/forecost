@@ -6,7 +6,7 @@ body:
     id: version
     attributes:
       label: forecost version
-      placeholder: "0.1.0"
+      placeholder: "0.3.0"
     validations:
       required: true
   - type: input
@@ -30,6 +30,21 @@ body:
       description: Describe the bug clearly.
     validations:
       required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Safe diagnostics
+      description: Paste `forecost doctor` / `forecost pricing-audit` output only after removing private paths. Never attach raw transcripts, policy files, databases, or API keys.
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed transcripts, prompts, completions, secrets, databases, and identifying paths.
+          required: true
   - type: textarea
     id: steps
     attributes:

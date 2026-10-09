@@ -15,6 +15,7 @@ from forecost.hooks import handlers
 @pytest.fixture
 def hook_ledger(tmp_path, monkeypatch):
     path = tmp_path / "ledger.db"
+    monkeypatch.setenv("FORECOST_HOME", str(tmp_path / "forecost-home"))
     monkeypatch.setattr(ledger_db, "LEDGER_PATH", path)
     monkeypatch.setattr(ledger_db, "_conn", None)
     conn = ledger_db.get_ledger_db()
@@ -75,13 +76,28 @@ def test_handler_reconcile_ingests_from_transcript_path(hook_ledger, tmp_path):
         )
         + "\n"
     )
-    # transcript_path -> parent.parent is the projects dir the adapter scans
+    # A stop hook must ingest only this session, not every historical sibling.
+    (proj / "unrelated.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "assistant",
+                "requestId": "unrelated",
+                "timestamp": "2026-07-01T00:00:00Z",
+                "message": {
+                    "model": "claude-sonnet-4-20250514",
+                    "usage": {"input_tokens": 99, "output_tokens": 9},
+                },
+            }
+        )
+        + "\n"
+    )
     out = handlers.handle_reconcile({"transcript_path": str(proj / "s.jsonl")})
-    assert out["ingested"] >= 1
+    assert out["ingested"] == 1
+    assert hook_ledger.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0] == 1
 
 
 def _run_hook(command, payload, env):
-    proc = subprocess.run(  # noqa: S603 - fixed interpreter + module path, not user input
+    proc = subprocess.run(
         [sys.executable, "-m", "forecost.hooks.fastpath", command],
         input=json.dumps(payload),
         capture_output=True,
@@ -125,6 +141,7 @@ def test_prompt_submit_speaks_on_fanout(tmp_path):
 
 
 def test_malformed_stdin_fails_open(tmp_path):
+    # Fixed interpreter/module argv; malformed text is stdin, never a command.
     proc = subprocess.run(
         [sys.executable, "-m", "forecost.hooks.fastpath", "prompt-submit"],
         input="not json {{{",

@@ -19,14 +19,20 @@ _COMMANDS = {
     "prompt-submit": "handle_preflight",
     "pre-tool": "handle_gate",
     "stop": "handle_reconcile",
+    "session-end": "handle_session_end",
+    "lifecycle": "handle_lifecycle",
 }
+_MAX_STDIN_CHARS = 1_048_576
 
 
 def _read_payload() -> dict | None:
     """Returns the parsed stdin payload, or None on any parse failure."""
     try:
-        raw = sys.stdin.read()
-        return json.loads(raw) if raw.strip() else {}
+        raw = sys.stdin.read(_MAX_STDIN_CHARS + 1)
+        if len(raw) > _MAX_STDIN_CHARS:
+            return None
+        parsed = json.loads(raw) if raw.strip() else {}
+        return parsed if isinstance(parsed, dict) else None
     except Exception:
         return None
 
@@ -58,7 +64,11 @@ def main() -> None:
         with contextlib.suppress(Exception):
             from forecost.core.errlog import log_error
 
-            log_error(f"hooks.{command}", f"handler failed: {exc!r}")
+            log_error(
+                f"hooks.{command}",
+                "HOOK_HANDLER_FAILED",
+                fingerprint_source=exc,
+            )
     sys.exit(0)
 
 

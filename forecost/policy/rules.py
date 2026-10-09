@@ -14,7 +14,12 @@ else:  # pragma: no cover - py3.10 fallback
 
 Action = Literal["allow", "warn", "ask", "deny"]
 
-VALID_SCOPES = {"run", "session", "day", "week", "month"}
+# "run" is intentionally NOT supported: there is no reliable per-run spend key at
+# policy-evaluation time (the preflight hook has no run/prompt id — see the
+# calibration association note), so a run-scoped rule used to silently measure
+# ALL-TIME spend and over-deny. Reject it at parse time instead. Use "session"
+# for per-session caps; "day"/"week"/"month" for rolling windows.
+VALID_SCOPES = {"session", "day", "week", "month"}
 VALID_ACTIONS = {"warn", "ask", "deny"}
 
 
@@ -34,6 +39,7 @@ class PolicyConfig:
     rules: tuple[PolicyRule, ...]
     on_internal_error: str = "allow"
     decision_log: bool = True
+    mode: str = "interactive"
 
 
 def _validate_rule(raw: dict) -> PolicyRule:
@@ -68,6 +74,10 @@ def parse_policy_toml(text: str) -> PolicyConfig:
 
     on_internal_error = policy.get("on_internal_error", "allow")
     mode = policy.get("mode", "interactive")
+    if on_internal_error not in {"allow", "deny"}:
+        raise ValueError("policy.on_internal_error must be 'allow' or 'deny'")
+    if mode not in {"interactive", "ci"}:
+        raise ValueError("policy.mode must be 'interactive' or 'ci'")
     if on_internal_error == "deny" and mode != "ci":
         raise ValueError(
             "on_internal_error='deny' is only permitted when policy.mode='ci' "
@@ -78,6 +88,7 @@ def parse_policy_toml(text: str) -> PolicyConfig:
         rules=rules,
         on_internal_error=on_internal_error,
         decision_log=policy.get("decision_log", True),
+        mode=mode,
     )
 
 

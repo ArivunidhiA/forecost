@@ -4,7 +4,6 @@ import json as _json
 import os
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Callable
 
 from forecost.db import WriteQueue
@@ -42,23 +41,13 @@ def _get_queue() -> WriteQueue:
 
 
 def _log_internal_error(e: Exception) -> None:
-    log_dir = Path.home() / ".forecost"
-    log_path = log_dir / "error.log"
-    try:
-        log_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            if os.path.getsize(log_path) > 1_000_000:
-                with open(log_path, "r", encoding="utf-8") as rf:
-                    lines = rf.readlines()[-100:]
-                with open(log_path, "w", encoding="utf-8") as wf:
-                    wf.writelines(lines)
-        except OSError:
-            pass
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(f"{ts} [interceptor] {e!r}\n")
-    except OSError:
-        pass
+    # Route through the canonical logger: it redacts secrets (a raw {e!r} here
+    # can embed API-response fragments or bearer tokens), honors FORECOST_HOME,
+    # locks the log file to 0600, and never raises. Fixes the unredacted-leak
+    # and world-readable-log findings on the legacy stack.
+    from forecost.core.errlog import log_error
+
+    log_error("interceptor", "INTERCEPTOR_FAILED", fingerprint_source=e)
 
 
 def _extract_usage(data: dict) -> tuple[int, int, str] | None:
@@ -82,18 +71,21 @@ def _extract_usage(data: dict) -> tuple[int, int, str] | None:
 
 def _extract_model(data: dict) -> str:
     for key in ("model", "id"):
-        if key in data and isinstance(data[key], str):
-            return data[key]
+        value = data.get(key)
+        if isinstance(value, str):
+            return value
     for choice in data.get("choices", []) or []:
         if isinstance(choice, dict) and "message" in choice:
             msg = choice["message"]
             if isinstance(msg, dict) and "model" in msg:
-                return msg["model"]
+                model = msg["model"]
+                if isinstance(model, str):
+                    return model
     return "unknown"
 
 
 def _is_streaming(response) -> bool:
-    ct = response.headers.get("content-type", "")
+    ct = str(response.headers.get("content-type", ""))
     return ct.startswith("text/event-stream")
 
 
@@ -241,8 +233,8 @@ def install(on_usage: Callable[..., None] | None = None) -> None:
         return
     _original_send = httpx.Client.send
     _original_async_send = httpx.AsyncClient.send
-    httpx.Client.send = _patched_send
-    httpx.AsyncClient.send = _patched_async_send
+    httpx.Client.send = _patched_send  # type: ignore[method-assign]
+    httpx.AsyncClient.send = _patched_async_send  # type: ignore[method-assign]
 
 
 def uninstall() -> None:
@@ -252,7 +244,7 @@ def uninstall() -> None:
 
     if _original_send is None:
         return
-    httpx.Client.send = _original_send
-    httpx.AsyncClient.send = _original_async_send
+    httpx.Client.send = _original_send  # type: ignore[method-assign]
+    httpx.AsyncClient.send = _original_async_send  # type: ignore[method-assign]
     _original_send = None
     _original_async_send = None

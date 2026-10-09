@@ -1,0 +1,206 @@
+{
+  "$schema": "urn:forecost:capabilities-schema:1",
+  "schema_version": 1,
+  "package_version": "0.3.0",
+  "product_contract_version": "1.0",
+  "product_state": "experimental-local",
+  "primary_artifact": "experimental content-minimizing economic receipt",
+  "release_hold": true,
+  "release_hold_evidence_date": "2026-08-13",
+  "known_p0_blockers": [
+    "exported legacy SDK and costs.db paths may persist arbitrary raw project name, path, and metadata",
+    "custom ledger, outbox, export, or integration state outside FORECOST_HOME cannot be exhaustively discovered or purged",
+    "no authenticated provider profile or live provider/runtime validation",
+    "no independent external privacy/security audit of the repaired implementation",
+    "no supported operator-approved upgrade audit or sanitizer covers every pre-hardening cursor, log, hook, outbox, recovery, and exact rollback-backup artifact",
+    "public main branch and PyPI still serve the legacy product",
+    "narrow matched-cohort comparison prototype has not passed the blinded 30-run differentiation or real-user demand/retention gate",
+    "same-UID processes remain outside the local integrity boundary"
+  ],
+  "implemented_red_team_remediations": {
+    "canonical_schema_version": 11,
+    "trace_identity": "schema v10 trace-scoped deterministic span_key with fail-closed ambiguous migration",
+    "timing": "receipt v2 uses explicit interval/reported-duration semantics; complete explicit intervals support service/wait unions and elapsed envelope, while non-trivial critical path is withheld until scheduling dependencies are typed",
+    "valuations": "receipt v2 preserves all active valuation groups plus selected non-additive canonical value and reason",
+    "evidence": "versioned named claim profiles with independent completeness, freshness, contradiction, denominators, unmet obligations, and reason codes",
+    "import_authority": "arbitrary JSON/CSV imports are user_imported_claim; schema v11 append-supersedes proven historical local billed labels",
+    "local_identity": "installation-keyed cursor/error fingerprints, file-identity/complete-prefix rewrite checkpoints, and accidental single-file key/ID loss or mismatch checks for dependent keyed state in the canonical home",
+    "owned_home_privacy": "streaming scan of readable regular files with unreadable/symlink/non-regular skipped=inconclusive, durable finite recovery summaries, and expanded current owned-state purge manifest",
+    "durability": "canonical SQLite synchronous=FULL with verified SQLite Backup API migration snapshots",
+    "policy_failure": "interactive fail-open; explicit protected CI may opt into fail-closed",
+    "plugin_launch": "exact owner-controlled plugin-data executable, no PATH fallback, runtime bootstrap disabled",
+        "comparison": "strict canonical-ledger-read comparison v1: two-run diagnostics always abstain; digest-bound matched cohorts require a predeclared observational USD list-rate policy, at least 30 pairs, final delta meters with complete valuation coverage, predeclared deterministic test/build outcome evidence, WAL-consistent snapshot plus journal/projection validation, and confidence bounds"
+  },
+  "stores": {
+    "canonical": {
+      "file": "ledger.db",
+      "status": "unreleased experimental product store",
+      "schema_version": 11,
+      "authority": "source-specific; provider-billed requires an authenticated provider source/profile",
+      "durability": "synchronous=FULL; migration snapshots use verified SQLite Backup API"
+    },
+    "legacy": {
+      "file": "costs.db",
+      "status": "unsupported v0.2 compatibility only",
+      "migration": "explicit copy into ledger.db; source remains legacy-costs-db",
+      "privacy_boundary": "exported compatibility SDK may persist arbitrary raw project name, path, and metadata"
+    }
+  },
+  "interfaces": {
+    "cli": {
+      "status": "implemented experimental under release hold",
+      "store_boundary_in_help": true,
+      "legacy_root_aliases": false
+    },
+        "mcp": {
+            "status": "optional experimental",
+            "launch": "python -m forecost.mcp_launcher",
+            "transport": "stdio",
+            "store": "canonical ledger.db (read-only)",
+            "read_semantics": "does not create, migrate, insert, update, or delete Forecost rows or schema",
+            "sqlite_sidecars": "SQLite mode=ro may create or update WAL/SHM coordination sidecars while forming a consistent read view",
+            "immutable_mode": "not used because immutable=1 can ignore committed WAL pages and return stale evidence",
+            "tools": [
+        "forecost_list_runs",
+        "forecost_get_receipt",
+        "forecost_compare_runs"
+      ]
+    },
+    "legacy_http": {
+      "status": "retired; no CLI registration",
+      "store": "legacy costs.db",
+      "bind": "loopback",
+      "authentication": "none"
+    }
+  },
+  "adapters": {
+    "claude_code": {
+      "protocol_name": "claude_jsonl",
+      "status": "experimental",
+      "identity": "session-level with best-effort lifecycle identity",
+      "cursor_identity": "installation-keyed HMAC with file-identity and complete-prefix rewrite checkpoints; accidental single-file key/ID mismatch checks are scoped to dependent canonical-home state",
+      "graph": "partial",
+      "live_usage": "best-effort local transcript/hook observation",
+      "billing_authority": "list-rate equivalent only unless an authenticated provider source/profile is imported",
+      "enforcement_boundary": "local hook, fail-open; no provider-side guarantee",
+      "finality": "provisional until later lifecycle/transcript observation",
+      "maximum_overrun": "not bounded"
+    },
+    "litellm": {
+      "protocol_name": "litellm",
+      "status": "experimental",
+      "identity": "call identifier when supplied; session identity is caller-owned",
+      "graph": false,
+      "live_usage": "callback observation",
+      "billing_authority": "gateway estimate when response_cost is supplied; otherwise list-rate equivalent",
+      "enforcement_boundary": "caller integration; no distributed guarantee",
+      "finality": "source-dependent",
+      "maximum_overrun": "not bounded"
+    },
+    "otel_offline": {
+      "protocol_name": "otel_genai",
+      "status": "experimental",
+      "identity": "source-provided trace/span identity when available",
+      "graph": "source-dependent",
+      "live_usage": false,
+      "billing_authority": "source-specific imported claim; not provider-billed without source authentication",
+      "enforcement_boundary": "none",
+      "finality": "source-dependent",
+      "maximum_overrun": "not applicable"
+    },
+    "openai_agents_offline": {
+      "protocol_name": "openai_agents",
+      "status": "offline mapping against local fakes only",
+      "identity": "source-provided trace/span/run identity when present",
+      "graph": "fixture-proven; runtime availability not implied",
+      "live_usage": false,
+      "billing_authority": "source-specific provider estimate or unknown",
+      "enforcement_boundary": "none",
+      "finality": "source-dependent",
+      "maximum_overrun": "not applicable"
+    },
+    "langgraph_offline": {
+      "protocol_name": "langgraph",
+      "status": "offline mapping against local fakes only",
+      "identity": "derived graph identity with replay watermark",
+      "graph": "fixture-proven; runtime availability not implied",
+      "live_usage": false,
+      "billing_authority": "unknown unless independent evidence is imported; provider-billed requires authentication",
+      "enforcement_boundary": "none",
+      "finality": "source-dependent",
+      "maximum_overrun": "not applicable"
+    },
+    "offline_lab": {
+      "protocol_name": null,
+      "status": "supported synthetic evidence",
+      "identity": "versioned causal fixture identity",
+      "graph": true,
+      "live_usage": "deterministic synthetic observations",
+      "billing_authority": "synthetic only",
+      "enforcement_boundary": "none",
+      "finality": "fixture-defined",
+      "maximum_overrun": "not applicable"
+    }
+  },
+  "controls": {
+    "resource_envelopes": {
+      "status": "experimental single-host",
+      "fail_modes": ["shadow", "warn", "ask", "deny", "ci"],
+      "provider_side": false,
+      "distributed": false,
+      "maximum_overrun": "not bounded outside the stated local transaction boundary"
+    },
+    "policy_failure": {
+      "interactive": "fail-open",
+      "ci": "fail-closed only when explicitly selected by protected CI configuration or adapter constructor",
+      "provider_side": false
+    }
+  },
+  "receipt": {
+    "schema_version": 2,
+    "valuation_groups": "all active alternatives retained; selected canonical view is non-additive and reasoned",
+    "timing": "service/wait interval unions and elapsed envelope require complete explicit intervals; non-trivial critical path is withheld until scheduling dependencies are typed (only the trivial one-span case is populated)",
+    "evidence_profiles": [
+      "structural",
+      "economic-estimate",
+      "provider-billed",
+      "outcome",
+      "ci"
+    ],
+    "global_completeness_claim": false
+  },
+  "comparison": {
+    "schema": "forecost.compare/1",
+    "profile": "forecost.economic-outcome/1",
+    "status": "implemented experimental under release hold; field and demand gates incomplete",
+    "diagnostic_mode": "for two valid existing canonical run IDs, may emit a scoped observed delta and always abstains with COMPARISON_MANIFEST_REQUIRED; missing or malformed runs are invalid",
+    "matched_mode": "requires digest-bound baseline and candidate forecost.compare-arm/1 manifests plus a strict predeclared policy",
+    "authority": "list_rate",
+    "currency": "USD",
+    "claim_mode": "observational",
+        "minimum_pairs": 30,
+        "outcomes": "active decisive deterministic test_exit or build_exit evidence bound to declared evidence and source IDs",
+        "meter_eligibility": "all receipt meters must be final delta observations with complete one-to-one coverage by the selected list_rate valuation groups",
+        "snapshot": "SQLite Backup API copy to a private in-memory database includes committed WAL pages; decisions read the exact validated copy",
+        "projection_validation": "journal chain is verified and journal-derived identity/run/span/link/meter/charge/outcome projections are deterministically rebuilt and hash-compared; broken chain, mismatch, or recognized rebuild failure is invalid/exit 4",
+        "journal_validation_cap": "more than 1000000 global journal observations abstains with PROJECTION_VALIDATION_RESOURCE_LIMIT",
+        "reconciliation_boundary": "any reconciliation_batches row forces RECONCILIATION_EVIDENCE_UNVERIFIED abstention because reconciliation state is outside the journal-derived validation inventory",
+        "uncertainty": "deterministic paired bootstrap confidence bounds; seed is fixed-protocol plus sorted quantitative paired observations and excludes caller-chosen labels",
+        "manifest_trust": "manifest-attested, not independently authenticated",
+        "integrity": "local journal/projection and SHA-256 serialization consistency only; not a signature or same-UID guarantee",
+    "mcp": "forecost_compare_runs exposes diagnostic mode only; no full manifest evaluation or live budget mutation over MCP"
+  },
+  "not_claimed": [
+    "provider-billed cost without an authenticated provider source/profile",
+    "live provider HTTP ingestion",
+    "complete graph identity for every adapter",
+    "verified task correctness",
+    "provider-side or distributed hard enforcement",
+    "task-cost forecasting",
+    "hosted control plane",
+    "legacy SDK content exclusion",
+    "exhaustive deletion of state outside FORECOST_HOME",
+    "integrity against same-UID code",
+    "causal savings, provider-billed comparison, authenticated comparison manifests, or currency conversion from comparison v1"
+  ]
+}

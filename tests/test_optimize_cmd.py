@@ -13,7 +13,7 @@ def test_optimize_no_project(tmp_path, monkeypatch, db_path):
     """Running optimize without an initialized project should error."""
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
-    result = runner.invoke(main, ["optimize"])
+    result = runner.invoke(main, ["legacy", "optimize"])
     assert result.exit_code != 0
     assert "init" in result.output.lower()
 
@@ -29,7 +29,7 @@ def test_optimize_no_usage_data(tmp_path, monkeypatch, db_path):
         baseline_total_cost=140.0,
     )
     runner = CliRunner()
-    result = runner.invoke(main, ["optimize"])
+    result = runner.invoke(main, ["legacy", "optimize"])
     assert result.exit_code == 0
     assert "no usage data" in result.output.lower()
 
@@ -56,7 +56,7 @@ def test_optimize_with_expensive_model(tmp_path, monkeypatch, db_path):
         )
     conn.commit()
     runner = CliRunner()
-    result = runner.invoke(main, ["optimize"])
+    result = runner.invoke(main, ["legacy", "optimize"])
     assert result.exit_code == 0
     assert "gpt-4o" in result.output.lower() or "saving" in result.output.lower()
 
@@ -83,6 +83,6 @@ def test_optimize_with_cheap_model(tmp_path, monkeypatch, db_path):
         )
     conn.commit()
     runner = CliRunner()
-    result = runner.invoke(main, ["optimize"])
+    result = runner.invoke(main, ["legacy", "optimize"])
     assert result.exit_code == 0
     assert "efficient" in result.output.lower() or "no" in result.output.lower()

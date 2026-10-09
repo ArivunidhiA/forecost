@@ -55,10 +55,14 @@ def hierarchical_quantiles(
 ) -> Quantiles:
     """M1: category quantiles shrunk toward the global quantiles by n/(n+k)."""
     global_q10, global_q50, global_q90 = _log_quantiles(train_values) if train_values else (0, 0, 0)
-    cell_values = [v for v, c in zip(train_values, train_categories) if c == target_category]
+    cell_values = [
+        v for v, c in zip(train_values, train_categories, strict=True) if c == target_category
+    ]
     n = len(cell_values)
     if n < 3:
-        return Quantiles(_expm1_clip(global_q10), _expm1_clip(global_q50), _expm1_clip(global_q90), n)
+        return Quantiles(
+            _expm1_clip(global_q10), _expm1_clip(global_q50), _expm1_clip(global_q90), n
+        )
     cell_q10, cell_q50, cell_q90 = _log_quantiles(cell_values)
     w = n / (n + SHRINK_K)
     q10 = w * cell_q10 + (1 - w) * global_q10
@@ -77,7 +81,9 @@ def global_quantiles(train_values: list[float]) -> Quantiles:
 def category_quantiles(
     train_values: list[float], train_categories: list[str], target_category: str
 ) -> Quantiles:
-    cell_values = [v for v, c in zip(train_values, train_categories) if c == target_category]
+    cell_values = [
+        v for v, c in zip(train_values, train_categories, strict=True) if c == target_category
+    ]
     if len(cell_values) < 3:
         return Quantiles(0, 0, 0, 0)
     q10, q50, q90 = _log_quantiles(cell_values)
@@ -121,9 +127,7 @@ def run_target_backtest(rows: list[dict], target: str) -> dict:
                 results[name]["widths"].append(q.p90 / max(q.p50, 1e-6))
 
             if name == "M1":
-                cell = per_category.setdefault(
-                    cat, {"cover90": [], "widths": [], "n_train": []}
-                )
+                cell = per_category.setdefault(cat, {"cover90": [], "widths": [], "n_train": []})
                 cell["cover90"].append(1 if actual <= q.p90 else 0)
                 if q.p50 > 0:
                     cell["widths"].append(q.p90 / max(q.p50, 1e-6))
@@ -141,7 +145,9 @@ def run_target_backtest(rows: list[dict], target: str) -> dict:
             "coverage_p50": round(float(np.mean(m["cover50"])), 4),
             "median_pinball50": round(float(np.median(m["pinball50"])), 4),
             "median_pinball90": round(float(np.median(m["pinball90"])), 4),
-            "median_width_p90_p50": round(float(np.median(m["widths"])), 4) if m["widths"] else None,
+            "median_width_p90_p50": round(float(np.median(m["widths"])), 4)
+            if m["widths"]
+            else None,
         }
 
     # skill: M1 pinball90 improvement over B0 pinball90
@@ -180,12 +186,8 @@ def run_gate_ga(rows: list[dict]) -> dict:
         cov90 = m1.get("coverage_p90", 0)
         width = m1.get("median_width_p90_p50")
         skill = m1.get("skill_vs_B0_pinball90", 0)
-        worst_cell_cov = min(
-            (c["coverage_p90"] for c in bt["per_category"].values()), default=None
-        )
-        pass_width = width is not None and (
-            (width <= 4 if label == "cost" else width <= 5)
-        )
+        worst_cell_cov = min((c["coverage_p90"] for c in bt["per_category"].values()), default=None)
+        pass_width = width is not None and (width <= 4 if label == "cost" else width <= 5)
         pass_cov = 0.85 <= cov90 <= 0.95
         pass_worst = worst_cell_cov is None or worst_cell_cov >= 0.75
         pass_skill = skill >= 0.15 if label == "cost" else skill >= 0.10
@@ -248,15 +250,20 @@ def run_gate_gr2(rows: list[dict]) -> dict:
 
     if n_fail_total < 5:
         verdict = "INSUFFICIENT-DATA"
-        note = f"Only {n_fail_total} weak-labeled failures in the whole corpus ({n_ok_total} ok, " \
-               f"{len(rows) - n_fail_total - n_ok_total} ambiguous) — the corpus is too healthy " \
-               "to learn a failure signal from (round5-risk §6.1's predicted outcome)."
+        note = (
+            f"Only {n_fail_total} weak-labeled failures in the whole corpus ({n_ok_total} ok, "
+            f"{len(rows) - n_fail_total - n_ok_total} ambiguous) — the corpus is too healthy "
+            "to learn a failure signal from (round5-risk §6.1's predicted outcome)."
+        )
     elif len(rates) >= 2 and max_sep >= 0.20:
         verdict = "PASS"
         note = f"Max separating gap between qualified categories: {max_sep:.1%}"
     else:
         verdict = "FAIL"
-        note = f"No pair of qualified categories (n>=15) separates by >=20pp with non-overlapping CIs (max gap {max_sep:.1%})."
+        note = (
+            "No pair of qualified categories (n>=15) separates by >=20pp with "
+            f"non-overlapping CIs (max gap {max_sep:.1%})."
+        )
 
     return {
         "verdict": verdict,
@@ -275,7 +282,8 @@ def run_gate_gr3(rows: list[dict]) -> dict:
     error_result_count >= 2. Precision = P(weak_outcome != ok | flagged).
     """
     flagged = [
-        r for r in rows
+        r
+        for r in rows
         if r["max_consec_errors"] >= 3 or (r["tail_error_flag"] and r["error_result_count"] >= 2)
     ]
     flag_rate = len(flagged) / len(rows) if rows else 0
@@ -283,7 +291,7 @@ def run_gate_gr3(rows: list[dict]) -> dict:
         return {
             "verdict": "INSUFFICIENT-DATA",
             "note": "Detector rule never fired on this corpus (0 flagged turns) — "
-                    "cannot measure precision. Consistent with round5-risk's low error-loop base rate.",
+            "cannot measure precision. Consistent with round5-risk's low error-loop base rate.",
             "flag_rate": flag_rate,
             "n_flagged": 0,
         }
@@ -296,7 +304,7 @@ def run_gate_gr3(rows: list[dict]) -> dict:
         "flag_rate": round(flag_rate, 4),
         "n_flagged": len(flagged),
         "note": f"{len(flagged)}/{len(rows)} turns flagged ({flag_rate:.1%}); "
-                f"{non_ok}/{len(flagged)} of flagged turns were non-ok ({precision:.1%} precision).",
+        f"{non_ok}/{len(flagged)} of flagged turns were non-ok ({precision:.1%} precision).",
     }
 
 
@@ -319,7 +327,7 @@ def main() -> None:
 
     report = {
         "n_turns": len(rows),
-        "n_categories": len(set(r["category"] for r in rows)),
+        "n_categories": len({r["category"] for r in rows}),
         "gate_G_A": ga,
         "gate_G_R2": gr2,
         "gate_G_R3": gr3,
@@ -335,25 +343,33 @@ def main() -> None:
     for label, v in ga.items():
         print(f"\n[{label}] verdict: {v['verdict']}")
         if v["verdict"] != "INSUFFICIENT-DATA":
-            print(f"  coverage_p90={v['coverage_p90']}  width={v['median_width_p90_p50']}  "
-                  f"skill_vs_B0={v['skill_vs_B0']}  worst_cell_cov={v['worst_cell_coverage']}  "
-                  f"n_eval={v['n_eval']}")
+            print(
+                f"  coverage_p90={v['coverage_p90']}  width={v['median_width_p90_p50']}  "
+                f"skill_vs_B0={v['skill_vs_B0']}  worst_cell_cov={v['worst_cell_coverage']}  "
+                f"n_eval={v['n_eval']}"
+            )
             for m in ("B0", "B1", "M1"):
                 s = v["backtest"][m]
                 if s.get("n_eval"):
-                    print(f"    {m}: n={s['n_eval']} cov90={s.get('coverage_p90')} "
-                          f"cov50={s.get('coverage_p50')} width={s.get('median_width_p90_p50')} "
-                          f"pinball90={s.get('median_pinball90')}")
+                    print(
+                        f"    {m}: n={s['n_eval']} cov90={s.get('coverage_p90')} "
+                        f"cov50={s.get('coverage_p50')} width={s.get('median_width_p90_p50')} "
+                        f"pinball90={s.get('median_pinball90')}"
+                    )
 
     print("\n" + "=" * 70)
     print("GATE G-R2 (success-table separation)")
     print("=" * 70)
     print(f"verdict: {gr2['verdict']}")
     print(f"  {gr2['note']}")
-    print(f"  ok={gr2['n_ok_total']} fail={gr2['n_fail_total']} ambiguous={gr2['n_ambiguous_total']}")
+    print(
+        f"  ok={gr2['n_ok_total']} fail={gr2['n_fail_total']} ambiguous={gr2['n_ambiguous_total']}"
+    )
     for cat, r in gr2["rates_by_category"].items():
-        print(f"  {cat}: n={r['n']} rate={r['success_rate']} "
-              f"CI=[{r['wilson_90_lo']},{r['wilson_90_hi']}]")
+        print(
+            f"  {cat}: n={r['n']} rate={r['success_rate']} "
+            f"CI=[{r['wilson_90_lo']},{r['wilson_90_hi']}]"
+        )
 
     print("\n" + "=" * 70)
     print("GATE G-R3 (mid-run guard retrospective precision)")

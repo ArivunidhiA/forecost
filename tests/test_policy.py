@@ -18,7 +18,7 @@ def _spend(conn, session_uid, usd, event_uid="e1"):
             source="test",
             model="claude-opus-4-8",
             session_uid=session_uid,
-            tokens_in=int(usd / 15 * 1_000_000),
+            tokens_in=int(usd / 5 * 1_000_000),  # opus-4-8 input rate $5/MTok
             tokens_out=0,
         )
     )
@@ -45,11 +45,43 @@ def test_parse_policy_toml_rejects_fail_closed_outside_ci():
 def test_parse_policy_toml_allows_fail_closed_in_ci_mode():
     config = parse_policy_toml('[policy]\nmode = "ci"\non_internal_error = "deny"\n')
     assert config.on_internal_error == "deny"
+    assert config.mode == "ci"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ('[policy]\nmode = "mystery"\n', "policy.mode"),
+        ('[policy]\non_internal_error = "warn"\n', "policy.on_internal_error"),
+    ],
+)
+def test_parse_policy_toml_rejects_unknown_failure_modes(text, expected):
+    with pytest.raises(ValueError, match=expected):
+        parse_policy_toml(text)
 
 
 def test_parse_policy_toml_rejects_invalid_action():
     with pytest.raises(ValueError, match="invalid policy action"):
         parse_policy_toml('[[policy.rules]]\nid="x"\naction="explode"\n')
+
+
+def test_parse_policy_toml_rejects_run_scope():
+    """'run' scope is unsupported (no reliable per-run spend key) — it must be
+    rejected at parse time, not silently evaluated against all-time spend."""
+    with pytest.raises(ValueError, match="invalid policy scope"):
+        parse_policy_toml('[[policy.rules]]\nid="r"\nscope="run"\nhard_limit=5.0\naction="deny"\n')
+
+
+def test_session_scope_without_session_id_does_not_measure_lifetime(ledger_conn):
+    """A session-scoped rule with no active session must NOT fall through to
+    all-time spend (the old bug that over-denied); it allows instead."""
+    _spend(ledger_conn, "some-session", 100.0, event_uid="big")  # lots of lifetime spend
+    config = parse_policy_toml(
+        '[[policy.rules]]\nid="cap"\nscope="session"\nhard_limit=5.0\naction="deny"\n'
+    )
+    # session_id=None: cannot resolve the session -> allow, not deny-on-lifetime.
+    decision = evaluate(ledger_conn, config, session_id=None)
+    assert decision.action == "allow"
 
 
 def test_evaluate_allows_within_soft_limit(ledger_conn):
@@ -94,6 +126,18 @@ def test_evaluate_fails_open_on_internal_error(ledger_conn):
     d = evaluate(ledger_conn, Broken())  # type: ignore[arg-type]  # intentionally malformed
     assert d.action == "allow"
     assert "fail-open" in d.reason
+
+
+def test_evaluate_fails_closed_on_internal_error_only_in_ci(ledger_conn):
+    class BrokenCI:
+        rules = None  # not iterable -> forces an internal exception
+        mode = "ci"
+        on_internal_error = "deny"
+
+    d = evaluate(ledger_conn, BrokenCI())  # type: ignore[arg-type]  # malformed on purpose
+
+    assert d.action == "deny"
+    assert d.reason == "forecost internal error (CI fail-closed)"
 
 
 def test_evaluate_strictest_rule_wins_across_multiple_rules(ledger_conn):

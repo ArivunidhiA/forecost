@@ -24,12 +24,12 @@ import sqlite3
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from forecost.pricing import calculate_cost  # noqa: E402
+from forecost.pricing import calculate_cost
 
 SCOPE_MAXIMIZER_RE = re.compile(
     r"\b(all|every|entire|comprehensive|throughout|across the codebase)\b", re.IGNORECASE
@@ -338,9 +338,7 @@ def _process_file(
                     if is_error:
                         turn.error_result_count += 1
                         turn.consec_errors += 1
-                        turn.max_consec_errors = max(
-                            turn.max_consec_errors, turn.consec_errors
-                        )
+                        turn.max_consec_errors = max(turn.max_consec_errors, turn.consec_errors)
                     else:
                         turn.consec_errors = 0
                     turn.tail_errors_last5.append(is_error)
@@ -411,7 +409,7 @@ def _join_subagents(session_file: Path, conn: sqlite3.Connection) -> int:
         ).fetchone()
         if row is None:
             continue
-        (tid, tin, tout, cr, cw, tc, old_cost, model_mix_json) = row
+        (tid, tin, tout, cr, cw, tc, _old_cost, model_mix_json) = row
         model_mix = json.loads(model_mix_json) if model_mix_json else {}
         dominant_model = max(model_mix, key=lambda m: model_mix[m]) if model_mix else "unknown"
         new_in = tin + extra_in
@@ -430,9 +428,7 @@ def _join_subagents(session_file: Path, conn: sqlite3.Connection) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--claude-dir", default=str(Path.home() / ".claude" / "projects")
-    )
+    parser.add_argument("--claude-dir", default=str(Path.home() / ".claude" / "projects"))
     parser.add_argument("--out", default=str(Path(__file__).parent / "turns.db"))
     parser.add_argument("--project-filter", default=None, help="Substring filter on project dir")
     args = parser.parse_args()
@@ -445,11 +441,7 @@ def main() -> None:
     conn = sqlite3.connect(out_path)
     _init_db(conn)
 
-    session_files = [
-        p
-        for p in claude_dir.rglob("*.jsonl")
-        if "/subagents/" not in str(p)
-    ]
+    session_files = [p for p in claude_dir.rglob("*.jsonl") if "/subagents/" not in str(p)]
     total_turns = 0
     processed_files = 0
     for sf in sorted(session_files):
@@ -469,8 +461,10 @@ def main() -> None:
 
     n_turns = conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
     n_categories = conn.execute("SELECT COUNT(DISTINCT category) FROM turns").fetchone()[0]
-    print(f"Processed {processed_files} session files -> {n_turns} turns "
-          f"({n_categories} categories); subagent-joins applied: {joined}")
+    print(
+        f"Processed {processed_files} session files -> {n_turns} turns "
+        f"({n_categories} categories); subagent-joins applied: {joined}"
+    )
     print(f"Wrote {out_path}")
     conn.close()
 

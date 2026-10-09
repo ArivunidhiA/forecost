@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import functools
 import inspect
-import json
 import os
 import sys
 import threading
@@ -15,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from forecost import interceptor
-from forecost.db import get_project_by_path
+from forecost.db import get_project_by_path, sanitize_metadata
 from forecost.pricing import calculate_cost, get_provider
 
 if TYPE_CHECKING:
@@ -162,9 +161,12 @@ def track_cost(provider: str = "openai"):
         if isinstance(result, dict) and "usage" in result:
             usage = result["usage"]
             if isinstance(usage, dict):
-                tokens_in = int(usage.get("prompt_tokens", usage.get("input_tokens", 0)))
-                tokens_out = int(usage.get("completion_tokens", usage.get("output_tokens", 0)))
-                model = result.get("model", result.get("id", "unknown"))
+                raw_tokens_in = usage.get("prompt_tokens", usage.get("input_tokens", 0))
+                raw_tokens_out = usage.get("completion_tokens", usage.get("output_tokens", 0))
+                tokens_in = int(raw_tokens_in or 0)
+                tokens_out = int(raw_tokens_out or 0)
+                raw_model = result.get("model", result.get("id", "unknown"))
+                model = raw_model if isinstance(raw_model, str) else "unknown"
                 cost = calculate_cost(model, tokens_in, tokens_out)
                 _record_usage(model, tokens_in, tokens_out, cost)
                 proj = _find_project()
@@ -225,7 +227,7 @@ def track():
             proj = _find_project()
             if proj:
                 ts = datetime.now(timezone.utc).isoformat()
-                meta_str = json.dumps(metadata) if metadata else None
+                meta_str = sanitize_metadata(metadata)
                 _get_queue().put(
                     proj["id"],
                     ts,
@@ -261,7 +263,7 @@ def log_call(
     proj = _find_project()
     if proj:
         ts = datetime.now(timezone.utc).isoformat()
-        meta_str = json.dumps(metadata) if metadata else None
+        meta_str = sanitize_metadata(metadata)
         _get_queue().put(
             proj["id"], ts, model, get_provider(model), tokens_in, tokens_out, cost, meta_str
         )

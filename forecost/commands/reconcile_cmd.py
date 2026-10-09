@@ -10,15 +10,24 @@ the ledger itself — flag any model whose pricing_version varies across its
 own postings (evidence of a pricing snapshot change mid-history, which is
 exactly the kind of drift that makes numbers hard to trust) and recompute
 each posting from its event's raw tokens to confirm the stored amount matches
-what the current pricing table would produce for it right now.
+the table rate effective at the event timestamp.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import click
 
 from forecost.ledger.db import get_ledger_db
 from forecost.pricing import calculate_cost
+from forecost.reconciliation import import_bill_file, reconcile_run
+
+
+def _percent_difference(actual: float, reference: float) -> float:
+    if reference == 0:
+        return 0.0 if actual == 0 else float("inf")
+    return abs(actual - reference) / abs(reference) * 100
 
 
 def _analyze_rows(rows, tolerance_pct):
@@ -33,12 +42,10 @@ def _analyze_rows(rows, tolerance_pct):
             r["tokens_out"],
             r["tokens_cache_read"],
             r["tokens_cache_write"],
+            as_of=r["ts"],
         )
         stored = r["amount"]
-        if stored > 0:
-            pct_diff = abs(recomputed - stored) / stored * 100
-        else:
-            pct_diff = 0.0 if recomputed == 0 else 100.0
+        pct_diff = _percent_difference(recomputed, stored)
         if pct_diff > tolerance_pct:
             drift_events.append((r["id"], r["model"], stored, recomputed, pct_diff))
         version = r["pricing_version"] or "unknown"
@@ -50,11 +57,11 @@ def _print_drift_report(drift_events, tolerance_pct):
     if not drift_events:
         click.echo(
             f"No drift beyond {tolerance_pct}% — every stored posting matches what the "
-            "current pricing table would compute today."
+            "pricing table effective at its event timestamp would compute."
         )
         return
     click.echo(
-        f"FLAGS ({len(drift_events)}) — stored amount vs. current pricing table disagrees "
+        f"FLAGS ({len(drift_events)}) — stored amount vs. event-effective pricing disagrees "
         f"by more than {tolerance_pct}%:"
     )
     for event_id, model, stored, recomputed, pct in drift_events[:20]:
@@ -82,15 +89,60 @@ def _print_multi_version_report(pricing_versions_by_model):
         click.echo(f"  {model}: {sorted(versions)}")
 
 
-@click.command()
+def _print_source_vs_table_report(conn, currency, tolerance_pct):
+    """The genuinely non-tautological check: for events that carry BOTH a
+    source-reported cost (from a gateway) and forecost's own pricing_table cost,
+    compare the two independent valuations of the same event. This is the meter
+    audit the product exists to provide — forecost's number vs the gateway's."""
+    rows = conn.execute(
+        """
+        SELECT e.model AS model,
+               pt.amount AS table_amount,
+               sr.amount AS source_amount
+        FROM usage_events e
+        JOIN postings pt ON pt.event_id = e.id
+             AND pt.currency = ? AND pt.basis = 'pricing_table'
+        JOIN postings sr ON sr.event_id = e.id
+             AND sr.currency = ? AND sr.basis = 'source_reported'
+        """,
+        (currency, currency),
+    ).fetchall()
+    if not rows:
+        click.echo(
+            "\nNo events carry both a source-reported and a pricing_table cost yet "
+            "(this cross-check activates for gateway sources like LiteLLM)."
+        )
+        return
+    table_total = sum(r["table_amount"] for r in rows)
+    source_total = sum(r["source_amount"] for r in rows)
+    disagreements = [
+        r
+        for r in rows
+        if _percent_difference(r["table_amount"], r["source_amount"]) > tolerance_pct
+    ]
+    click.echo(
+        f"\nSource-reported vs forecost pricing_table on {len(rows)} shared events: "
+        f"gateway {currency} {source_total:.2f} vs forecost {currency} {table_total:.2f} "
+        f"({len(disagreements)} disagree by >{tolerance_pct}%)."
+    )
+    for r in disagreements[:20]:
+        click.echo(
+            f"  {r['model']}: gateway={r['source_amount']:.4f} vs forecost={r['table_amount']:.4f}"
+        )
+
+
+@click.group(invoke_without_command=True)
 @click.option("--currency", default="USD")
 @click.option("--tolerance-pct", default=3.0, help="Yellow-flag threshold, percent")
-def reconcile(currency, tolerance_pct):
-    """Cross-check the ledger's internal consistency (external sources: Phase 3)."""
+@click.pass_context
+def reconcile(ctx: click.Context, currency: str, tolerance_pct: float) -> None:
+    """Cross-check internal valuations, or import/reconcile independent evidence."""
+    if ctx.invoked_subcommand is not None:
+        return
     conn = get_ledger_db()
     rows = conn.execute(
         """
-        SELECT e.id, e.model, e.tokens_in, e.tokens_out, e.tokens_cache_read,
+        SELECT e.id, e.ts, e.model, e.tokens_in, e.tokens_out, e.tokens_cache_read,
                e.tokens_cache_write, p.amount, p.pricing_version, p.basis
         FROM usage_events e
         JOIN postings p ON p.event_id = e.id
@@ -114,8 +166,61 @@ def reconcile(currency, tolerance_pct):
     )
     _print_drift_report(drift_events, tolerance_pct)
     _print_multi_version_report(pricing_versions_by_model)
+    _print_source_vs_table_report(conn, currency, tolerance_pct)
 
     click.echo(
-        "\nExternal cross-checks (Anthropic Admin API, LiteLLM, OpenRouter) are not wired up "
-        "yet — that requires per-source adapters and real credentials (Phase 3)."
+        "\nFor declared offline economic claims, use `forecost reconcile import` then "
+        "`forecost reconcile run`. Live HTTP/API ingestion remains deliberately deferred."
+    )
+
+
+@reconcile.command("import")
+@click.option(
+    "--source", type=click.Choice(["openai", "anthropic", "gateway", "otel"]), required=True
+)
+@click.option("--file", "file_path", type=click.Path(exists=True, dir_okay=False), required=True)
+@click.option("--run", "run_id", default=None, help="Attach aggregate evidence to an existing run.")
+def import_export(source: str, file_path: str, run_id: str | None) -> None:
+    """Import a declared local economic claim from JSON or CSV."""
+    try:
+        imported_run, imported = import_bill_file(
+            get_ledger_db(),
+            Path(file_path),
+            source,
+            run_id=run_id,
+        )
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(
+        f"Imported {imported} user-supplied {source} economic claim record(s); "
+        "source origin is not authenticated."
+    )
+    click.echo(f"Run: {imported_run}")
+
+
+@reconcile.command("run")
+@click.option(
+    "--run", "run_id", default=None, help="Run to reconcile; omit for all imported evidence."
+)
+@click.option("--tolerance-micros", default=1_000, show_default=True, type=click.IntRange(0))
+@click.option("--json-output", "json_output", is_flag=True)
+def reconcile_evidence(run_id: str | None, tolerance_micros: int, json_output: bool) -> None:
+    """Compare local valuations with user-imported aggregate economic claims."""
+    try:
+        result = reconcile_run(get_ledger_db(), run_id, tolerance_micros=tolerance_micros)
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
+    if json_output:
+        import json
+
+        click.echo(json.dumps(result, sort_keys=True, separators=(",", ":")))
+        return
+    click.echo(
+        f"Reconciliation {result['state']}: local={result['local_total']} micros, "
+        f"user_imported_claim={result['user_imported_claim_total']} micros, "
+        f"residual={result['residual']} micros."
+    )
+    click.echo(
+        f"Evidence: {result['observed']} of {result['expected']} source roles; "
+        f"finality={result['finality']}."
     )

@@ -12,6 +12,8 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from forecost.ledger import queries as q
+
 
 @dataclass(frozen=True)
 class BurnReport:
@@ -26,15 +28,8 @@ class BurnReport:
 
 
 def _spend_since(conn: sqlite3.Connection, currency: str, since_iso: str) -> float:
-    row = conn.execute(
-        """
-        SELECT COALESCE(SUM(p.amount), 0) AS total
-        FROM postings p JOIN usage_events e ON e.id = p.event_id
-        WHERE p.currency = ? AND e.ts >= ?
-        """,
-        (currency, since_iso),
-    ).fetchone()
-    return row["total"]
+    # Canonical basis: one posting per event, so gateway spend is not double-counted.
+    return q.scope_spend(conn, currency, since_iso).total
 
 
 def burn_report(
