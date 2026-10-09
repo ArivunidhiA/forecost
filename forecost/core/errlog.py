@@ -208,7 +208,13 @@ def _append_line(line: str) -> None:
     log_path = _log_path()
     ensure_private_dir(log_path.parent)
     validate_private_file(log_path)
-    flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDWR
+        | os.O_APPEND
+        | os.O_CREAT
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_BINARY", 0)
+    )
     descriptor = os.open(log_path, flags, 0o600)
     try:
         metadata = os.fstat(descriptor)

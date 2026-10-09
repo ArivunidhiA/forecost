@@ -29,7 +29,7 @@ def privacy() -> None:
 
 def _contains_stream(path: Path, needle: bytes) -> tuple[bool, int]:
     """Scan one regular file in bounded memory, including chunk boundaries."""
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     descriptor = os.open(path, flags)
     total = 0
     overlap = b""

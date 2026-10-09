@@ -235,7 +235,7 @@ def _read_causal_path(
     identity_key: bytes,
 ) -> tuple[int, str | None]:
     inserted = 0
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     descriptor = os.open(path, flags)
     with os.fdopen(descriptor, "rb") as stream:
         offset, prompt_id, prefix_digest = _resume_cursor(stream, cursor, identity_key)
@@ -791,7 +791,7 @@ class ClaudeCodeAdapter(PullAdapter):
     ) -> tuple[int, str | None]:
         count = 0
         try:
-            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
             descriptor = os.open(path, flags)
             with os.fdopen(descriptor, "rb") as file_obj:
                 start_offset, current_prompt_id, prefix_digest = _resume_cursor(

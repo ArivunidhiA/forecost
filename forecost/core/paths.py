@@ -101,7 +101,7 @@ def _lock_owned_data_root(path: Path) -> None:
     if marker.is_symlink():
         raise UnsafeDataPathError(f"refusing symlinked Forecost ownership marker: {marker}")
     flags = os.O_WRONLY | os.O_CREAT
-    flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     descriptor = os.open(marker, flags, 0o600)
     try:
         with contextlib.suppress(OSError, AttributeError):
@@ -179,7 +179,9 @@ def open_private_file_descriptor(path: Path, flags: int, mode: int = 0o600) -> i
     local state outside this check.
     """
     validate_private_file(path)
-    descriptor = os.open(path, flags | getattr(os, "O_NOFOLLOW", 0), mode)
+    descriptor = os.open(
+        path, flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0), mode
+    )
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):

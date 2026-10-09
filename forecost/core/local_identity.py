@@ -43,7 +43,7 @@ class LocalIdentityKeyError(RuntimeError):
 
 def _read_exact_key(path: Path) -> bytes:
     validate_private_file(path, may_not_exist=False)
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     descriptor = os.open(path, flags)
     try:
         metadata = os.fstat(descriptor)
@@ -100,7 +100,7 @@ def _key_id(value: bytes) -> bytes:
 
 def _read_key_id(path: Path) -> bytes:
     validate_private_file(path, may_not_exist=False)
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     descriptor = os.open(path, flags)
     try:
         value = os.read(descriptor, _KEY_ID_BYTES + 1)

@@ -31,6 +31,10 @@ _DIAGNOSTIC_AUTHORITIES = (
 )
 
 
+class _ConfigUsageError(click.UsageError):
+    exit_code = 64
+
+
 class CompareCommand(click.Command):
     """Use exit 64 for parser/configuration errors in this command contract."""
 
@@ -38,8 +42,7 @@ class CompareCommand(click.Command):
         try:
             return cast(list[str], super().parse_args(ctx, args))
         except click.UsageError as error:
-            error.exit_code = 64
-            raise
+            raise _ConfigUsageError(error.format_message(), error.ctx) from error
 
 
 def _object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
