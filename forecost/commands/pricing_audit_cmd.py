@@ -13,7 +13,18 @@ import click
 
 from forecost.ledger.db import get_ledger_db
 from forecost.ledger.sink import PRICING_SNAPSHOT_VERSION, UNPRICED_SUFFIX
-from forecost.pricing import DEFAULT_COST
+from forecost.pricing import DEFAULT_COST, OVERLAY_DATE
+from forecost.pricing_data import age_days, is_stale
+
+
+def _echo_freshness() -> None:
+    if OVERLAY_DATE is None:
+        click.echo("  Refreshed pricing data: none loaded (baseline only).")
+        return
+    note = "STALE - run `forecost pricing-update` or upgrade" if is_stale(OVERLAY_DATE) else "fresh"
+    click.echo(
+        f"  Refreshed pricing data: {OVERLAY_DATE} ({age_days(OVERLAY_DATE)} day(s) old, {note})."
+    )
 
 
 @click.command("pricing-audit")
@@ -27,10 +38,8 @@ def pricing_audit(currency: str) -> None:
     """Report unknown/guessed-price models in the ledger and table freshness."""
     conn = get_ledger_db()
     click.echo(f"Pricing table: {PRICING_SNAPSHOT_VERSION}")
-    click.echo(
-        "  Anthropic rows verified 2026-10-09; OpenAI/Gemini/others last verified "
-        "March 2026 (not re-verified)."
-    )
+    click.echo("  Hand-verified baseline: Anthropic, OpenAI, Gemini 2026-10-09; others March 2026.")
+    _echo_freshness()
     click.echo(
         f"  Unknown models fall back to a DEFAULT_COST guess of "
         f"${DEFAULT_COST['input']:.2f}/${DEFAULT_COST['output']:.2f} per MTok.\n"

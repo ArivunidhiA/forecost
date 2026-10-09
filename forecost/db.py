@@ -107,6 +107,15 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _scrub_on_open(conn: sqlite3.Connection) -> None:
+    """Pseudonymize pre-hardening rows once, so no raw path/metadata outlives an upgrade."""
+    try:
+        if count_unscrubbed_legacy_rows(conn):
+            scrub_legacy_rows(conn)
+    except sqlite3.Error as exc:  # never block the host application
+        logger.warning("forecost: legacy scrub skipped (%s)", type(exc).__name__)
+
+
 def get_or_create_db() -> sqlite3.Connection:
     """Return the process-wide SQLite connection, creating it if needed.
 
@@ -127,6 +136,7 @@ def get_or_create_db() -> sqlite3.Connection:
         if "source" not in cols:
             _conn.execute("ALTER TABLE usage_logs ADD COLUMN source TEXT DEFAULT 'api'")
             _conn.commit()
+        _scrub_on_open(_conn)
         _lock_down_db_files(db_path)
         return _conn
 

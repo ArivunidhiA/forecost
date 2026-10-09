@@ -14,6 +14,8 @@ from forecost.core.paths import forecost_home
 from forecost.ledger import queries as q
 from forecost.ledger.db import get_ledger_db
 from forecost.ledger.sink import PRICING_SNAPSHOT_VERSION
+from forecost.pricing import OVERLAY_DATE
+from forecost.pricing_data import is_stale
 
 _ALL_TIME = "1970-01-01T00:00:00+00:00"
 _SPOOL_NAME = re.compile(r"(?:legacy-)?recovery\.\d+\.\d+\.[0-9a-f]{32}\.jsonl")
@@ -90,6 +92,8 @@ def _echo_home(home: Path) -> None:
     click.echo(f"  home: {home}" + (" (via FORECOST_HOME)" if override else " (default)"))
     click.echo(f"  home exists: {home.exists()}")
     click.echo(f"  pricing table: {PRICING_SNAPSHOT_VERSION}")
+    if is_stale(OVERLAY_DATE):
+        click.echo("  ⚠ pricing data is stale or missing — run `forecost pricing-update`")
     click.echo("  state: UNRELEASED EXPERIMENTAL — P0 RELEASE HOLD (see docs/status.md)")
 
 

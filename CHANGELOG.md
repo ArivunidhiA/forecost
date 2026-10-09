@@ -23,9 +23,18 @@ under the explicit `forecost legacy` compatibility namespace.
 - Legacy SDK/`costs.db` now stores an installation-keyed pseudonym instead of the raw project
   path, reduces project names to a basename, and keeps only bounded scalar metadata
   (identifier-like keys; numbers, booleans, short token strings). Rows written by
-  earlier versions keep their raw values until the user purges them.
+  earlier versions are pseudonymized and bounded automatically the first time the
+  legacy database is opened (`forecost legacy scrub` does the same on demand).
 
 ### Added
+- **Self-updating pricing.** `forecost/data/pricing.json` ships in the wheel and is refreshed
+  weekly by `.github/workflows/pricing-refresh.yml` (upstream feed -> safety gates -> full tests
+  -> auto-merge PR; implausible >4x jumps are held for review; a freshness job fails if data is
+  older than 45 days). `forecost pricing-update` is an opt-in, https-only, schema-validated
+  refresh into `FORECOST_HOME`; the runtime never uses the network. Postings record
+  `+data-YYYY-MM-DD` provenance, and `doctor`/`pricing-audit` warn when data is older than 60
+  days. Context-tiered models (e.g. Gemini 2.5 Pro >200k) are kept at their hand-verified
+  baseline and are not auto-updated.
 - **`forecost ingest`** — pull Claude Code JSONL transcripts into the ledger
   (idempotent and resumable; cursor identities are installation-keyed and
   replacement-aware, while transcript content is opened locally but excluded

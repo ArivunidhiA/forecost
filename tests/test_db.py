@@ -309,3 +309,23 @@ def test_scrub_rewrites_existing_raw_rows_and_leaves_no_canary(db_path):
     assert get_project_by_path("/Users/x/secret-client/app") is not None
     again = CliRunner().invoke(main, ["legacy", "scrub", "--yes"])
     assert "0 legacy row(s)" in again.output
+
+
+def test_opening_a_pre_hardening_database_scrubs_it_automatically(tmp_path, monkeypatch):
+    import sqlite3 as _sqlite3
+
+    import forecost.db as legacy_db
+
+    monkeypatch.setenv("FORECOST_HOME", str(tmp_path))
+    monkeypatch.setattr(legacy_db, "_conn", None)
+    monkeypatch.setattr(legacy_db, "_writer", None, raising=False)
+    first = legacy_db.get_or_create_db()
+    _insert_raw_legacy_rows(first)
+    first.close()
+    monkeypatch.setattr(legacy_db, "_conn", None)
+
+    reopened = legacy_db.get_or_create_db()
+    assert legacy_db.count_unscrubbed_legacy_rows(reopened) == 0
+    dump = "\n".join(_sqlite3.connect(tmp_path / "costs.db").iterdump())
+    assert "secret-client" not in dump
+    assert "private words" not in dump

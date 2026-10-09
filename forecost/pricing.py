@@ -17,7 +17,8 @@ __all__ = [
 
 # Anthropic rows re-verified 2026-10-09 (Haiku 5.5's context-tiered rate is not
 # representable here and is deliberately left unpriced).
-# OpenAI/Gemini/others last verified March 2026 and NOT re-verified — any
+# OpenAI/Gemini rows re-verified 2026-10-09; other providers last verified March 2026,
+# NOT re-verified — any
 # model absent from FALLBACK_PRICING is priced with DEFAULT_COST, a guess. Call
 # is_priced() to tell a real rate from a guess; `forecost pricing-audit` reports
 # which models in the ledger were priced by guess.
@@ -88,8 +89,8 @@ FALLBACK_PRICING: dict[str, dict[str, float]] = {
     "codestral-latest": {"input": 0.20, "output": 0.60},
     # OpenAI - newer models
     "gpt-4.5-preview": {"input": 75.00, "output": 150.00},
-    "o3": {"input": 10.00, "output": 40.00},
-    "o3-2025-04-16": {"input": 10.00, "output": 40.00},
+    "o3": {"input": 2.00, "output": 8.00, "cache_read": 0.50},
+    "o3-2025-04-16": {"input": 2.00, "output": 8.00, "cache_read": 0.50},
     "o3-pro": {"input": 20.00, "output": 80.00},
     "gpt-4o-audio-preview": {"input": 2.50, "output": 10.00},
     "gpt-4o-realtime": {"input": 5.00, "output": 20.00},
@@ -208,11 +209,44 @@ FALLBACK_PRICING: dict[str, dict[str, float]] = {
         "cache_read": 0.30,
         "cache_write": 3.75,
     },
-    # Google Gemini 2.5
+    # OpenAI rows below added 2026-10-09 from the OpenAI pricing page (standard, <=272K input).
+    "gpt-6-astra": {"input": 10, "output": 50, "cache_read": 1},
+    "gpt-6.1-sol": {"input": 2, "output": 10, "cache_read": 0.1},
+    "gpt-6-luna": {"input": 0.1, "output": 0.5, "cache_read": 0.01},
+    "gpt-6-sol": {"input": 2, "output": 10, "cache_read": 0.2},
+    "gpt-5.6-sol": {"input": 4, "output": 20, "cache_read": 0.4},
+    "gpt-5.6-terra": {"input": 2, "output": 12, "cache_read": 0.2},
+    "gpt-5.6-luna": {"input": 0.2, "output": 1.2, "cache_read": 0.02},
+    "gpt-5.5": {"input": 5, "output": 30, "cache_read": 0.5},
+    "gpt-5.5-pro": {"input": 30, "output": 180},
+    "gpt-5.4": {"input": 2.5, "output": 15, "cache_read": 0.25},
+    "gpt-5.4-mini": {"input": 0.75, "output": 4.5, "cache_read": 0.075},
+    "gpt-5.4-nano": {"input": 0.2, "output": 1.25, "cache_read": 0.02},
+    "gpt-5.4-pro": {"input": 30, "output": 180},
+    "gpt-5.3-codex": {"input": 1.75, "output": 14, "cache_read": 0.175},
+    "gpt-5.2": {"input": 1.75, "output": 14, "cache_read": 0.175},
+    "gpt-5.2-pro": {"input": 21, "output": 168},
+    "gpt-5.1": {"input": 1.25, "output": 10, "cache_read": 0.125},
+    "gpt-5": {"input": 1.25, "output": 10, "cache_read": 0.125},
+    "gpt-5-mini": {"input": 0.25, "output": 2, "cache_read": 0.025},
+    "gpt-5-nano": {"input": 0.05, "output": 0.4, "cache_read": 0.005},
+    "gpt-5-pro": {"input": 15, "output": 120},
+    "gpt-4.1": {"input": 2, "output": 8, "cache_read": 0.5},
+    "gpt-4.1-mini": {"input": 0.4, "output": 1.6, "cache_read": 0.1},
+    "gpt-4.1-nano": {"input": 0.1, "output": 0.4, "cache_read": 0.025},
+    "o4-mini": {"input": 1.1, "output": 4.4, "cache_read": 0.275},
+    # Google Gemini. 2.5 Pro is context-tiered (>200k prompts cost $2.50/$15 and are NOT modeled:
+    # the row below is the <=200k rate and undercounts long prompts). Flash rows are
+    # text/image/video rates (audio costs more). Verified against ai.google.dev 2026-10-09.
+    "gemini-2.5-flash-lite": {"input": 0.1, "output": 0.4, "cache_read": 0.01},
+    "gemini-3-flash-preview": {"input": 0.5, "output": 3, "cache_read": 0.05},
+    "gemini-3.1-flash-lite": {"input": 0.25, "output": 1.5, "cache_read": 0.025},
+    "gemini-3.5-flash": {"input": 1.5, "output": 9, "cache_read": 0.15},
+    "gemini-3.5-flash-lite": {"input": 0.3, "output": 2.5, "cache_read": 0.03},
     "gemini-2.5-pro": {"input": 1.25, "output": 10.00},
     "gemini-2.5-pro-preview-05-06": {"input": 1.25, "output": 10.00},
-    "gemini-2.5-flash": {"input": 0.15, "output": 0.60},
-    "gemini-2.5-flash-preview-04-17": {"input": 0.15, "output": 0.60},
+    "gemini-2.5-flash": {"input": 0.30, "output": 2.50, "cache_read": 0.03},
+    "gemini-2.5-flash-preview-04-17": {"input": 0.30, "output": 2.50, "cache_read": 0.03},
     # DeepSeek
     "deepseek-chat": {"input": 0.27, "output": 1.10},
     "deepseek-reasoner": {"input": 0.55, "output": 2.19},
@@ -230,6 +264,31 @@ FALLBACK_PRICING: dict[str, dict[str, float]] = {
 }
 
 DEFAULT_COST = {"input": 5.0, "output": 15.0}
+
+
+def _apply_live_overlay() -> tuple[frozenset[str], str | None]:
+    """Layer the machine-refreshed data over the hand-verified baseline (fail-safe)."""
+    try:
+        from forecost.pricing_data import load_effective
+
+        rows, stamp = load_effective()
+    except Exception:  # nosec B110 - a bad data file must never break pricing
+        return frozenset(), None
+    for model, rates in rows.items():
+        FALLBACK_PRICING[model] = rates
+    return frozenset(rows), stamp
+
+
+OVERLAY_MODELS, OVERLAY_DATE = _apply_live_overlay()
+
+
+def pricing_data_tag(model: str) -> str | None:
+    """Provenance tag when this model's rate came from the refreshed data overlay."""
+    key = _resolve_model_key(model)
+    if key is not None and key in OVERLAY_MODELS and OVERLAY_DATE:
+        return f"data-{OVERLAY_DATE}"
+    return None
+
 
 _SONNET_5_MODEL = "claude-sonnet-5"
 _SONNET_5_INTRO_END = date(2026, 8, 31)

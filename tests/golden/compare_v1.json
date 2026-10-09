@@ -1,0 +1,60 @@
+{
+  "candidate_not_cheaper": {
+    "reason_codes": [
+      "ECONOMIC_BOUND_NOT_MET"
+    ],
+    "status": "fail"
+  },
+  "candidate_outcome_regresses": {
+    "reason_codes": [
+      "OUTCOME_BOUND_NOT_MET"
+    ],
+    "status": "fail"
+  },
+  "empty_tariff": {
+    "reason_codes": [
+      "MINIMUM_PAIRS_NOT_MET",
+      "VALUATION_GROUP_MALFORMED"
+    ],
+    "status": "abstain"
+  },
+  "qualified_30_pairs": {
+    "reason_codes": [],
+    "status": "pass"
+  },
+  "roster_smaller_than_min_pairs": {
+    "reason_codes": [
+      "min_pairs exceeds the predeclared case roster"
+    ],
+    "status": "configuration_error"
+  },
+  "tariff_scope_mismatch": {
+    "reason_codes": [
+      "MINIMUM_PAIRS_NOT_MET",
+      "TARIFF_SCOPE_MISMATCH"
+    ],
+    "status": "abstain"
+  },
+  "tariff_without_rate_snapshot": {
+    "reason_codes": [
+      "MINIMUM_PAIRS_NOT_MET",
+      "VALUATION_GROUP_MALFORMED"
+    ],
+    "status": "abstain"
+  },
+  "unbound_charge": {
+    "reason_codes": [
+      "MINIMUM_PAIRS_NOT_MET",
+      "VALUATION_COVERAGE_INCOMPLETE",
+      "VALUATION_NOT_FACT_BOUND"
+    ],
+    "status": "abstain"
+  },
+  "weak_outcome_confidence": {
+    "reason_codes": [
+      "MINIMUM_PAIRS_NOT_MET",
+      "OUTCOME_CONFIDENCE_UNQUALIFIED"
+    ],
+    "status": "abstain"
+  }
+}

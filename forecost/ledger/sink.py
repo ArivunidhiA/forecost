@@ -19,7 +19,7 @@ from forecost.ledger.db import (
     ledger_write_lock,
 )
 from forecost.ledger.writer import LedgerWriteError, LedgerWriteQueue, _insert_batch
-from forecost.pricing import calculate_cost, get_pricing_period, is_priced
+from forecost.pricing import calculate_cost, get_pricing_period, is_priced, pricing_data_tag
 
 PRICING_SNAPSHOT_VERSION = "bundled-2026-08"
 # Marker appended to pricing_version when the model was not in the pricing table
@@ -48,6 +48,9 @@ def _price_event(event: UsageEvent) -> list[PostingSpec]:
     period = get_pricing_period(event.model, event.ts)
     if period:
         pricing_version += f"/{period}"
+    data_tag = pricing_data_tag(event.model)
+    if data_tag:
+        pricing_version += f"+{data_tag}"
     if not is_priced(event.model):
         pricing_version += UNPRICED_SUFFIX  # cost is a DEFAULT_COST guess, flag it
     postings.append(

@@ -224,3 +224,45 @@ def test_event_uses_only_explicit_stable_gateway_session_identity():
 
     assert event.session_uid == "team-session-1"
     assert event.run_id is None
+
+
+def test_real_litellm_completion_records_event_and_no_content(tmp_path, monkeypatch):
+    """Drive the callback through LiteLLM's own completion path (mock_response, no network)."""
+    import sqlite3
+
+    monkeypatch.setenv("FORECOST_HOME", str(tmp_path))
+    canary = "LITELLM-CANARY-DO-NOT-PERSIST"
+    ledger = tmp_path / "ledger.db"
+    logger = ForecostLogger(
+        policy_path=tmp_path / "none.toml",
+        ledger_path=ledger,
+        outbox_path=tmp_path / "outbox" / "l.jsonl",
+    )
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+
+    async def call() -> None:
+        await litellm.acompletion(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": f"hello {canary}"}],
+            mock_response=f"reply {canary}",
+        )
+        for _ in range(50):  # success callbacks are dispatched asynchronously
+            await asyncio.sleep(0.1)
+            if (
+                ledger.exists()
+                and sqlite3.connect(ledger)
+                .execute("SELECT COUNT(*) FROM usage_events")
+                .fetchone()[0]
+            ):
+                return
+
+    _run(call())
+    logger.close()
+
+    conn = sqlite3.connect(ledger)
+    events = conn.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0]
+    assert events == 1
+    assert conn.execute("SELECT COUNT(*) FROM postings").fetchone()[0] >= 1
+    for path in tmp_path.rglob("*"):
+        if path.is_file():
+            assert canary.encode() not in path.read_bytes(), path.name

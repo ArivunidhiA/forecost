@@ -85,11 +85,15 @@ def test_calculate_cost_prices_cache_read_and_write():
     assert with_cache == 0.30 + 3.75
 
 
-def test_calculate_cost_cache_fallback_ratio_for_models_without_explicit_rates():
+def test_calculate_cost_cache_fallback_ratio_for_models_without_explicit_rates(monkeypatch):
     """A model with no explicit cache_read/cache_write rate falls back to the
     standard 10%/125%-of-input ratio rather than pricing cache tokens at zero."""
-    cost = calculate_cost("gpt-4o", 0, 0, cache_read_tokens=1_000_000, cache_write_tokens=1_000_000)
-    # gpt-4o input rate is 2.50/Mtok -> cache_read=0.25, cache_write=3.125
+    from forecost.pricing import FALLBACK_PRICING
+
+    monkeypatch.setitem(FALLBACK_PRICING, "zz-ratio-model", {"input": 2.5, "output": 10.0})
+    cost = calculate_cost(
+        "zz-ratio-model", 0, 0, cache_read_tokens=1_000_000, cache_write_tokens=1_000_000
+    )
     assert cost == 0.25 + 3.125
 
 
@@ -134,3 +138,20 @@ def test_rates_match_provider_pricing_page_2026_10_09(model, input_rate, output_
 
 def test_haiku_5_5_stays_unpriced_until_tiered_rates_are_modeled():
     assert not is_priced("claude-haiku-5-5")
+
+
+@pytest.mark.parametrize(
+    ("model", "input_rate", "output_rate"),
+    [
+        ("o3", 2.0, 8.0),
+        ("o4-mini", 1.10, 4.40),
+        ("gpt-5", 1.25, 10.0),
+        ("gpt-5.4", 2.5, 15.0),
+        ("gpt-4.1", 2.0, 8.0),
+        ("gemini-2.5-flash", 0.30, 2.50),
+        ("gemini-2.5-flash-lite", 0.10, 0.40),
+        ("gemini-3.5-flash", 1.5, 9.0),
+    ],
+)
+def test_openai_and_gemini_rates_match_provider_pages_2026_10_09(model, input_rate, output_rate):
+    assert calculate_cost(model, 1_000_000, 1_000_000) == pytest.approx(input_rate + output_rate)

@@ -100,6 +100,12 @@ _CURRENT_COMMANDS: dict[str, _LazyCommand] = {
         "Find guessed or stale pricing.",
         "canonical ledger.db (read-only)",
     ),
+    "pricing-update": (
+        "forecost.commands.pricing_update_cmd",
+        "pricing_update",
+        "Fetch the latest published pricing data (opt-in network access).",
+        "FORECOST_HOME/pricing.json; opt-in https download",
+    ),
     "privacy": (
         "forecost.commands.privacy_cmd",
         "privacy",
