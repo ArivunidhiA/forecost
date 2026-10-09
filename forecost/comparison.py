@@ -12,7 +12,7 @@ import hashlib
 import json
 import re
 import sqlite3
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import cast
@@ -694,12 +694,9 @@ def _qualified_meter_index(
     meters = receipt.get("meter_facts")
     if not isinstance(meters, list):
         return {}, ["RECEIPT_MALFORMED"]
-    if any(not isinstance(item, Mapping) or item.get("aggregation") != "delta" for item in meters):
-        return {}, ["METER_AGGREGATION_UNSUPPORTED"]
-    if any(item.get("finality") != "final" for item in cast(list[Mapping[str, object]], meters)):
-        return {}, ["VALUATION_COVERAGE_INCOMPLETE"]
-    if any(not _meter_scope_supported(item) for item in meters):
-        return {}, ["METER_SCOPE_UNSUPPORTED"]
+    meter_reason = _meter_list_reason(meters)
+    if meter_reason is not None:
+        return {}, [meter_reason]
     meter_index = {
         str(item["fact_id"]): cast(Mapping[str, object], item)
         for item in meters
@@ -707,19 +704,33 @@ def _qualified_meter_index(
     }
     if not meter_index or len(meter_index) != len(meters):
         return {}, ["RECEIPT_MALFORMED"]
+    if not _groups_cover_meters(groups, meter_index):
+        return {}, ["VALUATION_COVERAGE_INCOMPLETE"]
+    return meter_index, []
+
+
+def _meter_list_reason(meters: Sequence[object]) -> str | None:
+    if any(not isinstance(item, Mapping) or item.get("aggregation") != "delta" for item in meters):
+        return "METER_AGGREGATION_UNSUPPORTED"
+    if any(cast(Mapping[str, object], item).get("finality") != "final" for item in meters):
+        return "VALUATION_COVERAGE_INCOMPLETE"
+    if any(not _meter_scope_supported(item) for item in meters):
+        return "METER_SCOPE_UNSUPPORTED"
+    return None
+
+
+def _groups_cover_meters(groups: Sequence[object], meter_index: Mapping[str, object]) -> bool:
     group_fact_ids = [
         str(item.get("economic_fact_key"))
         for item in groups
         if isinstance(item, Mapping) and isinstance(item.get("economic_fact_key"), str)
     ]
-    if (
-        len(group_fact_ids) != len(groups)
-        or len(set(group_fact_ids)) != len(group_fact_ids)
-        or len(group_fact_ids) != len(meter_index)
-        or set(group_fact_ids) != set(meter_index)
-    ):
-        return {}, ["VALUATION_COVERAGE_INCOMPLETE"]
-    return meter_index, []
+    return (
+        len(group_fact_ids) == len(groups)
+        and len(set(group_fact_ids)) == len(group_fact_ids)
+        and len(group_fact_ids) == len(meter_index)
+        and set(group_fact_ids) == set(meter_index)
+    )
 
 
 def _meter_scope_supported(value: object) -> bool:
@@ -786,9 +797,7 @@ def _group_measure(
     if len(matches) != 1:
         reason = "DECLARED_AUTHORITY_MISSING" if not matches else "DECLARED_AUTHORITY_AMBIGUOUS"
         return None, None, [reason]
-    return _valuation_measure(
-        conn, item, value, cast(Mapping[str, object], matches[0]), meters
-    )
+    return _valuation_measure(conn, item, value, cast(Mapping[str, object], matches[0]), meters)
 
 
 def _authority_matches(value: object, authority: str) -> bool:
@@ -1208,19 +1217,30 @@ def compare_manifests(
             return _finalize(result, reasons)
         if snapshot is None:  # pragma: no cover - context contract
             raise RuntimeError("comparison snapshot was not created")
-        pairs, excluded, pair_reasons = _collect_pairs(snapshot, baseline, candidate, parsed_policy)
-        reasons.extend(pair_reasons)
-        result["matching"] = _matching_payload(parsed_policy, pairs, excluded)
-        if len(pairs) < parsed_policy.min_pairs:
-            reasons.append("MINIMUM_PAIRS_NOT_MET")
-        if not reasons and any(cast(int, item["baseline_amount_micros"]) <= 0 for item in pairs):
-            reasons.append("ZERO_BASELINE_DENOMINATOR")
-        if not reasons:
-            economics, outcomes = _statistics(pairs, parsed_policy)
-            result["economics"] = economics
-            result["outcomes"] = outcomes
-            reasons.extend(_threshold_reasons(economics, outcomes, parsed_policy))
+        reasons.extend(_evaluate_snapshot(snapshot, baseline, candidate, parsed_policy, result))
     return _finalize(result, reasons)
+
+
+def _evaluate_snapshot(
+    snapshot: sqlite3.Connection,
+    baseline: _Arm,
+    candidate: _Arm,
+    policy: _Policy,
+    result: dict[str, object],
+) -> list[str]:
+    """Match pairs on the validated snapshot, filling ``result``; return reasons."""
+    pairs, excluded, reasons = _collect_pairs(snapshot, baseline, candidate, policy)
+    result["matching"] = _matching_payload(policy, pairs, excluded)
+    if len(pairs) < policy.min_pairs:
+        reasons.append("MINIMUM_PAIRS_NOT_MET")
+    if not reasons and any(cast(int, item["baseline_amount_micros"]) <= 0 for item in pairs):
+        reasons.append("ZERO_BASELINE_DENOMINATOR")
+    if not reasons:
+        economics, outcomes = _statistics(pairs, policy)
+        result["economics"] = economics
+        result["outcomes"] = outcomes
+        reasons.extend(_threshold_reasons(economics, outcomes, policy))
+    return reasons
 
 
 def validate_comparison_inputs(
@@ -1307,6 +1327,30 @@ def _snapshot_validation_reason(snapshot: sqlite3.Connection) -> str | None:
     return "PROJECTION_INTEGRITY_MISMATCH" if before != after else None
 
 
+def _quote_identifier(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _update_table_digest(
+    update: Callable[[bytes], object], conn: sqlite3.Connection, table: str
+) -> None:
+    quoted_table = _quote_identifier(table)
+    info = conn.execute(f"PRAGMA table_info({quoted_table})").fetchall()
+    columns = [str(row[1]) for row in info]
+    primary_key = [
+        name for _, name in sorted((int(row[5]), str(row[1])) for row in info if int(row[5]) > 0)
+    ]
+    order = ",".join(_quote_identifier(column) for column in (primary_key or columns))
+    update(_canonical_json({"table": table, "columns": columns}).encode("utf-8"))
+    update(b"\n")
+    # Table names are a fixed internal inventory; identifiers are quoted.
+    cursor = conn.execute(f"SELECT * FROM {quoted_table} ORDER BY {order}")  # nosec B608  # noqa: S608
+    while rows := cursor.fetchmany(1_000):
+        for row in rows:
+            update(_canonical_json([row[column] for column in columns]).encode("utf-8"))
+            update(b"\n")
+
+
 def _projection_digest(conn: sqlite3.Connection) -> str:
     tables = (
         "causal_run_identities",
@@ -1320,23 +1364,7 @@ def _projection_digest(conn: sqlite3.Connection) -> str:
     )
     digest = hashlib.sha256()
     for table in tables:
-        info = conn.execute(f'PRAGMA table_info("{table}")').fetchall()
-        columns = [str(row[1]) for row in info]
-        primary_key = [
-            name
-            for _, name in sorted((int(row[5]), str(row[1])) for row in info if int(row[5]) > 0)
-        ]
-        order_columns = primary_key or columns
-        order = ",".join(f'"{column}"' for column in order_columns)
-        digest.update(_canonical_json({"table": table, "columns": columns}).encode("utf-8"))
-        digest.update(b"\n")
-        cursor = conn.execute(
-            f'SELECT * FROM "{table}" ORDER BY {order}'  # noqa: S608 - fixed inventory
-        )
-        while rows := cursor.fetchmany(1_000):
-            for row in rows:
-                digest.update(_canonical_json([row[column] for column in columns]).encode("utf-8"))
-                digest.update(b"\n")
+        _update_table_digest(digest.update, conn, table)
     return digest.hexdigest()
 
 
@@ -1552,11 +1580,14 @@ def _add_diagnostic_economics(
     }
 
 
+_EXIT_CODES = {"pass": 0, "fail": 2, "abstain": 3, "invalid": 4}  # nosec B105 - statuses
+
+
 def comparison_exit_code(result: Mapping[str, object]) -> int:
     """Map a comparison decision to its stable process exit code."""
     decision = result.get("decision")
     status = decision.get("status") if isinstance(decision, Mapping) else None
-    return {"pass": 0, "fail": 2, "abstain": 3, "invalid": 4}.get(str(status), 5)
+    return _EXIT_CODES.get(str(status), 5)
 
 
 def comparison_text(result: Mapping[str, object], markdown: bool = False) -> str:
