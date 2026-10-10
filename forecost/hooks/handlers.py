@@ -173,6 +173,25 @@ def handle_gate(payload: dict) -> dict:
     return {}
 
 
+_MAX_FALLBACK_TRANSCRIPTS = 20
+
+
+def _most_recent_transcripts(claude_dir: Path) -> list[Path]:
+    """Newest ``*.jsonl`` files under ``claude_dir`` (bounded; tolerant of races/missing dir)."""
+    candidates: list[tuple[float, Path]] = []
+    try:
+        for path in claude_dir.rglob("*.jsonl"):
+            try:
+                if path.is_file() and not path.is_symlink():
+                    candidates.append((path.stat().st_mtime, path))
+            except OSError:
+                continue
+    except OSError:
+        return []
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return [path for _, path in candidates[:_MAX_FALLBACK_TRANSCRIPTS]]
+
+
 def handle_reconcile(payload: dict) -> dict:
     """Stop/SessionEnd: ingest the transcript delta, then score pending estimates.
 
@@ -195,8 +214,11 @@ def handle_reconcile(payload: dict) -> dict:
         n = adapter.poll_paths(transcript_paths, state, sink)
         causal = ingest_causal_paths(transcript_paths, state, conn)
     else:
-        n = adapter.poll(state, sink)
-        causal = ingest_causal_paths(adapter.claude_dir.rglob("*.jsonl"), state, conn)
+        # No session path in the payload: never rescan a user's lifetime transcript tree from
+        # a hook. Take only the most recently modified files; `forecost ingest` does the rest.
+        recent = _most_recent_transcripts(adapter.claude_dir)
+        n = adapter.poll_paths(recent, state, sink)
+        causal = ingest_causal_paths(recent, state, conn)
     sink.flush()
     scored = reconcile_estimates(conn)
     _shadow_guard_scan(conn, payload, transcript_path)
