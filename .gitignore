@@ -89,3 +89,9 @@ gaps/
 
 # Node
 node_modules/
+
+# Secrets that must never be committed
+.ignore/
+PyPI-Recovery-Codes*
+.pypirc
+*recovery-codes*
