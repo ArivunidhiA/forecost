@@ -36,9 +36,8 @@ tui = ["textual>=0.50", "plotext>=5.0"]
 # 1.91+ stopped shipping a compatible macOS/Python 3.12 wheel and newer
 # releases currently require a Rust toolchain newer than common CI runners.
 llm = ["litellm>=1.80,<1.91"]
-# MCP 2.x removed ``mcp.server.fastmcp``, the public API used by this server.
-# Keep fresh installs on the compatible major until the server is migrated.
-mcp = ["mcp[cli]>=1.0,<2"]
+# The server supports mcp 1.x (FastMCP) and 2.x (MCPServer); see forecost/mcp/server.py.
+mcp = ["mcp[cli]>=1.0,<3"]
 all = ["forecost[forecast,tui,llm,mcp]"]
 dev = [
     "build>=1.2",
@@ -58,7 +57,7 @@ dev = [
     "mypy",
     "statsmodels>=0.14",
     "numpy>=1.24",
-    "mcp[cli]>=1.0,<2",
+    "mcp[cli]>=1.0,<3",
 ]
 
 [project.scripts]

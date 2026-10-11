@@ -18,8 +18,16 @@ import sqlite3
 from contextlib import closing
 from typing import cast
 
-from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
+
+try:  # mcp >= 2 renamed FastMCP to MCPServer
+    from mcp.server.mcpserver import (  # type: ignore[import-not-found,unused-ignore]  # pyright: ignore[reportMissingImports]
+        MCPServer as _McpServer,
+    )
+except ImportError:  # mcp 1.x
+    from mcp.server.fastmcp import (  # type: ignore[import-not-found,unused-ignore]  # pyright: ignore[reportMissingImports]
+        FastMCP as _McpServer,
+    )
 
 from forecost.comparison import ComparisonConfigurationError, compare_runs_diagnostic
 from forecost.core.paths import UnsafeDataPathError
@@ -38,7 +46,7 @@ _COMPARISON_AUTHORITIES = frozenset(
 )
 _COMPARISON_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,255}$")
 
-mcp = FastMCP("forecost")
+mcp = _McpServer("forecost")
 
 _READ_ONLY = ToolAnnotations(
     readOnlyHint=True,
