@@ -21,9 +21,13 @@ from typing import cast
 from mcp.types import ToolAnnotations
 
 try:  # mcp >= 2 renamed FastMCP to MCPServer
-    from mcp.server.mcpserver import MCPServer as _McpServer
+    from mcp.server.mcpserver import (  # type: ignore[import-not-found,unused-ignore]  # pyright: ignore[reportMissingImports]
+        MCPServer as _McpServer,
+    )
 except ImportError:  # mcp 1.x
-    from mcp.server.fastmcp import FastMCP as _McpServer
+    from mcp.server.fastmcp import (  # type: ignore[import-not-found,unused-ignore]  # pyright: ignore[reportMissingImports]
+        FastMCP as _McpServer,
+    )
 
 from forecost.comparison import ComparisonConfigurationError, compare_runs_diagnostic
 from forecost.core.paths import UnsafeDataPathError
