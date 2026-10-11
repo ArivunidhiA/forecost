@@ -274,3 +274,113 @@ def test_data_provenance_tag_survives_pricing_version_normalization():
     hashed = _normalize_pricing_version("bundled-2026-08/data-bogus")
     assert hashed is not None
     assert hashed.startswith("pricing:")
+
+
+# ---- boundary pins (mutation-testing driven) -------------------------------------------------
+
+
+def test_file_size_limit_is_inclusive(tmp_path):
+    base = json.dumps(_doc())
+    at_limit = tmp_path / "at.json"
+    at_limit.write_text(base + " " * (pricing_data.MAX_BYTES - len(base)))
+    assert at_limit.stat().st_size == pricing_data.MAX_BYTES
+    assert pricing_data.read_file(at_limit) is not None
+    over = tmp_path / "over.json"
+    over.write_text(base + " " * (pricing_data.MAX_BYTES - len(base) + 1))
+    assert pricing_data.read_file(over) is None
+
+
+def test_symlinked_pricing_file_is_refused(tmp_path):
+    real = tmp_path / "real.json"
+    real.write_text(json.dumps(_doc()))
+    link = tmp_path / "link.json"
+    link.symlink_to(real)
+    assert pricing_data.read_file(real) is not None
+    assert pricing_data.read_file(link) is None
+
+
+def test_rate_bounds_are_inclusive_and_zero_is_allowed():
+    ok = _doc(
+        **{
+            "free": {"input": 0, "output": 0},
+            "top": {"input": pricing_data.MAX_RATE_PER_MTOK, "output": 1},
+        }
+    )
+    assert pricing_data.validate(ok)["models"]["free"]["input"] == 0.0
+    over = _doc(**{"x": {"input": pricing_data.MAX_RATE_PER_MTOK + 0.01, "output": 1}})
+    with pytest.raises(pricing_data.PricingDataError):
+        pricing_data.validate(over)
+
+
+def test_model_count_limit_is_inclusive():
+    models = {f"m{i}": {"input": 1, "output": 1} for i in range(pricing_data.MAX_MODELS)}
+    assert len(pricing_data.validate(_doc(**models))["models"]) == pricing_data.MAX_MODELS
+    models["one-more"] = {"input": 1, "output": 1}
+    with pytest.raises(pricing_data.PricingDataError):
+        pricing_data.validate(_doc(**models))
+
+
+def _tier(above, **rates):
+    return {"above": above, "input": 1, "output": 1, **rates}
+
+
+def test_tier_count_and_threshold_limits_are_inclusive():
+    document = _doc()
+    document["tiers"] = {"m-1": [_tier(i + 1) for i in range(pricing_data.MAX_TIERS)]}
+    assert len(pricing_data.validate(document)["tiers"]["m-1"]) == pricing_data.MAX_TIERS
+    document["tiers"] = {"m-1": [_tier(i + 1) for i in range(pricing_data.MAX_TIERS + 1)]}
+    with pytest.raises(pricing_data.PricingDataError):
+        pricing_data.validate(document)
+    for above, ok in (
+        (1, True),
+        (pricing_data.MAX_TIER_THRESHOLD, True),
+        (pricing_data.MAX_TIER_THRESHOLD + 1, False),
+        (0, False),
+        (True, False),
+        (1.5, False),
+    ):
+        document["tiers"] = {"m-1": [_tier(above)]}
+        if ok:
+            assert pricing_data.validate(document)["tiers"]["m-1"][0]["above"] == float(above)
+        else:
+            with pytest.raises(pricing_data.PricingDataError):
+                pricing_data.validate(document)
+
+
+def test_source_is_truncated_to_200_chars():
+    document = _doc()
+    document["source"] = "s" * 300
+    assert len(pricing_data.validate(document)["source"]) == 200
+
+
+def test_equal_generation_dates_prefer_the_local_copy(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORECOST_HOME", str(tmp_path))
+    bundled = pricing_data.read_file(pricing_data.BUNDLED_PATH)
+    assert bundled is not None
+    local = _doc(**{"zz-tie-model": {"input": 7.0, "output": 7.0}})
+    local["generated_at"] = bundled["generated_at"]
+    (tmp_path / "pricing.json").write_text(json.dumps(local))
+    rows, _ = pricing_data.load_effective()
+    assert "zz-tie-model" in rows
+
+
+def test_staleness_boundary_is_exactly_the_configured_window():
+    from datetime import timedelta
+
+    today = date(2026, 10, 9)
+    edge = (today - timedelta(days=pricing_data.STALE_AFTER_DAYS)).isoformat()
+    beyond = (today - timedelta(days=pricing_data.STALE_AFTER_DAYS + 1)).isoformat()
+    assert pricing_data.STALE_AFTER_DAYS == 60
+    assert not pricing_data.is_stale(edge, today=today)
+    assert pricing_data.is_stale(beyond, today=today)
+    assert pricing_data.age_days(edge, today=today) == 60
+
+
+def test_documented_limits_are_pinned():
+    """These bounds are part of the data contract; changing one must be a deliberate edit."""
+    assert pricing_data.MAX_BYTES == 2_000_000
+    assert pricing_data.MAX_MODELS == 5_000
+    assert pricing_data.MAX_TIERS == 4
+    assert pricing_data.MAX_TIER_THRESHOLD == 10_000_000
+    assert pricing_data.MAX_RATE_PER_MTOK == 10_000.0
+    assert pricing_data.SCHEMA == 1

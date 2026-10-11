@@ -18,7 +18,12 @@ from forecost.ledger.db import (
     get_or_create_workspace,
     ledger_write_lock,
 )
-from forecost.ledger.writer import LedgerWriteError, LedgerWriteQueue, _insert_batch
+from forecost.ledger.writer import (
+    LedgerWriteError,
+    LedgerWriteQueue,
+    _insert_batch,
+    merge_cumulative_usage,
+)
 from forecost.pricing import calculate_cost, get_pricing_period, is_priced, pricing_data_tag
 
 PRICING_SNAPSHOT_VERSION = "bundled-2026-08"
@@ -88,6 +93,9 @@ class SyncLedgerSink(LedgerSink):
         # postings, and commit in one rollback-safe transaction.
         normalized = normalize_usage_event(event)
         with ledger_write_lock:
+            merged = merge_cumulative_usage(self._conn, normalized, _price_event)
+            if merged is not None:
+                return False  # known event: merged upward or unchanged, never a new row
             return _insert_batch(self._conn, [(normalized, _price_event(normalized))]) == 1
 
     def emit_with_postings(self, event: UsageEvent, postings: list[PostingSpec]) -> bool:

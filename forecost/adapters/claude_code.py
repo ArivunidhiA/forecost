@@ -228,6 +228,47 @@ def _append_causal_record(record: dict, prompt_id: str | None, conn) -> int:
         return 0
 
 
+_USAGE_COUNTERS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+)
+
+
+def _raise_counters(merged: dict, later_usage: Mapping[str, object]) -> None:
+    for key in _USAGE_COUNTERS:
+        new = later_usage.get(key)
+        if not isinstance(new, int) or isinstance(new, bool):
+            continue
+        old = merged.get(key)
+        if not isinstance(old, int) or isinstance(old, bool) or new > old:
+            merged[key] = new
+
+
+def _merge_usage(first: dict, later: dict) -> dict:
+    """Return ``first`` with usage counters raised to the per-field maximum seen in ``later``.
+
+    Counters are cumulative across the records of one streamed response, so the maximum is the
+    final value regardless of record order. Non-counter fields are kept from ``first``.
+    """
+    first_message = first.get("message")
+    later_message = later.get("message")
+    if not isinstance(first_message, dict) or not isinstance(later_message, dict):
+        return first
+    later_usage = later_message.get("usage")
+    if not isinstance(later_usage, dict):
+        return first
+    first_usage = first_message.get("usage")
+    merged = dict(first_usage) if isinstance(first_usage, dict) else {}
+    _raise_counters(merged, later_usage)
+    if not isinstance(first_message.get("model"), str) and isinstance(
+        later_message.get("model"), str
+    ):
+        first_message = {**first_message, "model": later_message["model"]}
+    return {**first, "message": {**first_message, "usage": merged}}
+
+
 def _read_causal_path(
     path: Path,
     cursor: dict,
@@ -241,15 +282,29 @@ def _read_causal_path(
         offset, prompt_id, prefix_digest = _resume_cursor(stream, cursor, identity_key)
         safe_offset = offset
         stream.seek(offset)
+        # A streamed response is logged as several records with growing usage. Merge them per
+        # request so the journal receives one span and the FINAL token meters, not the partials.
+        pending: dict[str, tuple[dict, str | None]] = {}
         for raw_line in stream:
             if not raw_line.endswith(b"\n"):
                 break
             record = _parse_record(raw_line.decode("utf-8", errors="replace").strip())
             if record is not None:
                 prompt_id = _updated_prompt_id(record, prompt_id)
-                inserted += _append_causal_record(record, prompt_id, conn)
+                request_id = _structural_id(record, "requestId", "uuid")
+                if record.get("type") == "assistant" and request_id is not None:
+                    held = pending.get(request_id)
+                    pending[request_id] = (
+                        (record, prompt_id)
+                        if held is None
+                        else (_merge_usage(held[0], record), held[1])
+                    )
+                else:
+                    inserted += _append_causal_record(record, prompt_id, conn)
             safe_offset += len(raw_line)
             prefix_digest.update(raw_line)
+        for held_record, held_prompt in pending.values():
+            inserted += _append_causal_record(held_record, held_prompt, conn)
         checkpoint = _verified_processed_checkpoint(
             stream, safe_offset, identity_key, prefix_digest
         )

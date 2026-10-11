@@ -19,6 +19,16 @@ visible. Claude controls are fail-open and do not claim provider-side or
 distributed containment. The retired calendar-spend forecaster remains only
 under the explicit `forecost legacy` compatibility namespace.
 
+### Fixed
+- **Streamed responses were undercounted (critical).** Claude Code logs one API response as
+  several transcript records whose usage counters grow while it streams; the first record
+  carries zero/partial output tokens. Ingest kept the first record, so on 250 real sessions
+  output tokens were undercounted by ~73% (2.49M vs 9.32M). A repeated `event_uid` now merges to
+  the per-field maximum (valuations re-priced in the same transaction), and the causal receipt
+  lane merges per request before emitting meters. Verified exact against an independent
+  recount of 6,050 real responses (`scripts/verify_ingest_accuracy.py`).
+- Stop-hook fallback scan (payload without `transcript_path`) is bounded to the 20 newest files.
+
 ### Changed
 - Legacy SDK/`costs.db` now stores an installation-keyed pseudonym instead of the raw project
   path, reduces project names to a basename, and keeps only bounded scalar metadata
