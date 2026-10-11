@@ -329,3 +329,17 @@ def test_opening_a_pre_hardening_database_scrubs_it_automatically(tmp_path, monk
     dump = "\n".join(_sqlite3.connect(tmp_path / "costs.db").iterdump())
     assert "secret-client" not in dump
     assert "private words" not in dump
+
+
+def test_project_name_boundaries_and_windows_paths():
+    from forecost.db import _MAX_NAME, _safe_project_name, _scrub_metadata_text
+
+    assert _MAX_NAME == 80
+    assert len(_safe_project_name("a" * 200)) == 80
+    assert _safe_project_name("a" * 80) == "a" * 80
+    assert _safe_project_name("C:\\Users\\x\\client\\app") == "app"
+    assert _safe_project_name("/trailing/slash/") == "slash"
+    assert _safe_project_name("///") == "project"
+    assert _scrub_metadata_text(None) is None
+    assert _scrub_metadata_text("not json") is None
+    assert _scrub_metadata_text('{"ok": 1}') == '{"ok": 1}'

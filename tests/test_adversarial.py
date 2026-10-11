@@ -290,3 +290,23 @@ def test_fallback_transcript_listing_tolerates_filesystem_errors(tmp_path, monke
 
     monkeypatch.setattr(Path, "rglob", boom)
     assert handlers._most_recent_transcripts(tmp_path / "projects") == []
+
+
+def test_fallback_listing_is_newest_first_and_skips_symlinks_and_dirs(tmp_path):
+    import os
+
+    from forecost.hooks import handlers
+
+    root = tmp_path / "projects" / "-p"
+    root.mkdir(parents=True)
+    paths = []
+    for index in range(5):
+        path = root / f"s{index}.jsonl"
+        path.write_text("{}\\n")
+        os.utime(path, (1_000 + index, 1_000 + index))
+        paths.append(path)
+    (root / "dir.jsonl").mkdir()
+    (root / "link.jsonl").symlink_to(paths[0])
+    chosen = handlers._most_recent_transcripts(tmp_path / "projects")
+    assert chosen == list(reversed(paths))
+    assert handlers._MAX_FALLBACK_TRANSCRIPTS == 20

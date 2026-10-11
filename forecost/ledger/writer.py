@@ -128,6 +128,87 @@ def _insert_event(conn, event: UsageEvent, postings: list[PostingSpec]) -> None:
         )
 
 
+_TOKEN_FIELDS = ("tokens_in", "tokens_out", "tokens_cache_read", "tokens_cache_write")
+
+
+def _write_merge(conn, event_id: int, tokens: tuple[int, ...], postings: list[PostingSpec]) -> None:
+    """Raise a stored event's counters and replace its valuations (caller owns the transaction)."""
+    conn.execute(
+        "UPDATE usage_events SET tokens_in = ?, tokens_out = ?, tokens_cache_read = ?, "
+        "tokens_cache_write = ? WHERE id = ?",
+        (*tokens, event_id),
+    )
+    bases = sorted({posting.basis for posting in postings})
+    if bases:
+        marks = ",".join("?" for _ in bases)
+        conn.execute(
+            f"DELETE FROM postings WHERE event_id = ? AND basis IN ({marks})",  # noqa: S608 # nosec B608
+            (event_id, *bases),
+        )
+    now = datetime.now(timezone.utc).isoformat()
+    for posting in postings:
+        conn.execute(
+            "INSERT INTO postings "
+            "(event_id, currency, amount, basis, pricing_version, created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (
+                event_id,
+                posting.currency,
+                posting.amount,
+                posting.basis,
+                posting.pricing_version,
+                now,
+            ),
+        )
+
+
+def merge_cumulative_usage(conn, event: UsageEvent, price) -> bool | None:
+    """Merge a repeated event into the stored one when it carries larger counts.
+
+    Claude Code logs one API response as several transcript records whose usage grows as the
+    response streams (early records carry partial/zero output tokens). Usage counters are
+    cumulative, so the correct value for one ``event_uid`` is the per-field maximum seen.
+
+    Returns ``None`` when the event is new (caller inserts), ``True`` when the stored event and
+    its postings were raised, and ``False`` when nothing changed (idempotent replay).
+    ``price`` maps the merged event to its postings so valuations always match the stored tokens.
+    """
+    row = conn.execute(
+        "SELECT id, tokens_in, tokens_out, tokens_cache_read, tokens_cache_write "
+        "FROM usage_events WHERE event_uid = ?",
+        (event.event_uid,),
+    ).fetchone()
+    if row is None:
+        return None
+    existing = tuple(int(row[i + 1]) for i in range(4))
+    incoming = tuple(int(getattr(event, name)) for name in _TOKEN_FIELDS)
+    merged = tuple(max(a, b) for a, b in zip(existing, incoming, strict=True))
+    if merged == existing:
+        return False
+    postings = price(
+        replace(
+            event,
+            tokens_in=merged[0],
+            tokens_out=merged[1],
+            tokens_cache_read=merged[2],
+            tokens_cache_write=merged[3],
+        )
+    )
+    nested = bool(getattr(conn, "in_transaction", False))
+    conn.execute("SAVEPOINT forecost_usage_merge" if nested else "BEGIN IMMEDIATE")
+    try:
+        _write_merge(conn, row[0], merged, postings)
+        conn.execute("RELEASE SAVEPOINT forecost_usage_merge") if nested else conn.commit()
+    except BaseException:
+        if nested:
+            conn.execute("ROLLBACK TO SAVEPOINT forecost_usage_merge")
+            conn.execute("RELEASE SAVEPOINT forecost_usage_merge")
+        else:
+            conn.rollback()
+        raise
+    return True
+
+
 def _insert_batch(conn, items: list[_WriteItem]) -> int:
     """Insert a batch as one rollback-safe transaction.
 
