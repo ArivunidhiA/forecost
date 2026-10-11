@@ -305,3 +305,45 @@ def test_merge_usage_helper_edge_cases():
     assert _merge_usage({"message": {}}, {"message": {"model": "late"}}) == {"message": {}}
     assert _merge_usage({"message": "x"}, {"message": {}}) == {"message": "x"}
     assert _merge_usage({"message": {}}, {"message": "x"}) == {"message": {}}
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_merge_rolls_back_when_the_write_fails_midway(ledger_conn, monkeypatch, nested):
+    import forecost.ledger.writer as writer
+    from forecost.ledger.sink import SyncLedgerSink, _price_event
+
+    sink = SyncLedgerSink(ledger_path=None)
+    sink._conn = ledger_conn
+    sink.emit(_event(tokens_in=10, tokens_out=1))
+
+    def failing_write(conn, event_id, tokens, postings):
+        conn.execute("UPDATE usage_events SET tokens_out = 12345 WHERE id = ?", (event_id,))
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(writer, "_write_merge", failing_write)
+    if nested:
+        ledger_conn.execute("BEGIN")
+    with pytest.raises(RuntimeError, match="disk full"):
+        writer.merge_cumulative_usage(
+            ledger_conn, _event(tokens_in=10, tokens_out=99), _price_event
+        )
+    if nested:
+        ledger_conn.rollback()
+    assert tuple(ledger_conn.execute("SELECT tokens_out FROM usage_events").fetchone()) == (1,)
+    assert not ledger_conn.in_transaction
+
+
+def test_causal_ingest_survives_an_unreadable_transcript(tmp_path, ledger_conn, monkeypatch):
+    import forecost.adapters.claude_code as adapter
+
+    session = tmp_path / "s.jsonl"
+    session.write_text("{}\n")
+
+    def unreadable(*_args, **_kwargs):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(adapter, "_ingest_causal_path", unreadable)
+    inserted = adapter.ingest_causal_paths(
+        [session], LedgerIngestStateStore(ledger_conn), ledger_conn
+    )
+    assert inserted == 0
