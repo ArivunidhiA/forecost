@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-10-09",
+ "generated_at": "2026-10-12",
  "models": {
   "chat-latest": {
    "cache_read": 0.5,
@@ -622,6 +622,11 @@
    "input": 0.6,
    "output": 2.4
   },
+  "gpt-rosalind-discovery": {
+   "cache_read": 0.5,
+   "input": 5.0,
+   "output": 25.0
+  },
   "gpt-rosalind-research": {
    "cache_read": 0.5,
    "input": 5.0,
@@ -697,7 +702,7 @@
   }
  },
  "schema": 1,
- "source": "local-file",
+ "source": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
  "tiers": {
   "claude-haiku-5-5": [
    {
@@ -706,24 +711,6 @@
     "cache_write": 0.625,
     "input": 0.5,
     "output": 2.5
-   }
-  ],
-  "claude-sonnet-4-5": [
-   {
-    "above": 200000,
-    "cache_read": 0.6,
-    "cache_write": 7.5,
-    "input": 6.0,
-    "output": 22.5
-   }
-  ],
-  "claude-sonnet-4-5-20250929": [
-   {
-    "above": 200000,
-    "cache_read": 0.6,
-    "cache_write": 7.5,
-    "input": 6.0,
-    "output": 22.5
    }
   ],
   "daybreak-blue-latest": [
